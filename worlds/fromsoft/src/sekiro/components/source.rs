@@ -1205,3 +1205,6 @@ impl Resource for PostLookup {
         to_value(self).map(Some)
     }
 }
+
+/// Raw state candidates and the resolved pass result.
+pub use super::state::{CommonState, DomeMembership, ResolvedState, StateInputs, StateReadScope};

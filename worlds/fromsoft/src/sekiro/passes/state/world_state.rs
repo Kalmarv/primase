@@ -1,64 +1,15 @@
-//! One initial evaluation of Sekiro's common event 100, from the installed script.
-//! Unknown flags stay unknown. Conditions are combined before an undecidable branch
-//! is refused; no story phase or hour-to-package table is supplied by this reader.
-use std::collections::{BTreeMap, BTreeSet};
-
+//! One initial evaluation of the installed common event 100, as an explicit pass choice.
+use crate::sekiro::world_state::{FlagSet, Report, Selection};
 use fromsoft_formats::{Game, emedf, emevd::Script};
 use primase_core::{
     World,
     state::{Domain, StateAssignment, StateAxis},
 };
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-
-/// An independently observed snapshot, named by the caller with its source.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FlagSet {
-    pub name: String,
-    pub source: String,
-    pub flags: BTreeMap<u32, bool>,
-}
-
-/// Actions of the selected initialization path, not actions performed in a game.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
-pub struct Selection {
-    pub groups: BTreeMap<i32, bool>,
-    pub envmap: Option<u32>,
-    pub animations: BTreeMap<i32, i32>,
-    pub gparam_sub_ids: BTreeMap<String, i32>,
-    pub written_flags: BTreeMap<u32, bool>,
-    pub instructions: Vec<usize>,
-}
-
-/// Source and exact installed script of a selection. Flags are not reconstructed
-/// from its output; their independently obtained provenance belongs to the input.
-#[derive(Clone, Debug, Serialize)]
-pub struct Report {
-    pub input: FlagSet,
-    pub common_script_sha256: String,
-    pub selection: Selection,
-    pub sky: Option<String>,
-    pub assignments: BTreeMap<String, u32>,
-}
-impl Report {
-    pub fn new(input: FlagSet, script: &[u8], selection: Selection) -> Self {
-        Self {
-            input,
-            common_script_sha256: Sha256::digest(script)
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect(),
-            selection,
-            sky: None,
-            assignments: BTreeMap::new(),
-        }
-    }
-}
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Join the enabled script groups to actual dome membership and the reader's
 /// existing axis. Numeric group ids are not converted into model/state ordinals.
-pub fn selected_sky(values: &[String], masks: &[u64]) -> Result<String, String> {
+pub(super) fn selected_sky(values: &[String], masks: &[u64]) -> Result<String, String> {
     let mask = masks.iter().fold(0_u64, |a, &b| a | b);
     if mask.count_ones() != 1 {
         return Err(format!(
@@ -73,7 +24,7 @@ pub fn selected_sky(values: &[String], masks: &[u64]) -> Result<String, String> 
 }
 
 /// Use the ordinary save-snapshot resource, preserving unresolved axis defaults.
-pub fn assign(world: &mut World, area: &str, report: &mut Report) -> Result<(), String> {
+pub(super) fn assign(world: &mut World, area: &str, report: &mut Report) -> Result<(), String> {
     for (_, axis) in world.iter::<StateAxis>() {
         if let Some(flag) = axis
             .key
@@ -83,7 +34,7 @@ pub fn assign(world: &mut World, area: &str, report: &mut Report) -> Result<(), 
         {
             report.assignments.insert(axis.key.clone(), u32::from(on));
         }
-        let wanted = if axis.key == super::sky::AXIS {
+        let wanted = if axis.key == crate::sekiro::sky::AXIS {
             report.sky.clone()
         } else if axis.key == format!("fromsoft.irradiance.{area}") {
             report.selection.envmap.map(|n| format!("package-{n:02}"))
@@ -184,7 +135,7 @@ fn bool_value(value: i64, what: &str) -> Result<bool, String> {
 
 /// Evaluate the installed event's ordered initialization, stopping before its
 /// map-change wait. The subsequent restart is a future transition, not this snapshot.
-pub fn evaluate(script: &Script, input: &FlagSet, map: [u8; 2]) -> Result<Selection, String> {
+pub(super) fn evaluate(script: &Script, input: &FlagSet, map: [u8; 2]) -> Result<Selection, String> {
     if input.name.trim().is_empty() || input.source.trim().is_empty() {
         return Err("world-state flags need a nonempty name and source".into());
     }

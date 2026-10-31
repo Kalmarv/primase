@@ -22,12 +22,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Default)]
 pub struct Options {
-    /// Named current weather and fire-ash state, independently observed in Elden Ring.
-    /// Selects the installed sky membership; weather-layer composition is not yet traced.
-    pub weather: Option<super::weather::Snapshot>,
-    /// Named, independently observed flags for the installed common event 100.
-    /// Missing flags remain unknown; this supplies assignments, not axis defaults.
-    pub world_state: Option<super::world_state::FlagSet>,
+    /// Raw state data families to retain for `resolve-fromsoft-state`.
+    /// Every candidate in the requested family is read; no snapshot or flags are applied.
+    pub state_inputs: source::StateReadScope,
     /// The region the read keeps ([`Region`]: a rectangle and its margin, both the caller's): placements whose
     /// model's extent reaches the rectangle within the margin, lights and spawn points inside the rectangle. Collision
     /// files are read whole whatever the region (their crop is `reach` on the collision passes). None reads the whole
@@ -154,9 +151,8 @@ pub enum StateClasses {
 /// What a read found and kept. Counts are source records (placements, prototypes, materials, texture files).
 #[derive(Default, Debug)]
 pub struct Report {
-    /// The explicit weather input and the installed sky/global layer it names.
-    pub weather: Option<super::weather::Report>,
-    pub world_state: Option<super::world_state::Report>,
+    /// Number of raw state candidates retained; selection belongs to the pass report.
+    pub state_inputs: Option<super::state_inputs::Report>,
     pub irradiance: super::irradiance::Report,
     pub environment: Option<super::environment::Report>,
     /// The full area name read (`m11_01_00_00`).
@@ -1125,42 +1121,10 @@ pub fn read_game_area_staged(
     }
     let area = area_name(area)?;
     let archive = install.open()?;
-    let weather = options
-        .weather
-        .as_ref()
-        .map(|input| {
-            if options.sky != sky::Sky::Include {
-                return Err(invalid("weather", 0, "weather snapshots require sky=include"));
-            }
-            super::weather::read(install, &archive, decoder, input)
-        })
-        .transpose()?;
-    let world_state = if let Some(input) = &options.world_state {
-        if game != Game::Sekiro {
-            return Err(invalid(
-                "world-state",
-                0,
-                "common event 100 is understood only for Sekiro",
-            ));
-        }
-        let bytes = archive.read("/event/common.emevd.dcx", decoder)?;
-        let script = fromsoft_formats::emevd::Script::read(&bytes)?;
-        let map = [
-            area[1..3].parse::<u8>().expect("validated area"),
-            area[4..6].parse::<u8>().expect("validated block"),
-        ];
-        let selection =
-            super::world_state::evaluate(&script, input, map).map_err(|e| invalid("world-state", 0, e))?;
-        Some(super::world_state::Report::new(input.clone(), &bytes, selection))
-    } else {
-        None
-    };
+    let mut state_inputs =
+        super::state_inputs::read(install, &archive, decoder, &area, options.state_inputs)?;
     let layout = MapLayout::read(&archive.read(&format!("/map/mapstudio/{area}.msb.dcx"), decoder)?)?;
-    let mut report = Report {
-        weather,
-        world_state,
-        ..Report::default()
-    };
+    let mut report = Report::default();
     stage("definitions and texture catalog");
     // the definitions materials resolve against (Sekiro's MTDs, or the game's material binaries), and the texture
     // catalog: Sekiro's area discovery, or the game's common packages, then the packages its materials name
@@ -1936,7 +1900,7 @@ pub fn read_game_area_staged(
     stage("environment");
     let configs = environment_configs(&layout, &options.draw_param, &environment_parts)?;
     let collisions = collision_draw_params(&layout, &options.draw_param)?;
-    let (mut environment, mut draw_param_report) = draw_param::read(
+    let (environment, draw_param_report) = draw_param::read(
         &archive,
         decoder,
         game,
@@ -1945,40 +1909,17 @@ pub fn read_game_area_staged(
         &configs,
         &collisions,
     )?;
-    if let Some(sub_id) = report
-        .world_state
-        .as_ref()
-        .and_then(|s| s.selection.gparam_sub_ids.get(&area[..6]))
-        && options.draw_param != draw_param::DrawParams::None
-    {
-        let stem = draw_param_report.file.as_ref().ok_or_else(|| {
-            invalid(
-                "world-state",
-                0,
-                "Set Area Gparam Sub ID: base draw-param file is unresolved",
-            )
-        })?;
-        let (map, base) = fromsoft_formats::area::DrawParamId::from_stem(stem).ok_or_else(|| {
-            invalid(
-                "world-state",
-                0,
-                "Set Area Gparam Sub ID: draw-param slot is unresolved",
-            )
-        })?;
-        let id = u8::try_from(*sub_id)
-            .ok()
-            .and_then(|sub| fromsoft_formats::area::DrawParamId::new(base.slot(), sub))
-            .ok_or_else(|| invalid("world-state", 0, "Set Area Gparam Sub ID: invalid sub id"))?;
-        let choice = draw_param::DrawParams::File(id.stem(map));
-        (environment, draw_param_report) =
-            draw_param::read(&archive, decoder, game, &area, &choice, &configs, &collisions)?;
-        if environment.is_none() {
-            return Err(invalid(
-                "world-state",
-                0,
-                "Set Area Gparam Sub ID: selected file is missing or unreadable",
-            ));
-        }
+    if let Some(inputs) = state_inputs.as_mut() {
+        super::state_inputs::draw_params(
+            inputs,
+            &archive,
+            decoder,
+            game,
+            &area,
+            &options.draw_param,
+            &configs,
+            &collisions,
+        )?;
     }
     if let Some(environment) = environment {
         if matches!(game, Game::Sekiro | Game::EldenRing) {
@@ -1998,37 +1939,27 @@ pub fn read_game_area_staged(
         states: states.is_some(),
     });
     report.states = states.map(|s| s.report);
-    if let (Some(state), Some(plan)) = (report.world_state.as_mut(), sky_plan.as_ref()) {
-        let masks: Vec<u64> = plan
+    if let Some(inputs) = state_inputs.as_mut()
+        && let Some(plan) = sky_plan.as_ref()
+    {
+        inputs.sky_values = plan.values.clone();
+        inputs.domes = plan
             .parts
             .iter()
             .filter_map(|(&index, &(role, mask))| {
-                let part = &placements[index].part;
-                (role == source::SkyRole::Dome
-                    && part
-                        .entity_group_ids
-                        .iter()
-                        .any(|id| state.selection.groups.get(id) == Some(&true)))
-                .then_some(mask)
+                (role == source::SkyRole::Dome).then(|| source::DomeMembership {
+                    groups: placements[index].part.entity_group_ids.to_vec(),
+                    mask,
+                })
             })
             .collect();
-        state.sky = Some(
-            super::world_state::selected_sky(&plan.values, &masks)
-                .map_err(|e| invalid("world-state", 0, e))?,
-        );
     }
     if let Some(plan) = sky_plan {
         report.sky = plan.report;
     }
-    if let Some(weather) = &report.weather {
-        super::weather::assign(&mut world, weather).map_err(|e| invalid("weather", 0, e))?;
-        report.sky.selection = Some(format!(
-            "{}: {} ({})",
-            weather.input.name, weather.sky, weather.input.source
-        ));
-    }
-    if let Some(state) = report.world_state.as_mut() {
-        super::world_state::assign(&mut world, &area, state).map_err(|e| invalid("world-state", 0, e))?;
+    if let Some(inputs) = state_inputs {
+        report.state_inputs = Some(super::state_inputs::Report::of(&inputs));
+        world.insert_resource(inputs);
     }
     report.display_groups = display_groups.map(|g| g.report);
     report.area = area;

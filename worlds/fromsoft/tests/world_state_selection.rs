@@ -4,7 +4,7 @@ mod common;
 mod inputs;
 use fromsoft_formats::{Game, Keys, dcx::Decoder, emevd::Script, msb::MapLayout};
 use primase_fromsoft::game::ParamKey;
-use primase_fromsoft::sekiro::world_state::{FlagSet, evaluate};
+use primase_fromsoft::sekiro::world_state::{FlagSet, Selection};
 use std::collections::BTreeMap;
 
 #[test]
@@ -107,4 +107,40 @@ fn installed_common_event_selects_groups_and_packages_in_script_order()
     // Native observation: this instruction group touched exactly the Evening pair.
     assert_eq!(members, [8904020, 8904021]);
     Ok(())
+}
+
+// The existing script oracle now obtains its selection through the registered pass.
+fn evaluate(script: &Script, input: &FlagSet, map: [u8; 2]) -> Result<Selection, String> {
+    use primase_fromsoft::sekiro::{
+        passes::state::ResolveFromSoftState,
+        source::{CommonState, ResolvedState, StateInputs},
+    };
+    let mut world = primase_core::World::new();
+    let mut inputs = StateInputs::new(Game::Sekiro, format!("m{:02}_{:02}_00_00", map[0], map[1]));
+    inputs.common = Some(CommonState {
+        script: script.clone(),
+        script_sha256: "semantic fixture".into(),
+        script_bytes: 0,
+        map,
+    });
+    world.insert_resource(inputs);
+    let mut registry = primase_core::pass::PassRegistry::new();
+    primase_fromsoft::sekiro::passes::register(&mut registry);
+    primase_core::pass::PassManager::new(registry)
+        .run(
+            &mut world,
+            &primase_core::pass::Pipeline {
+                passes: vec![Box::new(ResolveFromSoftState::new(None, Some(input.clone()))?)],
+            },
+            &mut primase_core::pass::RunReport::default(),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(world
+        .resource::<ResolvedState>()
+        .expect("state pass result")
+        .world_state
+        .as_ref()
+        .expect("flag selection")
+        .selection
+        .clone())
 }

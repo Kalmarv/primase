@@ -33,6 +33,7 @@ pub mod render_graph;
 pub mod resolve_shaders;
 pub mod settings;
 pub mod sky;
+pub mod state;
 pub mod visibility;
 pub mod weapons;
 pub use crate::layer_bake::resolve::Unbound;
@@ -98,6 +99,7 @@ pub fn register(registry: &mut PassRegistry) {
         &object_collision::LOWER_FROMSOFT_PART_COLLISION,
         &extras::LOWER_FROMSOFT_EXTRAS,
         &records::LOWER_FROMSOFT_MAP_RECORDS,
+        &state::RESOLVE_FROMSOFT_STATE,
         &draw_params::SAMPLE_FROMSOFT_DRAW_PARAMS,
         &environment::LOWER_FROMSOFT_ENVIRONMENT,
         &post::LOWER_SEKIRO_REINHARD,

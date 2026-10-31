@@ -36,7 +36,6 @@ pub const EMITTED_NAMES: &[&str] = &[
     "core.sky_anchor",
     "core.source",
     "core.state_axis",
-    "core.state_assignment",
     "core.transform",
     "fromsoft.area_extras",
     "fromsoft.draw_param",
@@ -56,7 +55,7 @@ pub const EMITTED_NAMES: &[&str] = &[
     "fromsoft.shadow_flags",
     "fromsoft.sky_part",
     "fromsoft.texture_payloads",
-    "fromsoft.wetness",
+    "fromsoft.state_inputs",
 ];
 
 /// Coverage declaration for the requested read. A draw-param resource is optional:
@@ -69,18 +68,9 @@ pub fn emitted_names(options: &Options) -> Vec<&'static str> {
         .iter()
         .copied()
         .filter(|name| {
-            *name != "core.state_assignment" || options.world_state.is_some() || options.weather.is_some()
-        })
-        .filter(|name| {
             *name != "fromsoft.draw_param" || options.draw_param != super::draw_param::DrawParams::None
         })
-        .filter(|name| {
-            *name != "fromsoft.wetness"
-                || options
-                    .weather
-                    .as_ref()
-                    .is_some_and(|state| state.wetness.is_some())
-        })
+        .filter(|name| *name != "fromsoft.state_inputs" || options.state_inputs.any())
         .filter(|name| {
             !matches!(*name, "core.sky_anchor" | "fromsoft.sky_part") || options.sky != super::sky::Sky::None
         })
@@ -149,22 +139,10 @@ impl<'a> AreaReader<'a> {
                     "captured environment box frame 6993 sequence 1897 has no installed association and is not reconstructed", environment.unresolved_captured_boxes as u64));
             }
         }
-        if let Some(weather) = &r.weather {
+        if let Some(inputs) = &r.state_inputs {
             report.push((
-                "elden weather".into(),
-                serde_json::to_string(weather).expect("weather report contains only JSON values"),
-            ));
-            self.pending.push(Notice::new("fromsoft reader", primase_core::convert::NoticeKind::Unsupported,
-                "weather GPARAM layer merging (WeatherOutdoor, WeatherBase wetting weight, CommonEvent) is not traced; the collision-selected area's file is read without these layers", 1).example(weather.weather_outdoor.clone()));
-            if let Some(wetness) = &weather.input.wetness {
-                self.pending.push(Notice::new("fromsoft reader", primase_core::convert::NoticeKind::Unsupported,
-                    "named wetness retained as fromsoft.wetness; WeatherBase environment composition and surface wetting are not yet applied", 1).example(wetness.name.clone()));
-            }
-        }
-        if let Some(state) = &r.world_state {
-            report.push((
-                "sekiro world state".into(),
-                serde_json::to_string(state).expect("world-state report contains only JSON values"),
+                "state inputs".into(),
+                serde_json::to_string(inputs).expect("state inventory"),
             ));
         }
         report.push((

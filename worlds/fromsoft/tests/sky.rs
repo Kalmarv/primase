@@ -276,12 +276,7 @@ fn elden_rings_sky_is_read_as_weathers() -> Result<(), Box<dyn std::error::Error
         max_output: 1 << 30,
     };
     let mut world = World::default();
-    let report = sekiro::read_game_area(
-        &install,
-        "m60_42_36_00",
-        &decoder,
-        &sekiro::Options {
-            weather: Some(sekiro::weather::Snapshot {
+    let snapshot = sekiro::weather::Snapshot {
                 name: "installed clear-weather fixture".into(),
                 source: "independent regulation census: WeatherParam row 0 GparamId 0, WeatherAssetReplaceParam map60423600 limit0".into(),
                 weather: 0,
@@ -291,7 +286,16 @@ fn elden_rings_sky_is_read_as_weathers() -> Result<(), Box<dyn std::error::Error
                     source: "native WeatherBase getter before and after the Gatefront frame: effective weight 0".into(),
                     value: 0.0,
                 }),
-            }),
+            };
+    let report = sekiro::read_game_area(
+        &install,
+        "m60_42_36_00",
+        &decoder,
+        &sekiro::Options {
+            state_inputs: sekiro::source::StateReadScope {
+                weather: true,
+                common: false,
+            },
             // a small region: the sky is kept whatever the region
             region: Some(sekiro::Region {
                 rect: [-10.0, -10.0, 10.0, 10.0],
@@ -302,8 +306,23 @@ fn elden_rings_sky_is_read_as_weathers() -> Result<(), Box<dyn std::error::Error
         },
         &mut world,
     )?;
-    let sky = &report.sky;
-    let weather = report.weather.as_ref().expect("explicit weather read");
+    let mut registry = primase_core::pass::PassRegistry::new();
+    sekiro::passes::register(&mut registry);
+    let pass = sekiro::passes::state::ResolveFromSoftState::new(Some(snapshot), None)?;
+    primase_core::pass::PassManager::new(registry).run(
+        &mut world,
+        &primase_core::pass::Pipeline {
+            passes: vec![Box::new(pass)],
+        },
+        &mut primase_core::pass::RunReport::default(),
+    )?;
+    let resolved = world
+        .resource::<sekiro::source::ResolvedState>()
+        .expect("explicit state pass");
+    let mut sky = report.sky;
+    sky.selection = resolved.sky_selection.clone();
+    let sky = &sky;
+    let weather = resolved.weather.as_ref().expect("explicit weather selection");
     assert_eq!(
         weather.weather_outdoor,
         "/param/drawparam/m00_00_0000_weatheroutdoor.gparam.dcx"

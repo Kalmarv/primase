@@ -31,5 +31,4 @@ pub mod visibility;
 pub mod weapons;
 pub mod wind;
 
-pub mod weather;
-pub mod world_state;
+pub(super) mod state_inputs;
