@@ -12,3 +12,6 @@ pub mod shaders;
 pub mod source;
 pub mod texture_format;
 pub mod water;
+
+/// Archive member meanings supplied by the public format reader.
+pub use rage_engine_formats::file_class;
