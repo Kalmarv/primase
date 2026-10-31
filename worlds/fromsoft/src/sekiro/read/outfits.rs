@@ -99,13 +99,15 @@ pub fn outfits_from_params(
         // presentation). Only a mode that permits several spellings needs the additional presentation filter.
         let fixed_spelling: Vec<&str> = if game == Game::EldenRing {
             let layout = fromsoft_formats::equipment::OutfitLayout::of(game);
-            [("hd", 32), ("bd", 36), ("am", 40), ("lg", 44)]
+            layout
+                .read_initializer(row)
+                .ok()
                 .into_iter()
-                .filter_map(|(prefix, at)| {
-                    let bytes: [u8; 4] = row.data.get(at..at + 4)?.try_into().ok()?;
-                    let equipped = i32::from_le_bytes(bytes);
+                .flat_map(|row| row.slots())
+                .filter_map(|(prefix, equipped)| {
                     let protector = protectors.rows.iter().find(|p| p.id == equipped)?;
-                    matches!(protector.data.get(layout.gender), Some(1 | 2 | 4)).then_some(prefix)
+                    let protector = layout.read_protector(protector).ok()?;
+                    matches!(protector.gender, 1 | 2 | 4).then_some(prefix)
                 })
                 .collect()
         } else {

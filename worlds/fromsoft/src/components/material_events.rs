@@ -5,14 +5,7 @@ use std::collections::BTreeMap;
 
 /// Stored ER MaterialEx row. RGBA and I are separate source lanes, not a guessed
 /// output value or transition curve. Every row byte survives, including unknown fields.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct MaterialExRow {
-    pub id: i32,
-    pub parameter: String,
-    pub material_id: i32,
-    pub rgba_i: [f32; 5],
-    pub bytes: Vec<u8>,
-}
+pub use fromsoft_formats::material_events::MaterialExRow;
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct MaterialExRows {
     pub rows: BTreeMap<i32, MaterialExRow>,
