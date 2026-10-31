@@ -1,4 +1,5 @@
-//! PNG, JPEG ([`read_jpeg`]) and QOI ([`read_qoi`]) to straight RGBA pixels, piecewise sRGB transfer, and integer box mips.
+//! PNG, JPEG ([`read_jpeg`]), QOI ([`read_qoi`]) and TGA ([`read_tga`]) to straight RGBA pixels, piecewise sRGB
+//! transfer, and integer box mips.
 //! No implicit gamma conversion: filtering averages the stored channel values.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
@@ -29,6 +30,7 @@ mod rgba8;
 pub use qoi::{Qoi, QoiChannels, QoiColorspace, read_qoi};
 pub use rgba8::{LOWER_TEXTURES_RGBA8, LowerTexturesRgba8, SignedData, rgba8_exact};
 mod texture;
+mod tga;
 mod upscale;
 pub use normals::{NormalFilter, normal_mip_chain, rebuild_normal_z, resize_normals, scale_normal};
 use primase_foundations::color::{linear_to_srgb8, srgb8_to_linear};
@@ -38,6 +40,7 @@ pub use texture::{
     bake_normal_scale, decode_texture_file, load_textures, normalize_normals, texture_level_png,
     texture_level_rgba8, texture_level_rgba8_with,
 };
+pub use tga::{Tga, TgaKind, read_tga};
 use thiserror::Error;
 pub use upscale::{MAX_UPSCALED, UPSCALE_NEAREST, UpscaleBy, UpscaleNearest, enlarge_nearest};
 /// This crate's source files, for the keys of disk caches whose values its code computes (`primase-cache`): editing
@@ -59,6 +62,7 @@ pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
     ("image/qoi.rs", include_bytes!("qoi.rs")),
     ("image/rgba8.rs", include_bytes!("rgba8.rs")),
     ("image/texture.rs", include_bytes!("texture.rs")),
+    ("image/tga.rs", include_bytes!("tga.rs")),
     ("image/upscale.rs", include_bytes!("upscale.rs")),
 ];
 /// Register this crate's passes by their declarations.
