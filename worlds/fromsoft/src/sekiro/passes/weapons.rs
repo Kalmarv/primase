@@ -15,11 +15,13 @@
 //! polygon `n` as `2000 + n` (its sockets are so named, [`crate::sekiro::effect_data::BODY_PART_DUMMIES`]), and say how
 //! each slot shows its model ([`Shown`]): such a number shown in a hand is the character's own polygon `n` (the Caestus
 //! held in both hands shows its second fist, `2117`, on the left hand, where the character's polygon 117 is); shown on
-//! the body, the body part's. A model shown on the body at a polygon no worn part has (no body part polygon `2000 + n`
-//! on the character, no polygon `n` on a held weapon's model) is left out of the scene, counted: Leontiel's Greatsword's
-//! model 1 (`2116`) is not drawn in the game at rest, in the three holds one run reached (as equipped, the left hand's bow
-//! held in both hands, and after a second two-hand toggle); why, and whether the game shows it in other states (its
-//! skill), is not known. One a held weapon's model has, or shown in a way no stock slot uses,
+//! the body, the body part's. If the body part lacks that polygon, placement is refused by model name and the model
+//! is omitted. This is an implementation limit, not a visibility rule: Elden Ring 2.7's native attachment path
+//! (9eef30 -> 9f4f80 -> 9eb580 -> b477d0) falls back to the base character's polygon `n`, independently of model state.
+//! The saved two-handed Uchigatana hold has a visible stowed Longbow at 2040 although the altered chest lacks polygon
+//! 40. Conversely, Leontiel's model 1 at 2116 was absent in three captured idle holds; its visibility condition is
+//! unresolved. This pass does not evaluate that condition or apply the body-to-base fallback. One a held weapon's
+//! model has, or shown in a way no stock slot uses,
 //! is refused. A model the grip puts at no dummy polygon, or at one no rig has, stays where it is, counted; a socket two
 //! rigs have is refused. The rig's
 //! `core.transform` is where the attachment puts it with the character's rig in its pose as read (its `core.rig_pose`,
@@ -108,7 +110,7 @@ pub const HOLD_FROMSOFT_WEAPONS: PassSpec = PassSpec {
 /// its rig instance and what refers to them alone (the placements `place-assets` made of its parts), despawned and
 /// declared; what also refers to other entities (a clip binding of several meshes) stops naming them
 /// ([`primase_core::ledger::despawn`]).
-fn leave_out(w: &mut World, root: Entity, rig: Entity, log: &mut PassLog) {
+fn leave_out(w: &mut World, root: Entity, rig: Entity, log: &mut PassLog, reason: &str) {
     let others: Vec<Entity> = w.iter::<Asset>().map(|(e, _)| e).filter(|e| *e != root).collect();
     let shared = w.closure(others);
     let mut gone: BTreeSet<Entity> = w.closure([root, rig]).difference(&shared).copied().collect();
@@ -127,12 +129,7 @@ fn leave_out(w: &mut World, root: Entity, rig: Entity, log: &mut PassLog) {
         gone.extend(referring);
     }
     for e in gone {
-        primase_core::ledger::despawn(
-            w,
-            e,
-            log,
-            "held weapon models the game does not draw (shown on the body at a polygon no worn part has)",
-        );
+        primase_core::ledger::despawn(w, e, log, reason);
     }
 }
 
@@ -162,7 +159,7 @@ impl Pass for HoldFromSoftWeapons {
     fn modifies(&self) -> &[&'static str] {
         &[Transform::NAME, Asset::NAME, ClipBinding::NAME]
     }
-    /// A model the game does not draw where the grip puts it is left out of the scene.
+    /// A model whose placement is refused is omitted, with its name and reason in the pass log.
     fn despawns_entities(&self) -> bool {
         true
     }
@@ -233,8 +230,8 @@ impl Pass for HoldFromSoftWeapons {
                         (used, holders) = (n, holders_of(n, false));
                         at_own += 1;
                     }
-                    // on the body, a polygon no worn part has: the game does not draw it (Leontiel's Greatsword's
-                    // model 1, 2116, in the idle states held in one hand and in both)
+                    // Socket existence does not establish visibility. Do not silently turn a missing body socket
+                    // into a claim that the game hides the model, or draw it using an unevaluated visibility state.
                     Some(Shown::Body) | None if holders.is_empty() => {
                         let on_weapons: Vec<i32> = held_slots
                             .iter()
@@ -246,7 +243,11 @@ impl Pass for HoldFromSoftWeapons {
                                 "{label}: shown on the body at {dummy}, a polygon no worn body part has and a held weapon's model has ({on_weapons:?}): what the game does with it is not known"
                             ));
                         }
-                        leave_out(w, root, weapon_rig, log);
+                        let reason = format!(
+                            "{label}: placement refused at body dummy {dummy}: no worn body part has this socket; base-character dummy {n} fallback is not implemented and model visibility is unresolved"
+                        );
+                        log.omit(&reason, 1);
+                        leave_out(w, root, weapon_rig, log, &reason);
                         left_out += 1;
                         continue;
                     }
@@ -306,7 +307,7 @@ impl Pass for HoldFromSoftWeapons {
             at_own,
         );
         log.count(
-            "held weapon models shown on the body at a polygon no worn part has, left out of the scene (the game does not draw them)",
+            "held weapon models with unresolved placement at a missing body socket, omitted by name",
             left_out,
         );
         if attached > 0 {
@@ -612,7 +613,8 @@ mod tests {
             1
         );
 
-        // on the body at a polygon no worn part has (the character's own 69 aside): left out of the scene, all of it
+        // A base-character socket is not enough to establish a model's visibility. Omit by name, without claiming
+        // that the native game hides it. The refusal survives despawning the model and its referring placements.
         let (mut w, [_, _, scabbard, _]) = with_sockets(vec![socket(2, "dummy 69", -0.1)]);
         scabbard_at(&mut w, 2069, Shown::Body);
         let root = scabbard_root(&w);
@@ -634,8 +636,16 @@ mod tests {
         assert!(w.iter::<HeldWeapon>().all(|(r, _)| r != root));
         let log = &report.steps[0].log;
         assert_eq!(
-            log.counts["held weapon models shown on the body at a polygon no worn part has, left out of the scene (the game does not draw them)"],
+            log.counts["held weapon models with unresolved placement at a missing body socket, omitted by name"],
             1
+        );
+        assert!(log.omitted.keys().any(|reason| reason.contains("wp_a_0300_1_l")
+            && reason.contains("body dummy 2069")
+            && reason.contains("visibility is unresolved")));
+        assert!(
+            log.drops
+                .keys()
+                .all(|(_, reason)| !reason.contains("game does not draw"))
         );
         assert_eq!(
             log.counts["held weapon models attached at their dummy polygon"],

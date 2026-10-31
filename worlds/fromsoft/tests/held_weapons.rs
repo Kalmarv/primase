@@ -9,8 +9,8 @@
 //! (`grip=two-handed-right`): its second fist (model 1, at 2117, which no body part has, shown in the left hand) on the
 //! character's own polygon 117, on the left hand, where the game draws it. Elden Ring's Leontiel's Greatsword (3560000,
 //! hold row 250) in one hand: the blade at 20, model 2 (a rolled cloth) at 2030, the body part's polygon 30 on the left
-//! hip, where the game draws it, and model 1 (at 2116, shown on the body, which no worn part has) left out of the scene,
-//! as the game does not draw it there.
+//! hip, where the game draws it. Model 1 (at 2116, shown on the body, which no worn part has) is omitted with a named
+//! placement refusal: its absence in the captured idle holds does not establish a general visibility rule.
 //!
 //! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}` and `tools.oodle6`; a game that is not configured is skipped.
 mod common;
@@ -174,13 +174,23 @@ fn the_player_holds_a_weapon_at_the_dummy_polygons_its_rows_name() -> Result<()>
                 blade_sockets.is_some_and(|s| s.0.iter().any(|k| k.name == "dummy 10301")),
                 "{game:?} {row}"
             );
-            // the models no worn part holds are left out, counted
+            // Missing body sockets are an implementation refusal, not an inferred native visibility rule.
             let hold = run.steps.last().ok_or("no steps")?;
             assert_eq!(
-                hold.log.counts.get("held weapon models shown on the body at a polygon no worn part has, left out of the scene (the game does not draw them)").copied().unwrap_or(0),
+                hold.log.counts.get("held weapon models with unresolved placement at a missing body socket, omitted by name").copied().unwrap_or(0),
                 left_out as u64,
                 "{game:?} {row}"
             );
+            if left_out != 0 {
+                assert!(
+                    hold.log
+                        .omitted
+                        .keys()
+                        .any(|why| why.contains("2116") && why.contains("placement refused")),
+                    "{:?}",
+                    hold.log.omitted
+                );
+            }
             // the character's skeleton is one, with its sockets
             let assembled = w
                 .iter::<Skeleton>()
