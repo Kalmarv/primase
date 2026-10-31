@@ -216,12 +216,10 @@ pub(crate) fn check_options(
     declarations: &[OptionSpec],
     options: &Options,
 ) -> Result<(), String> {
-    if let Some(k) = options.keys().find(|k| {
-        declarations
-            .iter()
-            .find(|option| option.key == k.as_str())
-            .is_none()
-    }) {
+    if let Some(k) = options
+        .keys()
+        .find(|k| !declarations.iter().any(|option| option.key == k.as_str()))
+    {
         let keys: Vec<&str> = declarations.iter().map(|o| o.key).collect();
         return Err(if keys.is_empty() {
             format!("unknown option {k} ({} takes none)", name)
