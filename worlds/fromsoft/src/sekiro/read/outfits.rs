@@ -73,7 +73,7 @@ pub fn character_outfits(
         install.game,
         &initializers,
         &protectors,
-        |part| archive.contains(&format!("/parts/{part}.partsbnd.dcx")),
+        |part| archive.contains(&fromsoft_formats::paths::part(part)),
     ))
 }
 

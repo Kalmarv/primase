@@ -328,7 +328,7 @@ pub fn read_selectors(
     decoder: &fromsoft_formats::dcx::Decoder<'_>,
     character: &str,
 ) -> std::result::Result<Vec<Selector>, String> {
-    let path = format!("/chr/{character}.behbnd.dcx");
+    let path = fromsoft_formats::paths::character_behavior(character);
     let binder =
         fromsoft_formats::Binder::read(&archive.read(&path, decoder).map_err(|e| e.to_string())?, decoder)
             .map_err(|e| e.to_string())?;

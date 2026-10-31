@@ -363,7 +363,7 @@ impl ClipReader {
             self.archive = Some(Arc::new(install.open().map_err(|e| e.to_string())?));
         }
         let archive = self.archive.as_ref().expect("archive opened above");
-        let path = format!("/chr/{id}.behbnd.dcx");
+        let path = fromsoft_formats::paths::character_behavior(id);
         let mut layers = None;
         if archive.contains(&path) {
             let binder = Binder::read(&archive.read(&path, decoder).map_err(|e| e.to_string())?, decoder)
@@ -651,7 +651,7 @@ fn refuse(report: &mut AnimationReport, why: &str, file: &str) {
 }
 
 fn binder_path(stem: &str) -> String {
-    format!("/chr/{stem}.anibnd.dcx")
+    fromsoft_formats::paths::character_animation(stem)
 }
 
 /// The binders a binder's marker members name as this character's (`<id>_<set>.txt` or `.blf` with an archive binder of

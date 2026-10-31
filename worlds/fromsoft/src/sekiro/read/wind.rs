@@ -318,7 +318,7 @@ pub fn sources(archive: &Archive, decoder: &Decoder<'_>, map: &str) -> Result<Ve
             ),
         ));
     }
-    let layout = MapLayout::read(&archive.read(&format!("/map/mapstudio/{map}.msb.dcx"), decoder)?)?;
+    let layout = MapLayout::read(&archive.read(&fromsoft_formats::paths::map_layout(&map), decoder)?)?;
     let regions = layout.map_regions()?;
     let mut library = EffectLibrary::new(
         archive,

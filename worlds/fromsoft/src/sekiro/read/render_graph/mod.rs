@@ -256,7 +256,7 @@ pub(crate) fn read(
     }
     let mut programs: BTreeMap<String, Program> = BTreeMap::new();
     for (folder, files) in &wanted {
-        let path = format!("/shader/{folder}.shaderbnd.dcx");
+        let path = fromsoft_formats::paths::shader(folder);
         if !archive.contains(&path) {
             return Err(invalid(FORMAT, 0, format!("the install holds no {path}")));
         }

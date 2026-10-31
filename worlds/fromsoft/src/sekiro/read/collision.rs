@@ -61,12 +61,7 @@ fn leaf(name: &str) -> String {
 /// The `h` is matched in either case, as the game's names are not case-sensitive: Elden Ring's m60_53_37_00 names one
 /// of its six collision models `H533700`.
 fn collision_file(area: &str, model: &str) -> Option<String> {
-    let model = fromsoft_formats::names::fold(model);
-    let suffix = model.strip_prefix('h')?;
-    Some(fromsoft_formats::names::fold(&format!(
-        "h{}_{suffix}.hkx",
-        &area[1..]
-    )))
+    fromsoft_formats::paths::map_collision_member(area, model)
 }
 
 /// Read every collision file the area's MSB collision parts name, of every hit filter, as `fromsoft.map_collision`
@@ -107,10 +102,10 @@ pub fn read(
     if named.is_empty() {
         return Ok(report);
     }
-    let base = format!("{folder}/h{}", &area[1..]);
+    let base = fromsoft_formats::paths::map_collision_stem(folder, area, 'h');
     let binder = Binder::read_split(
-        &archive.read(&format!("{base}.hkxbhd"), decoder)?,
-        &archive.read(&format!("{base}.hkxbdt"), decoder)?,
+        &archive.read(&fromsoft_formats::paths::collision_header(&base), decoder)?,
+        &archive.read(&fromsoft_formats::paths::collision_data(&base), decoder)?,
         decoder,
     )?;
     let comp = binder
@@ -235,8 +230,11 @@ struct FBinder {
 impl FBinder {
     /// The area's `f` binder, or `None` where the archive holds none.
     fn read(archive: &Archive, decoder: &Decoder<'_>, folder: &str, area: &str) -> Result<Option<Self>> {
-        let base = format!("{folder}/f{}", &area[1..]);
-        let (header, payload) = (format!("{base}.hkxbhd"), format!("{base}.hkxbdt"));
+        let base = fromsoft_formats::paths::map_collision_stem(folder, area, 'f');
+        let (header, payload) = (
+            fromsoft_formats::paths::collision_header(&base),
+            fromsoft_formats::paths::collision_data(&base),
+        );
         if !archive.contains(&header) {
             return Ok(None);
         }

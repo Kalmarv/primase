@@ -95,13 +95,13 @@ struct Loaded {
 }
 impl<'a> Library<'a> {
     fn new(archive: &'a Archive, decoder: &'a Decoder<'a>, game: Game, area: &str) -> Self {
-        let mut paths = vec![format!("/sfx/sfxbnd_{}.ffxbnd.dcx", &area[..3])];
+        let mut paths = vec![fromsoft_formats::paths::sfx(&area[..3])];
         if game == Game::EldenRing {
-            paths.push(format!("/sfx/sfxbnd_{area}.ffxbnd.dcx"));
+            paths.push(fromsoft_formats::paths::sfx(area));
         }
-        paths.push("/sfx/sfxbnd_commoneffects.ffxbnd.dcx".to_owned());
+        paths.push(fromsoft_formats::paths::COMMON_EFFECTS.to_owned());
         if game == Game::EldenRing {
-            paths.push("/sfx/sfxbnd_commoneffects_dlc02.ffxbnd.dcx".to_owned());
+            paths.push(fromsoft_formats::paths::COMMON_EFFECTS_DLC02.to_owned());
         }
         paths.retain(|p| archive.contains(p));
         let loaded = paths.iter().map(|_| None).collect();

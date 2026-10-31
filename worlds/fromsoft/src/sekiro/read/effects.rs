@@ -133,29 +133,26 @@ pub fn binders_for_clip(game: Game, file: &str) -> Vec<String> {
         .map(|rest| rest.chars().take_while(char::is_ascii_digit).count())
         .unwrap_or(0);
     if game == Game::EldenRing && digits == 4 {
-        paths.push(format!("/sfx/sfxbnd_{}.ffxbnd.dcx", &file[..5]));
+        paths.push(fromsoft_formats::paths::sfx(&file[..5]));
     }
-    paths.push("/sfx/sfxbnd_commoneffects.ffxbnd.dcx".to_owned());
+    paths.push(fromsoft_formats::paths::COMMON_EFFECTS.to_owned());
     if game == Game::EldenRing {
-        paths.push("/sfx/sfxbnd_commoneffects_dlc02.ffxbnd.dcx".to_owned());
+        paths.push(fromsoft_formats::paths::COMMON_EFFECTS_DLC02.to_owned());
     } else {
-        paths.extend((0..100).map(|n| format!("/sfx/sfxbnd_m{n:02}.ffxbnd.dcx")));
+        paths.extend((0..100).map(|n| fromsoft_formats::paths::sfx(&format!("m{n:02}"))));
     }
     paths
 }
 
 /// The binders to search for an area's effects, those the archive holds: the area's own, then the common ones.
 pub fn binders_for_area(game: Game, area: &str) -> Vec<String> {
-    let mut paths = vec![format!(
-        "/sfx/sfxbnd_{}.ffxbnd.dcx",
-        area.get(..3).unwrap_or(area)
-    )];
+    let mut paths = vec![fromsoft_formats::paths::sfx(area.get(..3).unwrap_or(area))];
     if game == Game::EldenRing {
-        paths.push(format!("/sfx/sfxbnd_{area}.ffxbnd.dcx"));
+        paths.push(fromsoft_formats::paths::sfx(area));
     }
-    paths.push("/sfx/sfxbnd_commoneffects.ffxbnd.dcx".to_owned());
+    paths.push(fromsoft_formats::paths::COMMON_EFFECTS.to_owned());
     if game == Game::EldenRing {
-        paths.push("/sfx/sfxbnd_commoneffects_dlc02.ffxbnd.dcx".to_owned());
+        paths.push(fromsoft_formats::paths::COMMON_EFFECTS_DLC02.to_owned());
     }
     paths
 }

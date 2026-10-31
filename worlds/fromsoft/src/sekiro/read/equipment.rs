@@ -67,7 +67,7 @@ pub fn character_skeletons(
     if id.len() != 5 || !id.starts_with('c') || !id[1..].bytes().all(|b| b.is_ascii_digit()) {
         return Err(invalid("character skeleton", 0, "expected c and four digits"));
     }
-    let path = format!("/chr/{id}.chrbnd.dcx");
+    let path = fromsoft_formats::paths::character(id);
     let binder = Binder::read(&archive.read(&path, decoder)?, decoder)?;
     let mut out = Vec::new();
     for file in &binder.files {

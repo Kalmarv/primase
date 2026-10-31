@@ -681,7 +681,7 @@ pub fn read_area_draw_param(
     choice: &draw_param::DrawParams,
 ) -> Result<(Option<source::DrawParam>, draw_param::Report)> {
     let area = area_name(area)?;
-    let layout = MapLayout::read(&archive.read(&format!("/map/mapstudio/{area}.msb.dcx"), decoder)?)?;
+    let layout = MapLayout::read(&archive.read(&fromsoft_formats::paths::map_layout(&area), decoder)?)?;
     let parts: BTreeSet<usize> = collision_parts(&layout).collect();
     let configs = environment_configs(&layout, choice, &parts)?;
     let collisions = collision_draw_params(&layout, choice)?;
@@ -825,7 +825,7 @@ fn fetch_model(
                 .ok_or_else(|| invalid("FromSoftware model", 0, "map model prefix"))?
         );
         (
-            format!("{}/{name}.mapbnd.dcx", game.map_folder(kind)?),
+            fromsoft_formats::paths::map_model(&game.map_folder(kind)?, &name),
             format!("{name}.flver"),
             Vec::new(),
         )
@@ -1123,7 +1123,7 @@ pub fn read_game_area_staged(
     let archive = install.open()?;
     let mut state_inputs =
         super::state_inputs::read(install, &archive, decoder, &area, options.state_inputs)?;
-    let layout = MapLayout::read(&archive.read(&format!("/map/mapstudio/{area}.msb.dcx"), decoder)?)?;
+    let layout = MapLayout::read(&archive.read(&fromsoft_formats::paths::map_layout(&area), decoder)?)?;
     let mut report = Report::default();
     stage("definitions and texture catalog");
     // the definitions materials resolve against (Sekiro's MTDs, or the game's material binaries), and the texture
@@ -1149,7 +1149,7 @@ pub fn read_game_area_staged(
     let mut maps = vec![(area.clone(), layout.clone(), [0.; 2], None)];
     if options.parents == Parents::Include {
         for (parent, offset) in game.parent_maps(&area) {
-            let path = format!("/map/mapstudio/{parent}.msb.dcx");
+            let path = fromsoft_formats::paths::map_layout(&parent);
             if !archive.contains(&path) {
                 continue;
             }
@@ -1169,7 +1169,7 @@ pub fn read_game_area_staged(
     if let Some(g) = display_groups.as_mut()
         && let Some(base) = area.strip_suffix("_99").map(|stem| format!("{stem}_00"))
     {
-        let path = format!("/map/mapstudio/{base}.msb.dcx");
+        let path = fromsoft_formats::paths::map_layout(&base);
         if archive.contains(&path) {
             g.add_collisions_of(&base, &MapLayout::read(&archive.read(&path, decoder)?)?)?;
         }
@@ -1185,7 +1185,7 @@ pub fn read_game_area_staged(
         };
         let path = found
             .as_ref()
-            .map(|(map, _)| format!("/map/mapstudio/{map}.msb.dcx"));
+            .map(|(map, _)| fromsoft_formats::paths::map_layout(&map));
         match (found, path) {
             (Some((map, offset)), Some(path)) if archive.contains(&path) => {
                 if game == Game::EldenRing {
@@ -1277,7 +1277,10 @@ pub fn read_game_area_staged(
     if options.sky == sky::Sky::Include && game == Game::Sekiro {
         let folder = game.map_folder(&area)?;
         for model in sky::area_domes(&layout, |digits| {
-            archive.contains(&format!("{folder}/{area}_{digits}.mapbnd.dcx"))
+            archive.contains(&fromsoft_formats::paths::map_model(
+                &folder,
+                &format!("{area}_{digits}"),
+            ))
         }) {
             let key = format!("{area}/{model}");
             requests.insert(key.clone());
@@ -1368,7 +1371,7 @@ pub fn read_game_area_staged(
                         if options.low_textures
                             && let Some(low) = package
                                 .strip_suffix(".tpf.dcx")
-                                .map(|stem| format!("{stem}_l.tpf.dcx"))
+                                .map(|stem| fromsoft_formats::paths::low_texture_package(stem))
                             && archive.contains(&low)
                         {
                             catalog.add_low(&archive.read(&low, decoder)?)?;
@@ -1547,7 +1550,7 @@ pub fn read_game_area_staged(
         StateClasses::None => None,
         StateClasses::Event => {
             let script = fromsoft_formats::emevd::Script::read(
-                &archive.read(&format!("/event/{area}.emevd.dcx"), decoder)?,
+                &archive.read(&fromsoft_formats::paths::event(&area), decoder)?,
             )?;
             let mut s = states::States::read(&script, game);
             s.spawn_axes(&mut world);

@@ -343,7 +343,7 @@ pub(super) fn read(
         *report.collision_ids.entry(id.number()).or_default() += 1;
     }
     // the area's own events that switch a file (not every map has a script of its own)
-    match archive.read(&format!("/event/{area}.emevd.dcx"), decoder) {
+    match archive.read(&fromsoft_formats::paths::event(&area), decoder) {
         Ok(bytes) => report.switches = gparam_events::calls(game, &Script::read(&bytes)?),
         Err(fromsoft_formats::Error::Missing(_)) => {}
         Err(e) => return Err(e),

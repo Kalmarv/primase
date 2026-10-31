@@ -202,6 +202,6 @@ impl Records {
 
 /// Read one named file, including `default` or `MapBase`, without imposing precedence between them.
 pub fn read(archive: &Archive, decoder: &Decoder<'_>, stem: &str) -> Result<Records> {
-    let data = archive.read(&format!("/param/drawparam/{stem}.gparam.dcx"), decoder)?;
+    let data = archive.read(&fromsoft_formats::paths::draw_param(stem), decoder)?;
     Records::from_gparam(&Gparam::read(&data)?)
 }

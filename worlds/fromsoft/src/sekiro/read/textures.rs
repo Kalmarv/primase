@@ -45,7 +45,7 @@ impl Catalog {
                 continue;
             }
             for i in 0..10 {
-                let path = format!("/map/{area}/{area}_{i:04}.tpfbhd");
+                let path = fromsoft_formats::paths::map_texture_header(area, i);
                 if !has(archive, &path) {
                     continue;
                 }

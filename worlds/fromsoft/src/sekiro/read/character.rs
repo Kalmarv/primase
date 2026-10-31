@@ -508,8 +508,8 @@ impl Item<'_> {
 
     fn binder_path(&self) -> String {
         match self {
-            Item::Character(n) => format!("/chr/{n}.chrbnd.dcx"),
-            Item::Part(n) => format!("/parts/{n}.partsbnd.dcx"),
+            Item::Character(n) => fromsoft_formats::paths::character(n),
+            Item::Part(n) => fromsoft_formats::paths::part(n),
         }
     }
 
@@ -808,7 +808,7 @@ impl<'a> Reading<'a> {
             }
             owners.remove(part);
             for owner in owners {
-                let path = format!("/parts/{owner}.partsbnd.dcx");
+                let path = fromsoft_formats::paths::part(owner);
                 if textures::has(archive, &path) {
                     add_packages(
                         &Binder::read(&archive.read(&path, decoder)?, decoder)?,
@@ -919,7 +919,7 @@ impl<'a> Reading<'a> {
         report.collision_files = collision.len();
         if let Item::Character(id) = item
             && animations.is_none()
-            && textures::has(archive, &format!("/chr/{id}.anibnd.dcx"))
+            && textures::has(archive, &fromsoft_formats::paths::character_animation(id))
         {
             report.unread.push(format!("{id}.anibnd"));
         }

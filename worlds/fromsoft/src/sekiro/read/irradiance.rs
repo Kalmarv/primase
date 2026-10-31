@@ -35,7 +35,7 @@ pub fn read(
         .collect();
     let mut packages = Vec::new();
     for state in 0_u8..6 {
-        let path = format!("/map/{area}/{area}_envmap_{state:02}.tpf.dcx");
+        let path = fromsoft_formats::paths::map_environment(area, state);
         if archive.contains(&path) {
             packages.push((state, path));
         }
