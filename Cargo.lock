@@ -709,6 +709,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gbx-formats"
+version = "0.1.0"
+dependencies = [
+ "primase-foundations",
+ "thiserror",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1305,7 +1313,6 @@ dependencies = [
 [[package]]
 name = "primase-foundations"
 version = "0.3.0"
-source = "git+https://github.com/Kalmarv/primase-foundations?rev=f9cf4ece1de77fce9d703c63347dd70b728b7c0e#f9cf4ece1de77fce9d703c63347dd70b728b7c0e"
 dependencies = [
  "flate2",
  "half",
@@ -1629,7 +1636,6 @@ dependencies = [
 [[package]]
 name = "primase-testdata"
 version = "0.1.6"
-source = "git+https://github.com/Kalmarv/primase-testdata?rev=ab462184a11a4af845808ff49144ec921c222858#ab462184a11a4af845808ff49144ec921c222858"
 dependencies = [
  "blake3",
  "serde_json",
@@ -1648,6 +1654,19 @@ dependencies = [
  "primase-foundations",
  "primase-testdata",
  "rsx-reader",
+ "thiserror",
+]
+
+[[package]]
+name = "primase-trackmania"
+version = "0.1.0"
+dependencies = [
+ "gbx-formats",
+ "primase-core",
+ "primase-dds",
+ "primase-testdata",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 

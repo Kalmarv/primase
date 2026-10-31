@@ -22,6 +22,7 @@ data that prevents valid output. Compilation, stitching and other later stages r
 | [`worlds/unity`](worlds/unity/), [`worlds/skatebird`](worlds/skatebird/), [`worlds/peak`](worlds/peak/) | Unity players' data files, what SkateBIRD's own scripts say, and what PEAK's scripts hand every shader |
 | [`worlds/monogame`](worlds/monogame/), [`worlds/stuntboost`](worlds/stuntboost/) | MonoGame (XNA 4.0, FNA) content, and STUNTBOOST's levels |
 | [`worlds/shred`](worlds/shred/) | Tony Hawk: SHRED's archives and scenes |
+| [`worlds/trackmania`](worlds/trackmania/) | TrackMania Nations Forever maps, placed from the install's block models |
 | [`worlds/reskate`](worlds/reskate/) | skate. maps: preparation passes, the map folder ReSkate Studio compiles, and the compile and post-compile finishing |
 | [`formats/gltf`](formats/gltf/), [`formats/web`](formats/web/) | glTF 2.0 / GLB, and tiled glTF scenes for web viewers |
 

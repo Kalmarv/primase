@@ -1,0 +1,27 @@
+[package]
+name = "primase-trackmania"
+description = "TrackMania Nations Forever over the GameBox reader: a map's blocks placed from the game's own block models (its packs and GameData), their meshes, materials, textures and collision, and their lowerings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+primase-core.workspace = true
+primase-dds.workspace = true
+gbx-formats.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+primase-testdata.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.primase]
+kind = "game"
+names = ["trackmania", "tmnf", "gbx", "nadeo"]
