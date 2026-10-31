@@ -64,6 +64,42 @@ fn installed_post_records_keep_layers_and_missing_fields_distinct() -> Result<()
     }
     assert!(castle.tone.reinhard_contrast.is_empty());
     assert!(castle.tone.reinhard_white_balance.is_empty());
+    // Native loader evidence: the Castle extra's low byte is nonzero, so a missing contrast field leaves its
+    // fallback row inactive (140319d40). The other two files explicitly author and list value ID zero.
+    // MapBase's controller activation is deliberately an input here, not a conclusion drawn from this oracle.
+    use post::composition::{Activation, ScalarBank, ScalarRow, scalar};
+    let full_weight = Some(Activation::Active { weight: 1.0 });
+    let default_row = ScalarRow::Active(default.tone.reinhard_contrast[0].value);
+    let base_row = ScalarRow::Active(base.tone.reinhard_contrast[0].value);
+    let banks = [
+        ScalarBank {
+            index: 5,
+            activation: full_weight,
+            row: ScalarRow::Inactive,
+        },
+        ScalarBank {
+            index: 4,
+            activation: None,
+            row: base_row,
+        },
+        ScalarBank {
+            index: 1,
+            activation: full_weight,
+            row: default_row,
+        },
+    ];
+    assert!(
+        scalar(1.6, &banks)
+            .unwrap_err()
+            .to_string()
+            .contains("MapBase activation/weight not traced")
+    );
+    let mut explicit_banks = banks;
+    explicit_banks[1].activation = full_weight;
+    // The captured table-writer contrast is an expected result only; no captured value enters the composition.
+    assert_eq!(scalar(1.6, &explicit_banks)?, 1.45);
+    explicit_banks[1].activation = Some(Activation::Inactive);
+    assert_eq!(scalar(1.6, &explicit_banks)?, 1.6);
     assert_eq!(
         castle
             .tone
