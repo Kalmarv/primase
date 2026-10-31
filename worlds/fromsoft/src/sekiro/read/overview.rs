@@ -14,7 +14,7 @@ pub struct AreaOverview {
 
 pub fn read(archive:&Archive,decoder:&Decoder<'_>,area:&str)->Result<AreaOverview> {
     let area=super::open::full_area_name(area);
-    let layout=MapLayout::read(&archive.read(&format!("/map/mapstudio/{area}.msb.dcx"),decoder)?)?;
+    let layout=MapLayout::read(&archive.read(&fromsoft_formats::paths::map_layout(&area),decoder)?)?;
     let legend=["map pieces","objects","enemies","collision","other"].map(str::to_owned).to_vec();
     let mut points=Vec::with_capacity(layout.parts.len());
     let mut classes=Vec::with_capacity(layout.parts.len());
