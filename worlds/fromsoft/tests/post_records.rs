@@ -149,6 +149,51 @@ fn installed_post_records_keep_layers_and_missing_fields_distinct() -> Result<()
     let resolved = post::reinhard::resolve(&default, &base, &castle)?;
     assert_eq!(resolved.contrast, 1.45);
     assert_eq!(resolved.white_balance, 1.7);
+    // Exercise the public area read and declared partial pass, not a fabricated renderer-ready tone map.
+    let (draw, _) = primase_fromsoft::sekiro::read_area_draw_param(
+        &archive,
+        &decoder,
+        "m11_01_00_00",
+        &primase_fromsoft::sekiro::DrawParams::File("m11_01_0000".into()),
+    )?;
+    let draw = draw.expect("selected installed draw-param file");
+    assert_eq!(draw.reinhard, Some(Ok(resolved)));
+    let mut world = primase_core::World::new();
+    world.insert_resource(draw);
+    use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
+    let mut report = RunReport::default();
+    PassManager::new(PassRegistry::new()).run(
+        &mut world,
+        &Pipeline {
+            passes: vec![Box::new(
+                primase_fromsoft::sekiro::passes::post::LowerSekiroReinhard,
+            )],
+        },
+        &mut report,
+    )?;
+    let tone = world
+        .resource::<primase_core::Atmosphere>()
+        .unwrap()
+        .tone_map
+        .as_ref()
+        .unwrap();
+    assert_eq!(tone.curve.contrast, 1.45);
+    assert_eq!(tone.curve.white_balance, 1.7);
+    assert_eq!(
+        tone.curve.gamma, 1.,
+        "linear intermediate, not a native gamma assertion"
+    );
+    assert!(tone.colour_matrix.is_none() && tone.vignette.is_none() && tone.lut.is_none());
+    for stage in ["native gamma", "colour matrix", "vignette", "LUT input encoding"] {
+        assert_eq!(
+            report.steps[0]
+                .log
+                .omitted
+                .get(&format!("partial post: {stage} unresolved")),
+            Some(&1)
+        );
+    }
+    assert!(world.verify_resources().is_empty());
     println!(
         "POST_REINHARD m11_01_0000: contrast={} white_balance={}",
         resolved.contrast, resolved.white_balance

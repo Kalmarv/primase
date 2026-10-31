@@ -71,6 +71,7 @@ fn environment(game: Game, stem: &str, data: &Gparam) -> DrawParam {
         }
     }
     DrawParam {
+        reinhard: None,
         game,
         file: stem.to_owned(),
         version: data.version,

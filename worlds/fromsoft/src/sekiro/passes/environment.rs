@@ -516,6 +516,7 @@ mod tests {
     fn world_with(groups: Vec<DrawGroup>) -> World {
         let mut w = World::new();
         w.insert_resource(DrawParam {
+            reinhard: None,
             game: fromsoft_formats::Game::Sekiro,
             file: "m11_01_0720".into(),
             version: 5,

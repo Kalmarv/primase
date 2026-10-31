@@ -631,6 +631,7 @@ mod tests {
     fn world_of(game: Game, time: Option<TimeAxis>, fields: Vec<DrawField>, chosen: SetChosen) -> World {
         let mut w = World::new();
         w.insert_resource(DrawParam {
+            reinhard: None,
             game,
             file: "fixture".into(),
             version: 5,

@@ -53,6 +53,7 @@ fn hemisphere_coefficients_match_the_captured_light_sets_bit_for_bit()
         })
         .collect();
     let draw = DrawParam {
+        reinhard: None,
         game: Game::Sekiro,
         file: "m11_01_0000".into(),
         version: gparam.version,

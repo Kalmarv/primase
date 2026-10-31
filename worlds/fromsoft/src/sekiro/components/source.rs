@@ -707,6 +707,9 @@ impl DrawGroup {
 /// is `lower-fromsoft-environment`'s.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DrawParam {
+    /// Steady Sekiro bank composition, or its named refusal. None for other games and raw fixtures.
+    /// This resolves scalars only, not the native gamma, matrix, vignette or LUT input encoding.
+    pub reinhard: Option<Result<crate::sekiro::post::reinhard::Reinhard, String>>,
     /// The game the file is of: whose rules sample its fields (`sample-fromsoft-draw-params`).
     pub game: fromsoft_formats::Game,
     /// The file's stem (`m11_01_0720`).
@@ -733,6 +736,7 @@ pub struct DefaultHour {
 }
 impl Resource for DrawParam {
     const NAME: &'static str = "fromsoft.draw_param";
+    const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         to_value(self).map(Some)
     }

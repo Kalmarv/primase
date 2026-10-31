@@ -26,6 +26,7 @@ pub mod normals;
 pub mod object_collision;
 pub mod outfits;
 pub mod pbr;
+pub mod post;
 pub mod records;
 pub(super) mod reflectance;
 pub mod resolve_shaders;
@@ -98,6 +99,7 @@ pub fn register(registry: &mut PassRegistry) {
         &records::LOWER_FROMSOFT_MAP_RECORDS,
         &draw_params::SAMPLE_FROMSOFT_DRAW_PARAMS,
         &environment::LOWER_FROMSOFT_ENVIRONMENT,
+        &post::LOWER_SEKIRO_REINHARD,
         &lights::LOWER_FROMSOFT_LIGHTS,
         &irradiance::LOWER_FROMSOFT_IRRADIANCE,
         &sky::LOWER_FROMSOFT_SKY,

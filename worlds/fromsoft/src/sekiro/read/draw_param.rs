@@ -293,6 +293,7 @@ pub(super) fn select(
     // Their structure is read by the format reader; this area's file-selection rule does not apply their meaning.
     report.unread.extras += gparam.extras.len();
     DrawParam {
+        reinhard: None,
         game,
         file: stem.to_owned(),
         version: gparam.version,
@@ -399,7 +400,11 @@ pub(super) fn read(
             return Ok((None, report));
         }
     };
-    let source = select(game, &gparam, &stem, configs, &mut report);
+    let mut source = select(game, &gparam, &stem, configs, &mut report);
+    if game == Game::Sekiro {
+        source.reinhard =
+            Some(super::post::reinhard::read(archive, decoder, &stem).map_err(|e| e.to_string()));
+    }
     Ok((Some(source), report))
 }
 

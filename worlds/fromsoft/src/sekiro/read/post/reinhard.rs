@@ -6,7 +6,7 @@ use super::{
 use fromsoft_formats::{Archive, Result, dcx::Decoder, gparam::ParamExtra};
 
 /// Resolved native Reinhard scalars. This does not assert that a renderer-ready LUT or gamma has been resolved.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct Reinhard {
     pub contrast: f32,
     pub white_balance: f32,

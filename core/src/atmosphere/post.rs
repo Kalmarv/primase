@@ -5,12 +5,14 @@ use serde::Serialize;
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ToneMap {
     pub curve: ReinhardCurve,
-    /// Three rows applied to (tone-mapped R, G, B, 1); negative results are clamped to zero.
-    pub colour_matrix: [[f32; 4]; 3],
+    /// Optional rows applied to (tone-mapped R, G, B, 1); negative results are clamped to zero. None skips this stage.
+    pub colour_matrix: Option<[[f32; 4]; 3]>,
     /// At screen coordinate (u,v), r = length((2uv-1) * xy), t = 1-clamp(r*z+w,0,1).
-    /// Multiply RGB by (t*t*(3-2*t))^4 before the lookup.
-    pub vignette: [f32; 4],
-    pub lut: ColourLut,
+    /// Multiply RGB by (t*t*(3-2*t))^4 before the lookup. None skips this stage.
+    pub vignette: Option<[f32; 4]>,
+    /// None skips the lookup and leaves the curve/matrix/vignette result as linear RGB. A source must separately
+    /// report any stage it cannot establish; None is not a claim that its renderer uses an identity lookup.
+    pub lut: Option<ColourLut>,
 }
 
 /// A 1024-entry R16F curve: at texel i, u=(i+.5)/1024, z=(.2*u/(1-u)*white_balance)^contrast,
@@ -39,7 +41,6 @@ impl ToneMap {
             ("contrast", self.curve.contrast),
             ("white balance", self.curve.white_balance),
             ("gamma", self.curve.gamma),
-            ("LUT input power", self.lut.input_power),
         ] {
             if !(value.is_finite() && value > 0.) {
                 return Err(format!("tone map {name} {value} must be finite and positive"));
@@ -49,16 +50,21 @@ impl ToneMap {
             .colour_matrix
             .iter()
             .flatten()
-            .chain(self.vignette.iter())
+            .flatten()
+            .chain(self.vignette.iter().flatten())
             .all(|x| x.is_finite())
         {
             return Err("tone map colour matrix or vignette is not finite".into());
         }
-        let count = u64::from(self.lut.side).checked_pow(3);
-        if self.lut.side < 2 || count != Some(self.lut.values.len() as u64) {
+        let Some(lut) = &self.lut else { return Ok(()) };
+        if !(lut.input_power.is_finite() && lut.input_power > 0.) {
+            return Err("tone map LUT input power must be finite and positive".into());
+        }
+        let count = u64::from(lut.side).checked_pow(3);
+        if lut.side < 2 || count != Some(lut.values.len() as u64) {
             return Err("tone map LUT requires side >= 2 and side cubed RGB values".into());
         }
-        if !self.lut.values.iter().flatten().all(|x| x.is_finite()) {
+        if !lut.values.iter().flatten().all(|x| x.is_finite()) {
             return Err("tone map LUT contains a nonfinite value".into());
         }
         Ok(())
@@ -78,13 +84,13 @@ mod tests {
                 white_balance: 1.7,
                 gamma: 1.,
             },
-            colour_matrix: [[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]],
-            vignette: [0.; 4],
-            lut: ColourLut {
+            colour_matrix: Some([[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]]),
+            vignette: Some([0.; 4]),
+            lut: Some(ColourLut {
                 side: 2,
                 values: vec![[0.; 3]; 8],
                 input_power: 1. / 2.2,
-            },
+            }),
         };
         let mut world = World::new();
         world.insert_resource(Atmosphere {
@@ -101,7 +107,7 @@ mod tests {
             .unwrap();
         assert_eq!(json["tone_map"]["lut"]["side"], 2);
         let mut invalid = tone.clone();
-        invalid.lut.values.pop();
+        invalid.lut.as_mut().unwrap().values.pop();
         assert_eq!(
             invalid.check().unwrap_err(),
             "tone map LUT requires side >= 2 and side cubed RGB values"
@@ -109,5 +115,27 @@ mod tests {
         let mut invalid = tone;
         invalid.curve.gamma = 0.;
         assert!(invalid.check().unwrap_err().contains("gamma"));
+    }
+
+    #[test]
+    fn independent_absent_stages_are_preserved_without_identity_data() {
+        let tone = ToneMap {
+            curve: ReinhardCurve {
+                contrast: 1.45,
+                white_balance: 1.7,
+                gamma: 1.,
+            },
+            colour_matrix: None,
+            vignette: None,
+            lut: None,
+        };
+        assert!(tone.check().is_ok());
+        let json = serde_json::to_value(&tone).unwrap();
+        for stage in ["colour_matrix", "vignette", "lut"] {
+            assert!(json[stage].is_null(), "{stage}");
+        }
+        let mut invalid = tone;
+        invalid.vignette = Some([f32::NAN; 4]);
+        assert!(invalid.check().is_err());
     }
 }

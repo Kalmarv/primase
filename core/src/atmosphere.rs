@@ -331,7 +331,7 @@ impl Atmosphere {
 
 impl Resource for Atmosphere {
     const NAME: &'static str = "core.atmosphere";
-    const VERSION: u32 = 4;
+    const VERSION: u32 = 5;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
