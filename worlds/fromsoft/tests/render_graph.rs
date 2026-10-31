@@ -601,7 +601,7 @@ fn read_and_verify(
 /// The full-screen inputs the graph's vertex stages bind: Sekiro's frames record the full-screen triangle's bytes, Elden
 /// Ring's none.
 /// The reader identifies a closed local-light subgraph, with buffer roles and an HDR handoff, for both installs.
-fn lighting_boundary(graph: &RenderGraph) {
+fn lighting_boundary(graph: &RenderGraph, game: FsGame) {
     use primase_core::render_graph::LightingPort;
     use primase_core::shader::{BufferSource, LightListPart};
     let pipeline = graph.lighting.as_ref().expect("source lighting boundary");
@@ -636,10 +636,11 @@ fn lighting_boundary(graph: &RenderGraph) {
             matches!(pass.work, PassWork::Screen { .. }).then_some(pass.name.as_str())
         })
         .collect();
-    assert_eq!(
-        stages,
-        ["GXRend_TileBasedLighting", "GXLightCmbAlbedo", "GXLightComposite"]
-    );
+    let mut expected = vec!["GXRend_TileBasedLighting", "GXLightCmbAlbedo", "GXLightComposite"];
+    if game == FsGame::EldenRing {
+        expected.insert(0, "GXLightAcc_DDirLightShadowed1");
+    }
+    assert_eq!(stages, expected);
     assert!(
         pipeline
             .notices
@@ -726,6 +727,137 @@ fn sun_camera_inputs(graph: &RenderGraph, world: &World) {
     );
 }
 
+/// Execute the installed ER directional program with both light-set selectors.
+/// The disabled secondary must remain finite even when the primary is off too.
+fn sun_outputs_are_finite(graph: &RenderGraph, world: &World) {
+    use iridia_exec::{Layout, Load, PixelShader, ProgramShader, Sample, Sampler};
+    use primase_core::shader::FrameParameter;
+    struct GBuffer(u32);
+    impl Sampler for GBuffer {
+        fn sample(&mut self, request: Sample) -> Result<[f32; 4], String> {
+            assert_eq!(request.texture, 32);
+            Ok([1.; 4])
+        }
+        fn load(&mut self, request: Load) -> Result<[u32; 4], String> {
+            let value: [f32; 4] = match request.texture {
+                0 => [0.5, 1., 0.5, 0.],
+                1 => [0.5, 0., 0., 0.],
+                3 => [0., 0.5, 0., 1.],
+                4 => [0.4, 0.5, 0.6, self.0 as f32 / 255.],
+                other => return Err(format!("unexpected native sun texture t{other}")),
+            };
+            Ok(value.map(f32::to_bits))
+        }
+    }
+    let index = graph
+        .lighting
+        .as_ref()
+        .unwrap()
+        .passes
+        .iter()
+        .copied()
+        .find(|i| graph.passes[*i as usize].name == "GXLightAcc_DDirLightShadowed1")
+        .expect("selected directional stage");
+    let PassWork::Screen {
+        stages,
+        outputs,
+        state,
+        ..
+    } = &graph.passes[index as usize].work
+    else {
+        panic!()
+    };
+    let local = graph
+        .passes
+        .iter()
+        .find(|p| p.name == "GXRend_TileBasedLighting")
+        .unwrap();
+    let PassWork::Screen {
+        outputs: local_outputs,
+        ..
+    } = &local.work
+    else {
+        panic!()
+    };
+    assert_eq!(outputs.colour, local_outputs.colour);
+    assert!(
+        state.blend.is_some(),
+        "native additive accumulation remains stated"
+    );
+    let stage = stages
+        .iter()
+        .find(|s| s.stage == iridia_interface::Stage::Pixel)
+        .unwrap();
+    let stored = world.get::<Shader>(stage.shader).unwrap();
+    let shader = ProgramShader::new(iridia_dxil::lift(&stored.bytecode).unwrap()).unwrap();
+    let layout = Layout::of(&shader).unwrap();
+    for active in [false, true] {
+        let mut constants = iridia_exec::evaluate::Constants::new(&layout);
+        for binding in &stage.constants {
+            let values = match &binding.role {
+                ConstantRole::Default { words, .. } | ConstantRole::Material(words) => words.clone(),
+                ConstantRole::Frame(FrameParameter::DirectionToLight) => {
+                    [0.0f32, 1., 0.].map(f32::to_bits).to_vec()
+                }
+                ConstantRole::Frame(FrameParameter::LightColour | FrameParameter::LightSpecularColour) => {
+                    if active {
+                        [2.0f32, 1., 0.5].map(f32::to_bits).to_vec()
+                    } else {
+                        vec![0; 3]
+                    }
+                }
+                ConstantRole::View(ViewParameter::InverseProjection | ViewParameter::InverseView) => {
+                    [1.0f32, 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.]
+                        .map(f32::to_bits)
+                        .to_vec()
+                }
+                _ => continue,
+            };
+            let slot = stored
+                .interface
+                .resource(binding.resource)
+                .unwrap()
+                .provenance
+                .d3d
+                .unwrap()
+                .register;
+            constants.set_words(slot, binding.offset / 4, &values).unwrap();
+        }
+        let buffers = constants
+            .buffers()
+            .iter()
+            .map(|(slot, rows)| (*slot, rows.as_slice()))
+            .collect::<Vec<_>>();
+        let mut inputs = vec![[0; 4]; shader.input_count()];
+        inputs[0] = [0.5f32, 0.5, 0., 1.].map(f32::to_bits);
+        inputs[1] = [0.5f32, 0.5, 0., 0.].map(f32::to_bits);
+        for selector in [0, 1] {
+            let result = shader.execute(&inputs, &buffers, &mut GBuffer(selector)).unwrap();
+            for output in &result.outputs[..2] {
+                assert!(
+                    output.iter().all(|v| f32::from_bits(*v).is_finite()),
+                    "selector{selector} active{active}: {:?}",
+                    result.outputs
+                );
+            }
+            let lit = result.outputs[..2]
+                .iter()
+                .flat_map(|v| &v[..3])
+                .any(|v| f32::from_bits(*v) > 0.);
+            assert_eq!(lit, active, "native sun must respond to the primary core light");
+        }
+    }
+    assert!(
+        graph
+            .lighting
+            .as_ref()
+            .unwrap()
+            .notices
+            .iter()
+            .any(|n| n.contains("sharpness") && n.contains("finite"))
+    );
+}
+
 #[test]
 fn sekiros_render_graph_is_its_recorded_frames() -> Result<(), Box<dyn std::error::Error>> {
     let Some(root) = install(Game::Sekiro) else {
@@ -745,7 +877,7 @@ fn sekiros_render_graph_is_its_recorded_frames() -> Result<(), Box<dyn std::erro
     let (world, report) = read_and_verify(&install, "m11_01", [-170.0, 180.0, -50.0, 300.0], &decoder)?;
     let graph = world.resource::<RenderGraph>().unwrap();
     sun_camera_inputs(graph, &world);
-    lighting_boundary(graph);
+    lighting_boundary(graph, FsGame::Sekiro);
     // nine frames of four sessions at 1920 x 1080; the picture the last tone map's RGB10A2 target
     assert_eq!(
         (report.render_graph.frames, report.render_graph.view),
@@ -961,7 +1093,7 @@ fn elden_rings_render_graph_is_its_recorded_frames() -> Result<(), Box<dyn std::
     let (world, report) = read_and_verify(&install, "m60_42_36_00", [-10.0, -10.0, 10.0, 10.0], &decoder)?;
     let graph = world.resource::<RenderGraph>().unwrap();
     sun_camera_inputs(graph, &world);
-    lighting_boundary(graph);
+    lighting_boundary(graph, FsGame::EldenRing);
     assert_eq!(
         (report.render_graph.frames, report.render_graph.view),
         (7, [2560, 1440])
@@ -972,7 +1104,8 @@ fn elden_rings_render_graph_is_its_recorded_frames() -> Result<(), Box<dyn std::
         primase_core::render_graph::TargetFormat::Rgb10A2Unorm
     );
     // No captured vertex bytes are asserted: only the selected native lighting VS reads have a labelled reconstruction.
-    assert_eq!(screen_triangle_inputs(graph), 6);
+    sun_outputs_are_finite(graph, &world);
+    assert_eq!(screen_triangle_inputs(graph), 8);
     assert!(
         graph
             .lighting

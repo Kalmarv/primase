@@ -9,6 +9,7 @@ use primase_core::render_graph::{
 use primase_core::shader::{
     BufferSource, ConstantRole, InputRole, ScreenTriangleValue, Shader, TextureSource,
 };
+mod sun;
 
 pub(super) fn describe(
     game: Game,
@@ -16,9 +17,18 @@ pub(super) fn describe(
     world: &World,
     report: &mut super::Report,
 ) -> Result<LightingPipeline, String> {
-    let selected_names = ["GXRend_TileBasedLighting", "GXLightCmbAlbedo", "GXLightComposite"];
+    let selected_names: &[&str] = if game == Game::EldenRing {
+        &[
+            "GXLightAcc_DDirLightShadowed1",
+            "GXRend_TileBasedLighting",
+            "GXLightCmbAlbedo",
+            "GXLightComposite",
+        ]
+    } else {
+        &["GXRend_TileBasedLighting", "GXLightCmbAlbedo", "GXLightComposite"]
+    };
     let mut passes = Vec::new();
-    for name in selected_names {
+    for &name in selected_names {
         let index = graph
             .passes
             .iter()
@@ -94,6 +104,14 @@ pub(super) fn describe(
             let shader = world
                 .get::<Shader>(stage.shader)
                 .ok_or("lighting program absent")?;
+            if game == Game::EldenRing
+                && pass.name == "GXLightAcc_DDirLightShadowed1"
+                && stage.stage == Stage::Pixel
+            {
+                let added = sun::bind(stage, shader)?;
+                report.unknown_constants = report.unknown_constants.saturating_sub(1);
+                report.constants = report.constants.saturating_add(added).saturating_sub(1);
+            }
             if stage.stage == Stage::Vertex {
                 // The native GXLightAcc vertex program copies POSITION.xy/w to clip position and TEXCOORD.xy to
                 // UV (times dynamic-resolution scale). A full-screen triangle's geometry suffices; its native VB
@@ -185,15 +203,32 @@ pub(super) fn describe(
             }
         }
     }
-    let pipeline=LightingPipeline {imports,buffers,passes,
-        exports: vec![(LightingPort::DiffuseLight,diffuse.ok_or("no diffuse output")?),
-            (LightingPort::SpecularLight,specular.ok_or("no specular output")?),
-            (LightingPort::HdrColour,hdr.ok_or("no HDR output")?)],
-        notices: vec!["light lists conservatively include every light in every tile and depth slice; native culling is not reproduced".into(),
-            "the lighting subgraph currently selects local-light accumulation and composition; native environment, ambient occlusion, directional and shadow stages remain unexecuted".into(),
-            "full-screen vertex inputs are reconstructed from the native lighting vertex program's clip-position and UV reads, not captured vertex-buffer bytes".into()],
-        geometry_stencil: Some(GeometryStencil {target:scene_depth,value:0x10,write_mask:0x10,reference:0x10,
-            why:"stencil 0x10 assumed set on all geometry pixels (depth not far); producer not traced".into()}),
+    let mut notices = vec!["light lists conservatively include every light in every tile and depth slice; native culling is not reproduced".into(),
+        "native environment, ambient occlusion and shadow producer stages remain unexecuted".into(),
+        "full-screen vertex inputs are reconstructed from the native lighting vertex program's clip-position and UV reads, not captured vertex-buffer bytes".into()];
+    if game == Game::EldenRing {
+        notices.push(sun::NOTICE.into());
+    } else {
+        notices.push("native directional lighting is not yet selected for this source".into());
+    }
+    let pipeline = LightingPipeline {
+        imports,
+        buffers,
+        passes,
+        exports: vec![
+            (LightingPort::DiffuseLight, diffuse.ok_or("no diffuse output")?),
+            (LightingPort::SpecularLight, specular.ok_or("no specular output")?),
+            (LightingPort::HdrColour, hdr.ok_or("no HDR output")?),
+        ],
+        notices,
+        geometry_stencil: Some(GeometryStencil {
+            target: scene_depth,
+            value: 0x10,
+            write_mask: 0x10,
+            reference: 0x10,
+            why: "stencil 0x10 assumed set on all geometry pixels (depth not far); producer not traced"
+                .into(),
+        }),
     };
     pipeline.check(graph)?;
     Ok(pipeline)
