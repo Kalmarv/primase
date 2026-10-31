@@ -638,3 +638,64 @@ fn cache_file(kind: &str, install: &Install, names: Option<&Path>, cache_dir: Op
     )
 }
 
+
+pub type FirstRows = std::collections::BTreeMap<String, Vec<i32>>;
+
+/// The NPC rows (ascending) that a map's part names for each model, over the maps the dictionary lists, by install
+/// root: read once per process (reading the maps' parts takes seconds).
+pub fn first_rows(install: &Install, decoder: &Decoder<'_>, names: Option<&Path>, cache_dir: Option<&Path>) -> Option<FirstRows> {
+    use std::sync::{Mutex, OnceLock};
+    type Cache = Mutex<std::collections::BTreeMap<PathBuf, Option<FirstRows>>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(known) = cache.lock().ok()?.get(&install.root) {
+        return known.clone();
+    }
+    let file = cache_file("npc-rows", install, names, cache_dir);
+    let rows = file
+        .as_ref()
+        .and_then(|file| serde_json::from_slice::<FirstRows>(&std::fs::read(file).ok()?).ok())
+        .or_else(|| {
+            let rows = first_rows_read(install, decoder, names)?;
+            if let Some(file) = &file {
+                if let Some(dir) = file.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                let _ = std::fs::write(file, serde_json::to_vec(&rows).unwrap_or_default());
+            }
+            Some(rows)
+        });
+    cache
+        .lock()
+        .ok()?
+        .insert(install.root.clone(), rows.clone());
+    rows
+}
+
+
+fn first_rows_read(
+    install: &Install,
+    decoder: &Decoder<'_>,
+    names: Option<&Path>,
+) -> Option<FirstRows> {
+    (|| {
+        let archive = install.open().ok()?;
+        let entries = npc_entries(install, &archive, decoder, names).ok()?;
+        let mut first = FirstRows::new();
+        for entry in entries.iter().filter(|e| !e.open.is_null()) {
+            let (Some(model), Some(row)) = (
+                entry.details["model"].as_str(),
+                entry.name.parse::<i32>().ok(),
+            ) else {
+                continue;
+            };
+            first.entry(model.to_owned()).or_default().push(row);
+        }
+        for rows in first.values_mut() {
+            rows.sort_unstable();
+            rows.dedup();
+        }
+        Some(first)
+    })()
+}
+
