@@ -7,8 +7,8 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod asset;
-pub mod report_card;
 mod atmosphere;
+pub mod report_card;
 pub use atmosphere::{
     Atmosphere, AutoExposure, ColourLut, ColourMatrix, Exposure, ExposureMeter, Fog, FogFalloff,
     PostProcessingStatus, PostStage, PostStageStatus, PostStageStatusKind, ReinhardCurve, ToneMap,
@@ -38,10 +38,10 @@ mod primitive_keys;
 pub use primitive_keys::PrimitiveKeys;
 pub mod components;
 pub mod convert;
-pub mod read_scope;
-pub mod opening;
 pub mod detail;
 mod environment;
+pub mod opening;
+pub mod read_scope;
 pub use environment::{Ambient, AmbientLight, Environment, TimeOfDay};
 mod irradiance_volume;
 mod light_falloff;

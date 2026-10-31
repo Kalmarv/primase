@@ -125,9 +125,11 @@ impl PartLevel {
 }
 
 /// The explicit shared part-level choice made by the registered initializer selector.
-#[derive(Clone,Copy,Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct PartLevelSelection(pub PartLevel);
-impl Resource for PartLevelSelection {const NAME:&'static str="fromsoft.part_level_selection";}
+impl Resource for PartLevelSelection {
+    const NAME: &'static str = "fromsoft.part_level_selection";
+}
 /// The one outfit selected by a program from the listed, pass-selected presentations.
 #[derive(Clone, Debug, Serialize)]
 pub struct SelectedPlayerOutfit {
