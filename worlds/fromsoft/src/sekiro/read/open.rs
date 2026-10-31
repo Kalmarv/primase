@@ -18,22 +18,38 @@ pub struct AreaInputs {
 
 impl AreaInputs {
     /// The same incompatibilities as the area reader and its state passes; no input is selected or changed.
-    pub fn verify_open(self) -> Result<(), String> {
+    pub fn verify_hour(self) -> Result<(), String> {
         if self.hour.is_some_and(|hour| !hour.is_finite() || !(0.0..=24.0).contains(&hour) || !self.read_environment) {
             return Err("fromsoft-area: hour requires read_environment=true and a finite value in 0..=24".into());
         }
+        Ok(())
+    }
+    /// Validate the explicit weather request's source prerequisites.
+    pub fn verify_weather(self)->Result<(),String> {
         if self.weather && (self.game != Game::EldenRing || !self.sky) {
             return Err("weather requires Elden Ring and sky=true".into());
         }
+        Ok(())
+    }
+    /// Validate a collision-linked environment load request.
+    pub fn verify_collision(self)->Result<(),String> {
         if self.environment_collision && (!self.read_environment || self.explicit_environment) {
             return Err("environment_collision requires read_environment=true and no explicit environment file".into());
         }
+        Ok(())
+    }
+    /// Validate the explicit observed world-state request.
+    pub fn verify_world_state(self)->Result<(),String> {
         if self.world_state && (self.game != Game::Sekiro || self.irradiance_package.is_some() || !self.read_states || !self.sky) {
             return Err("world_state requires Sekiro, read_states=true, sky=true, and no explicit irradiance_package".into());
         }
         Ok(())
     }
 
+    /// Validate all opening prerequisites without choosing any value.
+    pub fn verify_open(self)->Result<(),String> {
+        self.verify_hour()?; self.verify_weather()?; self.verify_collision()?; self.verify_world_state()
+    }
     /// Validate the package request at the read boundary; this does not choose a package.
     pub fn verify_read(self) -> Result<(), String> {
         if self.irradiance_package.is_some_and(|package| package > 5 || self.game != Game::Sekiro) {
@@ -61,7 +77,7 @@ pub fn collision_environments(
 ) -> fromsoft_formats::Result<Vec<CollisionEnvironment>> {
     use fromsoft_formats::{area::DrawParamId,msb::{MapLayout,PartKind}};
     let area=full_area_name(area);
-    let layout=MapLayout::read(&archive.read(&format!("/map/mapstudio/{area}.msb.dcx"),decoder)?)?;
+    let layout=MapLayout::read(&archive.read(&fromsoft_formats::paths::map_layout(&area),decoder)?)?;
     let configs=layout.gparam_configs()?;
     let files=fromsoft_formats::area::draw_params(archive,game,&area);
     let mut entries=Vec::new();
