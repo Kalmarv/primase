@@ -47,6 +47,8 @@ pub struct StateInputs {
     /// None if no sky plan was read; Some(empty) retains an empty, present plan.
     pub sky_values: Option<Vec<String>>,
     pub domes: Vec<DomeMembership>,
+    /// Whether the program requested draw-param data, even if its base file was unresolved.
+    pub draw_param_requested: bool,
     /// Every available area file, including named read failures. No event has picked one.
     pub draw_params: BTreeMap<String, Result<DrawParam, String>>,
     /// Sum of decoded GPARAM file sizes, measured while reading the candidate set.
@@ -63,6 +65,7 @@ impl StateInputs {
             common: None,
             sky_values: None,
             domes: Vec::new(),
+            draw_param_requested: false,
             draw_params: BTreeMap::new(),
             draw_param_bytes: 0,
             draw_param_json_bytes: 0,

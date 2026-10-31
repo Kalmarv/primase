@@ -259,9 +259,16 @@ impl Pass for ResolveFromSoftState {
                     .collect::<Vec<_>>();
                 report.sky = Some(world_state::selected_sky(values, &masks)?);
             }
-            if let Some(sub) = report.selection.gparam_sub_ids.get(&inputs.area[..6])
-                && let Some(base) = world.resource::<DrawParam>()
+            let map = inputs
+                .area
+                .get(..6)
+                .ok_or("world-state: invalid source area name")?;
+            if let Some(sub) = report.selection.gparam_sub_ids.get(map)
+                && inputs.draw_param_requested
             {
+                let base = world
+                    .resource::<DrawParam>()
+                    .ok_or("Set Area Gparam Sub ID: base draw-param file is unresolved")?;
                 let (map, id) = DrawParamId::from_stem(&base.file)
                     .ok_or("Set Area Gparam Sub ID: draw-param slot is unresolved")?;
                 let id = u8::try_from(*sub)
@@ -276,7 +283,12 @@ impl Pass for ResolveFromSoftState {
                         .ok_or_else(|| {
                             format!("Set Area Gparam Sub ID: selected file {stem} is missing or unreadable")
                         })?
-                        .clone()?,
+                        .clone()
+                        .map_err(|why| {
+                            format!(
+                                "Set Area Gparam Sub ID: selected file {stem} is missing or unreadable: {why}"
+                            )
+                        })?,
                 );
             }
             resolved.world_state = Some(report);

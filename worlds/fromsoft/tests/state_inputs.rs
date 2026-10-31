@@ -119,5 +119,15 @@ fn the_common_state_scope_keeps_every_candidate_before_the_pass_selects()
             .to_string()
             .contains("enabled dome membership selects 0 sky values")
     );
+    world.resource_mut::<StateInputs>().unwrap().sky_values = None;
+    world.remove_resource::<DrawParam>();
+    let error = manager
+        .run(&mut world, &pipeline, &mut RunReport::default())
+        .unwrap_err();
+    assert!(error.to_string().contains("base draw-param file is unresolved"));
+    // A program that did not request GPARAMs still resolves its flag state.
+    world.resource_mut::<StateInputs>().unwrap().draw_param_requested = false;
+    manager.run(&mut world, &pipeline, &mut RunReport::default())?;
+    assert!(world.resource::<DrawParam>().is_none());
     Ok(())
 }

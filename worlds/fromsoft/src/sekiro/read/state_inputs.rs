@@ -87,7 +87,11 @@ pub(super) fn draw_params(
     configs: &[PartGparam],
     collisions: &BTreeMap<String, DrawParamId>,
 ) -> Result<()> {
-    if inputs.common.is_none() || *choice == super::draw_param::DrawParams::None {
+    if inputs.common.is_none() {
+        return Ok(());
+    }
+    inputs.draw_param_requested = *choice != super::draw_param::DrawParams::None;
+    if !inputs.draw_param_requested {
         return Ok(());
     }
     for stem in fromsoft_formats::area::draw_params(archive, game, area) {
