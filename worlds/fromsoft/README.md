@@ -1360,3 +1360,27 @@ parameters separately; the world reader does not select an image by distance.
 `sample-fromsoft-draw-params` follows the source time axis and blends slots at the caller's hour.
 `lower-fromsoft-environment` lowers Elden Ring's tone-map exposure to `core.atmosphere`'s `AutoExposure`, including
 its meter and adaptation; source-unit volumetric fog remains descriptive.
+
+## Catalog inventories and explicit presentation
+
+`sekiro::catalog::read` reads authored archive/dictionary and binder metadata into a
+World. It retains initializer/protector and NPC candidates, including absent forms;
+it does not choose a presentation or part level. Its `Options` only state the text
+language, that language choice's provenance, and an optional metadata cache folder.
+
+A program registers the FromSoft passes and states
+`select-fromsoft-initializer-outfits{initializer,presentation,level}` and
+`select-fromsoft-npc-outfits{level}`. For the prior complete catalog presentation,
+the program states `initializer=all`, `presentation=both`, `level=prefer-low`.
+`select-fromsoft-weapon-forms` consumes the same typed part-level selection.
+`materialize-fromsoft-catalog` then produces opening requests in the existing
+catalog order, preserving selected row identities and named refusals. A program
+maps the public request's `reader` name (`area`, `character`, `parts`) to its own
+adapter and forwards the options; no viewer code is needed to interpret the data.
+
+The lab forwards the selector's exact `initializer`, `presentation`, and `level`
+keys as catalog context. The caller must state them in its catalog request or
+configuration; no reader/catalog fallback is supplied. These are pass options,
+not alternative reader defaults. Public `area_input`, `overview`, `decoder`, and
+`observations` APIs cover compatibility checks, map placement summaries, installed
+codec lifetime, and explicitly supplied observations independently of the lab.
