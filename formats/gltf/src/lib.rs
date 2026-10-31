@@ -21,6 +21,7 @@ pub mod preview;
 pub mod read;
 mod rig;
 pub mod textures;
+pub mod uri;
 pub mod write;
 
 use std::path::PathBuf;
