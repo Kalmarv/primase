@@ -128,3 +128,28 @@ impl PartLevel {
 #[derive(Clone,Copy,Debug)]
 pub struct PartLevelSelection(pub PartLevel);
 impl Resource for PartLevelSelection {const NAME:&'static str="fromsoft.part_level_selection";}
+/// The one outfit selected by a program from the listed, pass-selected presentations.
+#[derive(Clone, Debug, Serialize)]
+pub struct SelectedPlayerOutfit {
+    pub chosen: CharacterOutfit,
+    pub automatic: bool,
+}
+impl Resource for SelectedPlayerOutfit {
+    const NAME: &'static str = "fromsoft.selected_player_outfit";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
+
+/// A program-selected map-authored initializer and the alternatives retained for reporting.
+#[derive(Clone, Debug, Serialize)]
+pub struct SelectedNpcInitializer {
+    pub chosen: SelectedNpcOutfit,
+    pub choices: Vec<SelectedNpcOutfit>,
+}
+impl Resource for SelectedNpcInitializer {
+    const NAME: &'static str = "fromsoft.selected_npc_initializer";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}

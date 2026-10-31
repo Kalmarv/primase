@@ -39,6 +39,7 @@ pub mod resolve_shaders;
 pub mod settings;
 pub mod sky;
 pub mod state;
+pub mod standalone;
 pub mod visibility;
 pub mod weapons;
 pub use crate::layer_bake::resolve::Unbound;
@@ -95,6 +96,10 @@ pub fn register(registry: &mut PassRegistry) {
         &outfits::SELECT_FROMSOFT_OUTFIT,
         &initializer_outfits::SELECT_FROMSOFT_INITIALIZER_OUTFITS,
         &initializer_outfits::SELECT_FROMSOFT_NPC_OUTFITS,
+        &initializer_outfits::SELECT_FROMSOFT_PLAYER_OUTFIT,
+        &initializer_outfits::SELECT_FROMSOFT_NPC_INITIALIZER,
+        &standalone::SELECT_FROMSOFT_DRESSING,
+        &standalone::BIND_FROMSOFT_ANIMATION,
         &visibility::PRESERVE_FROMSOFT_DISPLAY_MASKS,
         &far::DROP_FROMSOFT_FAR,
         &resolve_shaders::RESOLVE_FROMSOFT_SHADERS,

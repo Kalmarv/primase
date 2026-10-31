@@ -719,3 +719,123 @@ mod legacy_format_selection_tests {
         assert!(e.contains("Elden Ring"), "{e}");
     }
 }
+
+/// Choose a named catalog presentation or the explicitly requested first-readable policy.
+#[derive(Clone, Debug)]
+pub struct SelectFromSoftPlayerOutfit(pub String);
+pub const SELECT_FROMSOFT_PLAYER_OUTFIT: PassSpec = PassSpec {
+    name: "select-fromsoft-player-outfit",
+    options: &[OptionSpec::required(
+        "outfit",
+        "initializer/9000/m",
+        "a listed outfit key or explicit first-readable policy",
+    )],
+    make: |g| Ok(Box::new(SelectFromSoftPlayerOutfit(g.required("outfit").into()))),
+};
+impl Pass for SelectFromSoftPlayerOutfit {
+    fn name(&self) -> &'static str {
+        "select-fromsoft-player-outfit"
+    }
+    fn options(&self) -> Options {
+        Options::from([("outfit".into(), self.0.clone())])
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[OutfitVariants::NAME]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[crate::sekiro::outfit_data::SelectedPlayerOutfit::NAME]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        self.provides()
+    }
+    fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let choices = &world
+            .resource::<OutfitVariants>()
+            .ok_or("no listed initializer variants")?
+            .0;
+        let automatic = self.0 == "first-readable";
+        let chosen = if automatic {
+            choices.iter().find(|o|o.readable()).ok_or("no readable installed player outfit; choose a listed initializer after resolving its named missing parts".to_owned())?
+        } else {
+            choices.iter().find(|o| o.key() == self.0).ok_or_else(|| {
+                format!(
+                    "outfit {:?} is not a listed installed initializer variant",
+                    self.0
+                )
+            })?
+        };
+        if !chosen.readable() {
+            return Err(format!(
+                "outfit {} is unreadable: {}",
+                chosen.key(),
+                chosen.unresolved.join("; ")
+            ));
+        }
+        let chosen = chosen.clone();
+        log.count(
+            if automatic {
+                "first readable initializer selected by caller policy (viewer choice, not game's default)"
+            } else {
+                "named initializer selected"
+            },
+            1,
+        );
+        world.insert_resource(crate::sekiro::outfit_data::SelectedPlayerOutfit { chosen, automatic });
+        Ok(())
+    }
+}
+
+/// Select a particular NPC initializer, or state map/placement-order first-readable explicitly.
+#[derive(Clone, Debug)]
+pub struct SelectFromSoftNpcInitializer(pub String);
+pub const SELECT_FROMSOFT_NPC_INITIALIZER: PassSpec = PassSpec {
+    name: "select-fromsoft-npc-initializer",
+    options: &[OptionSpec::required(
+        "initializer",
+        "first-readable",
+        "initializer id or explicit first-readable policy",
+    )],
+    make: |g| {
+        let value = g.required("initializer");
+        if value != "first-readable" && value.parse::<i32>().is_err() {
+            return Err("initializer is not a row id or first-readable".into());
+        }
+        Ok(Box::new(SelectFromSoftNpcInitializer(value.into())))
+    },
+};
+impl Pass for SelectFromSoftNpcInitializer {
+    fn name(&self) -> &'static str {
+        "select-fromsoft-npc-initializer"
+    }
+    fn options(&self) -> Options {
+        Options::from([("initializer".into(), self.0.clone())])
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[NpcOutfitVariants::NAME]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[crate::sekiro::outfit_data::SelectedNpcInitializer::NAME]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        self.provides()
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let choices = &w.resource::<NpcOutfitVariants>().ok_or("no NPC variants")?.0;
+        let asked = if self.0 == "first-readable" {
+            None
+        } else {
+            Some(self.0.parse::<i32>().map_err(|_| "initializer is not a row id")?)
+        };
+        let chosen = choices
+            .iter()
+            .find(|c| asked.is_none_or(|id| c.init == Some(id)) && !c.parts.is_empty())
+            .cloned()
+            .ok_or_else(|| {
+                format!("no readable authored CharaInitParam outfit for init {asked:?}. Choices: {choices:?}")
+            })?;
+        let choices = choices.clone();
+        log.count("NPC initializer selected by caller policy", 1);
+        w.insert_resource(crate::sekiro::outfit_data::SelectedNpcInitializer { chosen, choices });
+        Ok(())
+    }
+}
