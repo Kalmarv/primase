@@ -10,7 +10,7 @@ use primase_fromsoft::sekiro::environment;
 use primase_fromsoft::sekiro::environment_data::{
     EnvironmentCatalog, EnvironmentLoadRequest, EnvironmentSelection,
 };
-fn run(world: &mut World, text: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn run(world: &mut World, text: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut registry = PassRegistry::new();
     primase_fromsoft::sekiro::passes::register(&mut registry);
     let manager = PassManager::new(registry).with_pass_checks(true);
@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Also supplies a standalone process for catalog time/peak-memory measurement before landing.
 #[test]
 fn stormveil_area_reader_keeps_authored_environment_metadata_without_selection()
--> Result<(), Box<dyn std::error::Error>> {
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (Some(root), Some(keys), Some(dll)) = (
         inputs::install(inputs::Game::Elden),
         inputs::keys(inputs::Game::Elden),
@@ -114,7 +114,7 @@ fn fnv(bytes: &[u8]) -> u64 {
 
 #[test]
 fn all_stormveil_boxes_resolve_and_captured_payload_fingerprints_match()
--> Result<(), Box<dyn std::error::Error>> {
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (Some(root), Some(keys), Some(dll)) = (
         inputs::install(inputs::Game::Elden),
         inputs::keys(inputs::Game::Elden),
