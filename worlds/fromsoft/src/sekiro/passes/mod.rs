@@ -26,6 +26,7 @@ pub mod materials;
 pub mod normals;
 pub mod object_collision;
 pub mod outfits;
+pub mod initializer_outfits;
 pub mod pbr;
 pub mod post;
 pub mod records;
@@ -87,6 +88,7 @@ pub fn register(registry: &mut PassRegistry) {
         &geometry::LOWER_FROMSOFT_GEOMETRY,
         &outfits::RAISE_FROMSOFT_DISPLAY_MASKS,
         &outfits::SELECT_FROMSOFT_OUTFIT,
+        &initializer_outfits::SELECT_FROMSOFT_INITIALIZER_OUTFITS,
         &visibility::PRESERVE_FROMSOFT_DISPLAY_MASKS,
         &far::DROP_FROMSOFT_FAR,
         &resolve_shaders::RESOLVE_FROMSOFT_SHADERS,
