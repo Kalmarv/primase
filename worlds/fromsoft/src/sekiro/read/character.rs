@@ -1637,6 +1637,8 @@ pub struct CharacterReader<'a> {
     /// The held weapons' trace slots ([`CharacterOptions::equipped_weapons`]), read from the weapon param at the first clip
     /// load that reads clip effects.
     weapon_traces: Option<Vec<crate::sekiro::effect_data::WeaponTraces>>,
+    /// An initializer outfit's associated character supplies its authored animation hierarchy, without tracks.
+    assembly_reference: Option<String>,
 }
 
 /// What a [`CharacterReader`] reads.
@@ -1662,6 +1664,7 @@ impl<'a> CharacterReader<'a> {
             last_load_reports: BTreeMap::new(),
             effect_cache: Default::default(),
             weapon_traces: None,
+            assembly_reference: None,
         }
     }
 
@@ -1740,6 +1743,7 @@ impl<'a> CharacterReader<'a> {
             last_load_reports: BTreeMap::new(),
             effect_cache: Default::default(),
             weapon_traces: None,
+            assembly_reference: None,
         }
     }
 
@@ -1762,7 +1766,9 @@ impl<'a> CharacterReader<'a> {
             ));
         }
         let parts: Vec<_> = outfit.parts.iter().map(String::as_str).collect();
-        Ok(Self::parts(install, &parts, decoder).with_animations(&outfit.animations_of))
+        let mut reader = Self::parts(install, &parts, decoder).with_animations(&outfit.animations_of);
+        reader.assembly_reference = Some(outfit.animations_of.clone());
+        Ok(reader)
     }
 }
 
@@ -1806,6 +1812,46 @@ impl Reader for CharacterReader<'_> {
             }
         };
         let mut report = ConvertReport::new();
+        if let (Some(of), Request::Parts(parts)) = (&self.assembly_reference, &self.request) {
+            let archive = self.install.open()?;
+            let reference = animation::read_clip_skeleton(&archive, &self.decoder, of, &mut world)?
+                .and_then(|read| read.skeleton)
+                .ok_or_else(|| {
+                    invalid(
+                        "character assembly",
+                        0,
+                        format!("{of} has no animation skeleton for its outfit"),
+                    )
+                })?;
+            let rigs: Vec<_> = world
+                .iter::<Asset>()
+                .filter(|(root, _)| {
+                    world.get::<Source>(*root).is_some_and(|source| {
+                        parts.iter().any(|part| {
+                            source.0 == format!("parts/{part}")
+                                || source.0.starts_with(&format!("parts/{part}/"))
+                        })
+                    })
+                })
+                .flat_map(|(_, asset)| {
+                    asset
+                        .members
+                        .iter()
+                        .filter(|(_, role)| *role == Role::Rig)
+                        .map(|(entity, _)| *entity)
+                })
+                .collect();
+            for rig in &rigs {
+                world.insert(*rig, primase_core::AssemblyReference { skeleton: reference });
+            }
+            report.push((
+                "fromsoft character assembly".into(),
+                format!(
+                    "{} part rigs reference {of}'s animation hierarchy; tracks remain deferred",
+                    rigs.len()
+                ),
+            ));
+        }
         self.pending.extend(cloth_runtime_notices(
             self.install.game,
             world

@@ -50,6 +50,14 @@
 //! Each refused joint is named with its disagreement, every one in the one refusal; every disagreement above 1e-6
 //! that is not refused is reported as an approximation, with its amount.
 //!
+//! **Source hierarchy reference.** A part rig may hold `core.assembly_reference`, naming a skeleton definition that
+//! supplies the parents of corresponding joints. Part-only joints retain their parents; without a reference,
+//! conflicting parents are still refused. All participating references must name the same skeleton. A changed
+//! parent requires the part's model-space rest to agree with the reference within `reference-tolerance=` (default
+//! 0.0001), including a weighted root. The named exception is an unweighted detached root: its placeholder rest is
+//! ignored and the reference's is used, counted separately. Same-parent joints keep the existing rest and binding
+//! policy, with their differences from the reference reported as a count and maximum matrix-entry difference.
+//!
 //! **Reference pose** (`reference-pose=`): a part's skins are all those that bind to its skeleton (a prototype's and
 //! those of its level-of-detail forms).
 //! - `own`: every part stays bound to its own skeleton, rest and inverse binds as stored. Reported, per part, how far
@@ -81,7 +89,7 @@
 //! holds (a weapon) keeps its own rig, and what attaches it to the character (`core.attachment`) is the program's. Each
 //! one left out is counted.
 //!
-//! The six options other than `leave-out=` are required. Approximations, reported: joints whose rests differ within the
+//! The six original options are required; `leave-out=` and `reference-tolerance=` are optional. Approximations, reported: joints whose rests differ within the
 //! tolerance, the vertex displacement measure of `own`, the inverse binds `assembled` moves, and sockets of one name two
 //! parts place differently.
 
@@ -89,8 +97,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
-    Asset, Component, Entity, Joint, JointId, JointMap, Mesh, Name, Role, Skeleton, Skin, Slot, Socket,
-    SocketId, Sockets, Source, World,
+    AssemblyReference, Asset, Component, Entity, Joint, JointId, JointMap, Mesh, Name, Role, Skeleton, Skin,
+    Slot, Socket, SocketId, Sockets, Source, World,
 };
 
 use crate::deform::{Vertices, influences, skin};
@@ -145,6 +153,8 @@ pub struct AssembleCharacter {
     pub reference_pose: ReferencePose,
     /// The largest rest disagreement accepted.
     pub tolerance: f64,
+    /// Model-space rest tolerance for a parent replaced by the source's reference hierarchy.
+    pub reference_tolerance: f64,
     pub unweighted_rests: UnweightedRests,
     pub weighted_rests: WeightedRests,
     /// The assembled asset's name.
@@ -181,7 +191,7 @@ impl Choice for WeightedRests {
     ];
 }
 
-/// `assemble-character`'s declaration ([`primase_core::pass::PassRegistry::add`]): every option but `leave-out` required.
+/// `assemble-character`'s declaration ([`primase_core::pass::PassRegistry::add`]): six required options and two optional.
 pub const ASSEMBLE_CHARACTER: PassSpec = PassSpec {
     name: "assemble-character",
     options: &[
@@ -197,6 +207,12 @@ pub const ASSEMBLE_CHARACTER: PassSpec = PassSpec {
             "tolerance",
             "0.001",
             "the largest rest disagreement accepted between paired joints, finite and not negative",
+        ),
+        OptionSpec::optional(
+            "reference-tolerance",
+            "0.0001",
+            "largest model-space rest difference when a source reference changes a joint's parent",
+            "0.0001; an unweighted detached root uses the reference rest without comparison",
         ),
         OptionSpec::choice::<UnweightedRests>(
             "unweighted-rests",
@@ -224,6 +240,13 @@ fn assemble_character(g: &Given) -> Result<Box<dyn Pass>, String> {
     if !tolerance.is_finite() || tolerance < 0.0 {
         return Err(format!("tolerance={v}: a finite number, zero or more"));
     }
+    let v = g.optional("reference-tolerance").unwrap_or("0.0001");
+    let reference_tolerance: f64 = v
+        .parse()
+        .map_err(|_| format!("reference-tolerance={v} is not a number"))?;
+    if !reference_tolerance.is_finite() || reference_tolerance < 0.0 {
+        return Err(format!("reference-tolerance={v}: a finite number, zero or more"));
+    }
     let name = g.required("name");
     if name.is_empty() {
         return Err("name= is empty".into());
@@ -232,6 +255,7 @@ fn assemble_character(g: &Given) -> Result<Box<dyn Pass>, String> {
         correspondence: g.choice::<Correspondence>("correspondence"),
         reference_pose: g.choice::<ReferencePose>("reference-pose"),
         tolerance,
+        reference_tolerance,
         unweighted_rests: g.choice::<UnweightedRests>("unweighted-rests"),
         weighted_rests: g.choice::<WeightedRests>("weighted-rests"),
         name: name.to_owned(),
@@ -260,7 +284,8 @@ fn is_held(source: &str, held: &[String]) -> bool {
 
 /// One asset that holds a rig.
 struct Part {
-    root: Entity,
+    /// None for the non-drawable source hierarchy reference.
+    root: Option<Entity>,
     label: String,
     rig: Entity,
     skeleton: Skeleton,
@@ -328,6 +353,16 @@ fn gather(w: &World, held: &[String]) -> Result<(Vec<Part>, u64), String> {
             .get::<Skeleton>(rig)
             .ok_or_else(|| format!("asset {label}: its rig holds no core.skeleton"))?
             .clone();
+        if let Some(j) = skeleton
+            .joints
+            .iter()
+            .find(|j| j.parent.is_some_and(|p| skeleton.index_of(p).is_none()))
+        {
+            return Err(format!(
+                "asset {label}: joint {} has a parent outside its skeleton",
+                j.name
+            ));
+        }
         // a NaN rest would read as no difference anywhere (`f64::max` skips it): refused where it is read
         if let Some(j) = skeleton
             .joints
@@ -342,7 +377,7 @@ fn gather(w: &World, held: &[String]) -> Result<(Vec<Part>, u64), String> {
         let rests =
             model_transforms(&skeleton, &locals(&skeleton, None)).map_err(|e| format!("{label}: {}", e.0))?;
         parts.push(Part {
-            root,
+            root: Some(root),
             label,
             rig,
             skeleton,
@@ -362,6 +397,41 @@ fn gather(w: &World, held: &[String]) -> Result<(Vec<Part>, u64), String> {
         ));
     }
     Ok((parts, left_out))
+}
+
+/// The reference is a skeleton definition, not another drawable part. Adding it to correspondence preserves all
+/// its parent chains, including ancestors a part does not carry, while leaving part-only joints in the union.
+fn add_reference(parts: &mut Vec<Part>, w: &World) -> Result<Option<usize>, String> {
+    let references: BTreeSet<_> = parts
+        .iter()
+        .filter_map(|p| w.get::<AssemblyReference>(p.rig).map(|r| r.skeleton))
+        .collect();
+    let reference = match references.len() {
+        0 => return Ok(None),
+        1 => *references.first().unwrap(),
+        _ => return Err("parts state different assembly reference skeletons".into()),
+    };
+    if parts.iter().any(|p| p.rig == reference) {
+        return Err("assembly reference is also a drawable part's rig".into());
+    }
+    let skeleton = w
+        .get::<Skeleton>(reference)
+        .ok_or("assembly reference holds no core.skeleton")?
+        .clone();
+    skeleton.verify(reference, w)?;
+    let rests = model_transforms(&skeleton, &locals(&skeleton, None)).map_err(|e| e.0)?;
+    let index = parts.len();
+    parts.push(Part {
+        root: None,
+        label: w
+            .get::<Name>(reference)
+            .map_or_else(|| format!("reference {reference:?}"), |n| n.0.clone()),
+        rig: reference,
+        skeleton,
+        rests,
+        members: Vec::new(),
+    });
+    Ok(Some(index))
 }
 
 /// Which assembled joint each joint of each part is: `of[part][joint index]`.
@@ -486,6 +556,7 @@ impl Assembled {
         parts: &[Part],
         of: &[Vec<usize>],
         weighted: &[BTreeSet<JointId>],
+        reference: Option<usize>,
     ) -> Result<Assembled, String> {
         let count = of.iter().flatten().max().map_or(0, |m| m + 1);
         let mut members = vec![Vec::new(); count];
@@ -521,7 +592,8 @@ impl Assembled {
                 })
                 .collect();
             let classes: BTreeSet<usize> = stated.iter().map(|s| s.2).collect();
-            if classes.len() > 1 {
+            let authority = m.iter().copied().find(|(p, _)| Some(*p) == reference);
+            if classes.len() > 1 && authority.is_none() {
                 let detail: Vec<String> = stated
                     .iter()
                     .map(|&(p, _, up)| format!("{} in {}", names[up], parts[p].label))
@@ -532,20 +604,35 @@ impl Assembled {
                     detail.join(", ")
                 ));
             }
-            parents[c] = stated.first().map(|s| s.2);
+            parents[c] = match authority {
+                Some((p, j)) => parts[p].skeleton.joints[j]
+                    .parent
+                    .and_then(|id| parts[p].skeleton.index_of(id))
+                    .map(|up| of[p][up]),
+                None => stated.first().map(|s| s.2),
+            };
             // its rest from a part that states its parent (any part for a root), one that weights it first
             let candidates: Vec<(usize, usize)> = if stated.is_empty() {
                 m.clone()
             } else {
                 stated.iter().map(|s| (s.0, s.1)).collect()
             };
-            source.push(
-                candidates
-                    .iter()
-                    .copied()
-                    .find(|&(p, j)| weighted[p].contains(&parts[p].skeleton.joints[j].id))
-                    .unwrap_or(candidates[0]),
-            );
+            let selected = candidates
+                .iter()
+                .copied()
+                .find(|&(p, j)| weighted[p].contains(&parts[p].skeleton.joints[j].id))
+                .unwrap_or(candidates[0]);
+            let (p, j) = selected;
+            let joint = &parts[p].skeleton.joints[j];
+            let parent = joint
+                .parent
+                .and_then(|id| parts[p].skeleton.index_of(id))
+                .map(|up| of[p][up]);
+            // Same-parent joints keep the selected part's local rest. A changed parent uses the reference rest
+            // only after the model-space guard in reference_decisions has established compatibility.
+            let use_reference =
+                parent != parents[c] || (joint.parent.is_none() && !weighted[p].contains(&joint.id));
+            source.push(authority.filter(|_| use_reference).unwrap_or(selected));
         }
         if let Some(p) = (0..count).find(|&c| {
             let mut at = c;
@@ -617,6 +704,82 @@ fn weighted(w: &World, proto: Entity, rig: Entity) -> Result<BTreeSet<JointId>, 
 type Disagreements = (Vec<(usize, usize, usize, f64)>, Vec<(usize, usize)>);
 
 impl AssembleCharacter {
+    /// A reference may replace a parent only when it preserves the part's model-space rest. The one named
+    /// exception is an unweighted detached root: it carries no geometry and its placeholder rest is ignored.
+    fn reference_decisions(
+        &self,
+        parts: &[Part],
+        of: &[Vec<usize>],
+        weighted: &[BTreeSet<JointId>],
+        reference: Option<usize>,
+        log: &mut PassLog,
+    ) -> Result<(), String> {
+        let Some(r) = reference else { return Ok(()) };
+        let authority = &parts[r];
+        let reference_joints: BTreeMap<usize, usize> =
+            of[r].iter().enumerate().map(|(j, &c)| (c, j)).collect();
+        let (mut detached, mut reparented, mut same_parent) = (0u64, 0u64, 0u64);
+        let mut max_same_parent = 0.0f64;
+        let mut problems = Vec::new();
+        for (p, part) in parts.iter().enumerate().filter(|(p, _)| *p != r) {
+            for (j, joint) in part.skeleton.joints.iter().enumerate() {
+                let Some(&reference_joint) = reference_joints.get(&of[p][j]) else {
+                    continue;
+                };
+                let target = &authority.skeleton.joints[reference_joint];
+                let parent = joint
+                    .parent
+                    .and_then(|id| part.skeleton.index_of(id))
+                    .map(|up| of[p][up]);
+                let target_parent = target
+                    .parent
+                    .and_then(|id| authority.skeleton.index_of(id))
+                    .map(|up| of[r][up]);
+                if joint.parent.is_none() && !weighted[p].contains(&joint.id) {
+                    detached += 1;
+                    continue;
+                }
+                let d = gap(&part.rests[&joint.id], &authority.rests[&target.id]);
+                if parent != target_parent {
+                    if d > self.reference_tolerance {
+                        problems.push(format!(
+                            "joint {} in {}: changing its parent to assembly reference {} changes its model-space rest by {d:.3e}, beyond reference-tolerance {}",
+                            joint.name, part.label, authority.label, self.reference_tolerance
+                        ));
+                    } else {
+                        reparented += 1;
+                        log.approximate(&format!(
+                            "joint {} in {}: parent taken from assembly reference {}, model-space rest difference {d:.3e}",
+                            joint.name, part.label, authority.label
+                        ), 1);
+                    }
+                } else if d > REPORT_FLOOR {
+                    same_parent += 1;
+                    max_same_parent = max_same_parent.max(d);
+                }
+            }
+        }
+        if !problems.is_empty() {
+            return Err(problems.join("; "));
+        }
+        log.count("source assembly reference skeletons", 1);
+        log.count(
+            "part joints reparented to the reference within reference-tolerance",
+            reparented,
+        );
+        log.count("unweighted detached roots: rest from reference", detached);
+        log.count(
+            "same-parent part joints with rests differing from the reference",
+            same_parent,
+        );
+        if same_parent > 0 {
+            log.approximate(&format!(
+                "same-parent rests differ from assembly reference by up to {max_same_parent:.3e}; part rests and inverse binds follow the existing reference-pose policy"
+            ), same_parent);
+        }
+        Ok(())
+    }
+
     /// Each corresponded joint's rest in each part against the assembled one: (joint, part, index, difference),
     /// and the detached roots (a root of a part that another part parents) left out.
     fn disagreements(
@@ -631,6 +794,9 @@ impl AssembleCharacter {
         for (c, m) in asm.members.iter().enumerate().filter(|(_, m)| m.len() > 1) {
             for &(p, j) in m {
                 let part = &parts[p];
+                if part.root.is_none() {
+                    continue;
+                }
                 let t = part.top(j);
                 let top_class = of[p][t];
                 let own = part.rests[&part.skeleton.joints[j].id];
@@ -740,6 +906,10 @@ impl Pass for AssembleCharacter {
             ("reference-pose".to_owned(), self.reference_pose.text().to_owned()),
             ("tolerance".to_owned(), self.tolerance.to_string()),
             (
+                "reference-tolerance".to_owned(),
+                self.reference_tolerance.to_string(),
+            ),
+            (
                 "unweighted-rests".to_owned(),
                 self.unweighted_rests.text().to_owned(),
             ),
@@ -774,7 +944,8 @@ impl Pass for AssembleCharacter {
         "parts whose rests for a joint differ within the tolerance related as one joint (with weighted-rests=report, beyond it too); with reference-pose=assembled, inverse binds moved to the assembled rest; of sockets two parts give one name and place otherwise, the first part's kept"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let (parts, left_out) = gather(w, &self.leave_out)?;
+        let (mut parts, left_out) = gather(w, &self.leave_out)?;
+        let reference = add_reference(&mut parts, w)?;
         // every entity whose skin binds to a part's rig (its prototypes and their level-of-detail forms), and the
         // joints of the part that carry weight in each
         let mut prototypes: Vec<Vec<(Entity, BTreeSet<JointId>)>> = Vec::new();
@@ -795,7 +966,8 @@ impl Pass for AssembleCharacter {
             Correspondence::ByName => by_name(&parts)?,
             Correspondence::Table => by_table(&parts, w)?,
         };
-        let asm = Assembled::resolve(&parts, &of, &carrying)?;
+        self.reference_decisions(&parts, &of, &carrying, reference, log)?;
+        let asm = Assembled::resolve(&parts, &of, &carrying, reference)?;
         let skeleton = asm.skeleton(&parts);
         let rests = model_transforms(&skeleton, &locals(&skeleton, None)).map_err(|e| e.0)?;
         let id = |c: usize| JointId(c as u32);
@@ -922,6 +1094,11 @@ impl Pass for AssembleCharacter {
             members: vec![(assembled, Role::Rig)],
         };
         for (p, part) in parts.iter().enumerate() {
+            // The reference supplies a hierarchy, not an implicit clip correspondence. A caller may later build
+            // that map with its own rest/parent policy; emitting one here would create two maps from that source.
+            if part.root.is_none() {
+                continue;
+            }
             let map = w.spawn();
             w.insert(
                 map,
@@ -1055,7 +1232,9 @@ impl Pass for AssembleCharacter {
         }
         w.insert(character, asset);
         for part in &parts {
-            w.despawn(part.root);
+            if let Some(root) = part.root {
+                w.despawn(root);
+            }
         }
         for line in within {
             log.approximate(&line, 1);
@@ -1066,12 +1245,18 @@ impl Pass for AssembleCharacter {
                 accepted_weighted,
             );
         }
-        log.count("parts assembled", parts.len() as u64);
+        log.count(
+            "parts assembled",
+            parts.iter().filter(|p| p.root.is_some()).count() as u64,
+        );
         log.count("held objects left out (leave-out=)", left_out);
         log.count("assembled joints", asm.names.len() as u64);
         log.count(
             "assembled joints held by more than one part",
-            asm.members.iter().filter(|m| m.len() > 1).count() as u64,
+            asm.members
+                .iter()
+                .filter(|m| m.iter().filter(|(p, _)| parts[*p].root.is_some()).count() > 1)
+                .count() as u64,
         );
         log.count(
             "roots of a part that another part parents, left out of the rest comparison",
@@ -1245,6 +1430,154 @@ mod tests {
     }
 
     const OWN: &str = "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0.001,unweighted-rests=refuse,weighted-rests=refuse,name=hero}";
+
+    /// Two independently skinned parts agree in model space while one stores the shared joint under a different
+    /// parent. The reference contains no PartOnly joint, so that joint must survive the union unchanged.
+    fn reference_world() -> (World, Entity, Entity, Entity) {
+        let mut w = World::new();
+        let reference_joints: &[J] = &[
+            ("Root", None, [0.0; 3]),
+            ("Parent", Some(0), [0.0, 1.0, 0.0]),
+            ("Joint", Some(1), [0.0, 0.5, 0.0]),
+        ];
+        let a = part(
+            &mut w,
+            "flattened",
+            &[
+                reference_joints[0],
+                reference_joints[1],
+                ("Joint", Some(0), [0.0, 1.5, 0.0]),
+                ("PartOnly", Some(2), [0.1, 0.0, 0.0]),
+            ],
+            &[([0.0, 1.5, 0.0], 2), ([0.1, 1.5, 0.0], 3)],
+        );
+        let b = part(&mut w, "hierarchical", reference_joints, &[([0.0, 1.5, 0.0], 2)]);
+        let ra = w.get::<Skin>(a).unwrap().bindings[0].skeleton;
+        let rb = w.get::<Skin>(b).unwrap().bindings[0].skeleton;
+        let reference = w.spawn();
+        w.insert(reference, Name("source hierarchy".into()));
+        w.insert(reference, w.get::<Skeleton>(rb).unwrap().clone());
+        for rig in [ra, rb] {
+            w.insert(rig, AssemblyReference { skeleton: reference });
+        }
+        assert!(w.verify_components().is_empty());
+        (w, a, ra, reference)
+    }
+
+    #[test]
+    fn a_reference_hierarchy_resolves_compatible_parents_and_retains_part_only_joints() {
+        let (mut w, _, _, reference) = reference_world();
+        let report = run(&mut w, OWN).unwrap();
+        let (_, skeleton) = assembled(&w);
+        let joint = skeleton.joints.iter().find(|j| j.name == "Joint").unwrap();
+        let parent = skeleton.joints.iter().find(|j| j.name == "Parent").unwrap();
+        let extra = skeleton.joints.iter().find(|j| j.name == "PartOnly").unwrap();
+        assert_eq!(joint.parent, Some(parent.id));
+        assert_eq!(extra.parent, Some(joint.id));
+        assert_eq!(report.steps[0].log.counts["parts assembled"], 2);
+        assert_eq!(
+            report.steps[0].log.counts["part joints reparented to the reference within reference-tolerance"],
+            1
+        );
+        assert!(
+            w.has::<Skeleton>(reference),
+            "the reference stays alive for the parts' references"
+        );
+        assert!(
+            w.iter::<JointMap>().all(|(_, map)| map.from != reference),
+            "clip correspondence is a separate caller choice"
+        );
+        assert!(w.verify_components().is_empty(), "{:?}", w.verify_components());
+    }
+
+    #[test]
+    fn a_reference_reparenting_past_the_model_space_tolerance_is_refused() {
+        let (mut w, _, rig, _) = reference_world();
+        w.get_mut::<Skeleton>(rig).unwrap().joints[2].rest = at([0.0, 1.51, 0.0]);
+        let error = run(
+            &mut w,
+            &OWN.replace("weighted-rests=refuse", "weighted-rests=report"),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("joint Joint in flattened") && error.contains("reference-tolerance"),
+            "{error}"
+        );
+        assert_eq!(
+            w.iter::<Asset>().count(),
+            2,
+            "a refusal must not change the world"
+        );
+    }
+
+    #[test]
+    fn a_weighted_detached_root_past_the_reference_tolerance_is_refused() {
+        let (mut w, _, rig, _) = reference_world();
+        let joint = &mut w.get_mut::<Skeleton>(rig).unwrap().joints[2];
+        joint.parent = None;
+        joint.rest = at([0.0, 9.0, 0.0]);
+        let error = run(
+            &mut w,
+            &OWN.replace("weighted-rests=refuse", "weighted-rests=report"),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("joint Joint in flattened") && error.contains("reference-tolerance"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn same_parent_rest_differences_are_reported_under_the_existing_policy() {
+        let (mut w, _, rig, _) = reference_world();
+        let joint = &mut w.get_mut::<Skeleton>(rig).unwrap().joints[2];
+        joint.parent = Some(JointId(1));
+        joint.rest = at([0.0, 0.52, 0.0]);
+        let report = run(
+            &mut w,
+            &OWN.replace("weighted-rests=refuse", "weighted-rests=report"),
+        )
+        .unwrap();
+        let log = &report.steps[0].log;
+        assert_eq!(
+            log.counts["same-parent part joints with rests differing from the reference"],
+            1
+        );
+        assert!(
+            log.approximations
+                .keys()
+                .any(|line| line.contains("same-parent rests") && line.contains("2.000e-2")),
+            "{:?}",
+            log.approximations
+        );
+        let (_, skeleton) = assembled(&w);
+        let joint = skeleton.joints.iter().find(|j| j.name == "Joint").unwrap();
+        assert_eq!(joint.rest.matrix().cols[3], [0.0, 0.52, 0.0]);
+    }
+
+    #[test]
+    fn an_unweighted_detached_root_uses_the_reference_rest_and_is_counted() {
+        let (mut w, proto, rig, _) = reference_world();
+        let joint = &mut w.get_mut::<Skeleton>(rig).unwrap().joints[2];
+        joint.parent = None;
+        joint.rest = at([0.0, 9.0, 0.0]);
+        w.get_mut::<Mesh>(proto)
+            .unwrap()
+            .primitive_mut(0)
+            .unwrap()
+            .streams_mut()
+            .insert(Semantic::Joints(0), Stream::U8x4(vec![[1, 0, 0, 0]; 2]));
+        let report = run(
+            &mut w,
+            &OWN.replace("unweighted-rests=refuse", "unweighted-rests=report"),
+        )
+        .unwrap();
+        assert!(report.steps[0].log.counts["unweighted detached roots: rest from reference"] >= 1);
+        let (_, skeleton) = assembled(&w);
+        let joint = skeleton.joints.iter().find(|j| j.name == "Joint").unwrap();
+        let model = model_transforms(&skeleton, &locals(&skeleton, None)).unwrap();
+        assert_eq!(model[&joint.id][3], [0.0, 1.5, 0.0]);
+    }
 
     /// The pass reads the rests itself: a NaN in a part's rest would make every difference involving it compare as no
     /// difference (`f64::max` skips a NaN), so it is refused naming the joint and the part, before any comparison.

@@ -140,6 +140,35 @@ pub struct Skeleton {
     pub joints: Vec<Joint>,
 }
 
+/// A part skeleton's source-stated hierarchy reference for character assembly. Correspondence is still a
+/// program's choice (names or a joint table); this relation does not equate joints by itself. Corresponding joints
+/// take their parent from the reference, while part-only joints keep their authored hierarchy and bindings.
+/// The reference need not contain every joint of a part and is not itself a drawable part.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct AssemblyReference {
+    pub skeleton: Entity,
+}
+
+impl Component for AssemblyReference {
+    const NAME: &'static str = "core.assembly_reference";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.skeleton);
+    }
+    fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
+        if !w.has::<Skeleton>(e) || !w.has::<Skeleton>(self.skeleton) {
+            return Err("assembly reference and its part must both hold core.skeleton".into());
+        }
+        if e == self.skeleton {
+            return Err("a part cannot be its own assembly reference".into());
+        }
+        Ok(())
+    }
+}
+
 /// How far a [`Rest::Trs`] rotation's length may be from 1: sources store unit quaternions rounded to f32 (or
 /// quantised); a length further off is not a rotation.
 const UNIT_TOLERANCE: f32 = 1e-3;

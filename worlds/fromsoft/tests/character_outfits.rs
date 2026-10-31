@@ -74,3 +74,111 @@ fn installed_initializer_catalogs_and_the_sekiro_outfit_reader_keep_authored_par
     }
     Ok(())
 }
+
+/// The animation hierarchy resolves armor's flattened parent copies without discarding its part-only cloth joints.
+/// The already working Wolf is included so the shared reader keeps the Sekiro path as well.
+#[test]
+fn warrior_confessor_and_wolf_assemble_against_their_authored_animation_hierarchy() -> Result<()> {
+    use primase_animation::simulation::Simulation;
+    use primase_core::pass::{PassManager, PassRegistry, RunReport};
+    use primase_core::{AssemblyReference, Asset, Role, Skeleton};
+    for (game, data, rows) in [
+        (Game::EldenRing, Data::Elden, &[3001, 3008][..]),
+        (Game::Sekiro, Data::Sekiro, &[9000][..]),
+    ] {
+        let (Some(root), Some(folder), Some(library)) = (install(data), keys(data), oodle(Tool::Oodle6))
+        else {
+            continue;
+        };
+        let codec = common::oodle(library)?;
+        let installed = common::install(root, game, Keys::from_folder(folder, game, None)?);
+        let archive = installed.open()?;
+        let decoder = Decoder {
+            oodle: Some(&codec),
+            max_output: 1 << 30,
+        };
+        let outfits = character_outfits(&installed, &archive, &decoder)?;
+        for &row in rows {
+            let outfit = outfits
+                .iter()
+                .find(|o| o.initializer == row && o.key().ends_with("/m") && o.readable())
+                .ok_or("no selected initializer outfit")?;
+            let mut reader = CharacterReader::outfit(
+                installed.clone(),
+                outfit,
+                Decoder {
+                    oodle: Some(&codec),
+                    max_output: 1 << 30,
+                },
+            )?;
+            let (mut world, _) = reader.read().map_err(|error| error.to_string())?;
+            assert!(world.iter::<AssemblyReference>().count() >= outfit.parts.len());
+            assert!(
+                world.iter::<Simulation>().count() >= 2,
+                "{game:?}/{row}: expected multiple cloth simulations"
+            );
+            let mut registry = PassRegistry::new();
+            primase_fromsoft::sekiro::passes::register(&mut registry);
+            primase_animation::register(&mut registry);
+            let manager = PassManager::new(registry);
+            let pipeline = "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program},assemble-character{correspondence=by-name,reference-pose=assembled,tolerance=0.001,reference-tolerance=0.0001,unweighted-rests=report,weighted-rests=report,name=player}";
+            let mut report = RunReport::default();
+            manager.run(&mut world, &manager.registry.parse(pipeline)?, &mut report)?;
+            let assembly = &report.steps.last().ok_or("no assembly step")?.log;
+            assert_eq!(assembly.counts["source assembly reference skeletons"], 1);
+            assert!(assembly.counts["unweighted detached roots: rest from reference"] > 0);
+            if game == Game::EldenRing {
+                assert!(
+                    assembly.counts["part joints reparented to the reference within reference-tolerance"]
+                        >= 4
+                );
+                let (_, asset) = world
+                    .iter::<Asset>()
+                    .find(|(_, a)| a.members.iter().any(|(_, r)| *r == Role::Rig))
+                    .ok_or("no assembled asset")?;
+                let rig = asset
+                    .members
+                    .iter()
+                    .find(|(_, r)| *r == Role::Rig)
+                    .ok_or("no assembled rig")?
+                    .0;
+                let skeleton = world.get::<Skeleton>(rig).ok_or("no assembled skeleton")?;
+                for name in ["L_ThighTwist", "R_ThighTwist"] {
+                    let joint = skeleton
+                        .joints
+                        .iter()
+                        .find(|j| j.name == name)
+                        .ok_or("no thigh twist")?;
+                    let parent = skeleton
+                        .index_of(joint.parent.ok_or("twist is a root")?)
+                        .ok_or("missing twist parent")?;
+                    assert_eq!(skeleton.joints[parent].name, name.replace("ThighTwist", "Thigh"));
+                }
+                if row == 3008 {
+                    assert!(
+                        assembly
+                            .approximations
+                            .keys()
+                            .any(|line| line.contains("same-parent rests") && line.contains("1.475e-2")),
+                        "{:?}",
+                        assembly.approximations
+                    );
+                }
+            }
+            assert!(world.iter::<Simulation>().count() >= 2);
+            assert!(
+                world.verify_components().is_empty(),
+                "{:?}",
+                world.verify_components()
+            );
+            println!(
+                "{game:?}/{row}: {} part rigs, {} reparented, {} unweighted detached roots, {} simulations",
+                outfit.parts.len(),
+                assembly.counts["part joints reparented to the reference within reference-tolerance"],
+                assembly.counts["unweighted detached roots: rest from reference"],
+                world.iter::<Simulation>().count()
+            );
+        }
+    }
+    Ok(())
+}
