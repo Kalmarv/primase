@@ -15,14 +15,17 @@ ktx2 = ["primase-web/ktx2"]
 
 [dev-dependencies]
 frostbite-formats.workspace = true
+primase-animation.workspace = true
 primase-core.workspace = true
 primase-foundations = { workspace = true, features = ["compress"] }
 fromsoft-formats.workspace = true
 primase-fromsoft.workspace = true
 primase-frostbite.workspace = true
 primase-image.workspace = true
+primase-meshops.workspace = true
 primase-reskate.workspace = true
 primase-gltf.workspace = true
+primase-testdata.workspace = true
 primase-web.workspace = true
 
 [lints]
