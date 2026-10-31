@@ -275,6 +275,7 @@ fn independent_dx10_and_mask_fixtures() {
 fn cube_faces_and_mips_retain_their_independent_subresources() {
     let mut bytes = vec![0; 148];
     bytes[..4].copy_from_slice(b"DDS ");
+    bytes[84..88].copy_from_slice(b"DX10");
     for (offset, value) in [
         (4, 124),
         (8, 0x21007),
