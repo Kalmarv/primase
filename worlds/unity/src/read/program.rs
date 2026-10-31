@@ -18,6 +18,24 @@ pub struct ProgramsReport {
     pub left_out: std::collections::BTreeMap<String, usize>,
 }
 
+/// [`read_programs`] for every shader the materials of `w` name, under the render pipeline the player's GraphicsSettings
+/// state ([`unity_formats::player::Player::render_pipeline`]); `None`, with nothing read, for a player that has no
+/// GraphicsSettings, whose draw pass is then not known.
+pub fn read_world_programs(
+    player: &unity_formats::player::Player,
+    w: &mut primase_core::World,
+) -> Result<Option<ProgramsReport>> {
+    let Some(pipeline) = player.render_pipeline()? else {
+        return Ok(None);
+    };
+    let shaders: std::collections::BTreeSet<String> = w
+        .iter::<crate::components::UnityMaterial>()
+        .filter_map(|(_, m)| m.shader.clone())
+        .collect();
+    let names: Vec<&str> = shaders.iter().map(String::as_str).collect();
+    read_programs(player, w, &names, &pipeline).map(Some)
+}
+
 /// For every `unity.material` of `w` whose shader is one of `shaders`, the programs of its draw pass under
 /// `pipeline` ([`UnityMaterial::draw_pass`]) as stored, each stage's (vertex, fragment, geometry, hull, domain): every
 /// variant with its D3D11 code, and the shader's declared texture defaults, as `unity.programs` on the material's
