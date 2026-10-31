@@ -7,6 +7,9 @@ pub const DATA_FOLDER: &str = "Data";
 /// The TOC whose presence marks a data folder as the game's (the folder's own layout).
 pub const LAYOUT_TOC: &str = "layout.toc";
 
+/// The superbundle TOC of the items (costumes, props, boards), relative to the data folder.
+pub const ITEMS_TOC: &str = "Win32/items.toc";
+
 /// The Oodle library the game ships beside its executable; its archives are compressed with it (the `9` is the Oodle
 /// version the file name states).
 pub const OODLE_LIBRARY: &str = "oo2core_9_win64.dll";
