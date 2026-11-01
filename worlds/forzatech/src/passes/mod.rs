@@ -5,7 +5,7 @@ pub mod main_view;
 pub mod materials;
 pub mod planar_uv;
 
-pub use collision::{COLLIDE_FORZATECH_DRAWN, CollideForzaDrawn, SeeThrough};
+pub use collision::{COLLIDE_FORZATECH_DRAWN, CollideForzaDrawn, Ground, SeeThrough};
 pub use drawn::{SELECT_FORZATECH_DRAWN, SelectForzaDrawn};
 pub use main_view::{SELECT_FORZATECH_MAIN_VIEW, SelectForzaMainView};
 pub use materials::{LOWER_FORZATECH_MATERIALS, LowerForzaMaterials};

@@ -8,7 +8,8 @@ use primase_core::pass::{PassManager, PassRegistry, Pipeline};
 use primase_core::pbr::TextureSlot;
 use primase_core::{LodChoice, SelectLod};
 use primase_forzatech::passes::{
-    CollideForzaDrawn, LowerForzaMaterials, LowerForzaPlanarUv, SeeThrough, SelectForzaDrawn, SelectForzaMainView,
+    CollideForzaDrawn, Ground, LowerForzaMaterials, LowerForzaPlanarUv, SeeThrough, SelectForzaDrawn,
+    SelectForzaMainView,
 };
 use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
@@ -66,7 +67,7 @@ fn main() -> Result<()> {
             Box::new(LowerForzaMaterials),
             // the terrain and the roads' planar layers read the position of a surface point: its coordinates, per placement
             Box::new(LowerForzaPlanarUv),
-            Box::new(CollideForzaDrawn { see_through: SeeThrough::LeaveOut }),
+            Box::new(CollideForzaDrawn { see_through: SeeThrough::LeaveOut, ground: Ground::World }),
             // what draws nothing the writer can take is left out, counted: a slot with no material instance, and the
             // shader families with no lowering rule yet; after the collision, so their ground stays solid
             Box::new(OmitUnshadedPrimitives),
