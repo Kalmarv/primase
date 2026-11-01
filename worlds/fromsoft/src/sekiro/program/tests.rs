@@ -205,6 +205,10 @@ fn the_animation_passes_run_after_the_model_is_lowered_and_before_it_is_placed()
         rate: 2,
         clips: "all".into(),
         root_motion: "translation".into(),
+        unmapped: "drop".into(),
+        parents: "same".into(),
+        rests: "target".into(),
+        reparented: "refuse".into(),
     };
     let texts = CharacterPreparation {
         animations: Some(binding),
@@ -214,7 +218,7 @@ fn the_animation_passes_run_after_the_model_is_lowered_and_before_it_is_placed()
     let lower = texts
         .iter()
         .position(|t| {
-            t == "bind-fromsoft-animation{from=c1010 havok skeleton,to=c1010 skeleton,tolerance=0.0001,empty=model-space,absent=neutral,rate=2,root-motion=translation,clips=all}"
+            t == "bind-fromsoft-animation{from=c1010 havok skeleton,to=c1010 skeleton,tolerance=0.0001,empty=model-space,absent=neutral,rate=2,root-motion=translation,clips=all,unmapped=drop,parents=same,rests=target,reparented=refuse}"
         })
         .expect("the binding pass lowers and maps clips");
     assert_eq!(texts[lower + 1], CONFIGURE_SIMULATIONS);
@@ -501,6 +505,10 @@ fn a_clip_preparation_binds_the_animations_then_lowers_the_events() {
             rate: 1,
             clips: "a000_000000".into(),
             root_motion: "leave".into(),
+            unmapped: "drop".into(),
+            parents: "any".into(),
+            rests: "source".into(),
+            reparented: "model-space".into(),
         },
         effects: true,
     };

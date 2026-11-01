@@ -240,6 +240,13 @@ mod tests {
 }
 
 /// Bind an already lowered character clip to its chosen model skeleton, interpreting only source identity here.
+///
+/// The program states every choice of the three steps it runs: `lower-havok-clips` (`absent`, `rate`, `root-motion`,
+/// `clips`), `correspond-skeletons` (`from`, `to`, `tolerance`, `parents`) and `map-clip` (`unmapped`, `rests`,
+/// `reparented`). None is a fact of the source, so none has a default. `parents`, `rests` and `reparented` state how
+/// the clips map where the two skeletons share their hierarchy; `empty=model-space` is the program's statement that,
+/// where no joint pair shares a hierarchy, the clips map in model space instead (`parents=any`, `rests=source`,
+/// `reparented=model-space`) and `empty=refuse` that they do not.
 #[derive(Clone, Debug)]
 pub struct BindFromSoftAnimation {
     pub from: String,
@@ -250,6 +257,10 @@ pub struct BindFromSoftAnimation {
     pub rate: u32,
     pub root_motion: String,
     pub clips: String,
+    pub unmapped: String,
+    pub parents: String,
+    pub rests: String,
+    pub reparented: String,
 }
 pub const BIND_FROMSOFT_ANIMATION: PassSpec = PassSpec {
     name: "bind-fromsoft-animation",
@@ -269,6 +280,26 @@ pub const BIND_FROMSOFT_ANIMATION: PassSpec = PassSpec {
             "empty",
             "model-space",
             "refuse or explicitly use model-space when no same-hierarchy pairs exist",
+        ),
+        OptionSpec::required(
+            "unmapped",
+            "drop",
+            "what becomes of a source track with no target joint: map-clip's unmapped",
+        ),
+        OptionSpec::required(
+            "parents",
+            "same",
+            "which joint pairs correspond: correspond-skeletons' parents (same or any)",
+        ),
+        OptionSpec::required(
+            "rests",
+            "target",
+            "whose rest the clips are expressed against: map-clip's rests (source or target)",
+        ),
+        OptionSpec::required(
+            "reparented",
+            "refuse",
+            "a mapped joint whose parent differs: map-clip's reparented (model-space or refuse)",
         ),
     ],
     make: |g| {
@@ -294,6 +325,10 @@ pub const BIND_FROMSOFT_ANIMATION: PassSpec = PassSpec {
                 .map_err(|_| "rate is not a whole number")?,
             root_motion: g.required("root-motion").into(),
             clips: g.required("clips").into(),
+            unmapped: g.required("unmapped").into(),
+            parents: g.required("parents").into(),
+            rests: g.required("rests").into(),
+            reparented: g.required("reparented").into(),
         }))
     },
 };
@@ -311,6 +346,10 @@ impl Pass for BindFromSoftAnimation {
             ("rate".into(), self.rate.to_string()),
             ("root-motion".into(), self.root_motion.clone()),
             ("clips".into(), self.clips.clone()),
+            ("unmapped".into(), self.unmapped.clone()),
+            ("parents".into(), self.parents.clone()),
+            ("rests".into(), self.rests.clone()),
+            ("reparented".into(), self.reparented.clone()),
         ])
     }
     fn requires(&self) -> &[&'static str] {
@@ -318,7 +357,6 @@ impl Pass for BindFromSoftAnimation {
         &[
             primase_core::Skeleton::NAME,
             primase_havok::world::HavokAnimation::NAME,
-            crate::sekiro::source::CharacterGame::NAME,
         ]
     }
     fn provides(&self) -> &[&'static str] {
@@ -578,31 +616,29 @@ impl Pass for SelectFromSoftCharacterRead {
 impl BindFromSoftAnimation {
     /// Diagnostic expansion of this registered operation. Programs run the operation, never branch on this text.
     pub fn expansion(&self, w: &World) -> Result<Vec<String>, String> {
-        let game = w
-            .resource::<crate::sekiro::source::CharacterGame>()
-            .ok_or("clip has no source game identity")?
-            .0;
         let counts = primase_animation::correspond::hierarchy_counts(w, &self.from, &self.to, self.tolerance);
-        let fallback = game == fromsoft_formats::Game::Sekiro
-            && counts.is_some_and(|c| c.paired == 0)
-            && self.empty == "model-space";
-        let model = game == fromsoft_formats::Game::EldenRing || fallback;
+        let model_space = counts.is_some_and(|c| c.paired == 0) && self.empty == "model-space";
+        let (parents, rests, reparented) = if model_space {
+            ("any", "source", "model-space")
+        } else {
+            (
+                self.parents.as_str(),
+                self.rests.as_str(),
+                self.reparented.as_str(),
+            )
+        };
         Ok(vec![
             format!(
                 "lower-havok-clips{{absent={},rate={},root-motion={},clips={}}}",
                 self.absent, self.rate, self.root_motion, self.clips
             ),
             format!(
-                "correspond-skeletons{{from={},to={},tolerance={},parents={}}}",
-                self.from,
-                self.to,
-                self.tolerance,
-                if model { "any" } else { "same" }
+                "correspond-skeletons{{from={},to={},tolerance={},parents={parents}}}",
+                self.from, self.to, self.tolerance
             ),
             format!(
-                "map-clip{{unmapped=drop,rests={},reparented={}}}",
-                if model { "source" } else { "target" },
-                if model { "model-space" } else { "refuse" }
+                "map-clip{{unmapped={},rests={rests},reparented={reparented}}}",
+                self.unmapped
             ),
         ])
     }
@@ -611,23 +647,23 @@ impl BindFromSoftAnimation {
 mod binding_contract {
     use super::*;
     #[test]
-    fn registered_binding_preserves_the_old_three_step_contract() {
-        let bind = BindFromSoftAnimation {
-            from: "c2010 havok skeleton".into(),
-            to: "c2010 skeleton".into(),
-            tolerance: 0.0001,
-            empty: "model-space".into(),
-            absent: "neutral".into(),
-            rate: 1,
-            root_motion: "translation".into(),
-            clips: "a000_000000".into(),
-        };
-        for (game, parents, rests, reparented) in [
-            (fromsoft_formats::Game::EldenRing, "any", "source", "model-space"),
-            (fromsoft_formats::Game::Sekiro, "same", "target", "refuse"),
-        ] {
-            let mut world = World::new();
-            world.insert_resource(crate::sekiro::source::CharacterGame(game));
+    fn registered_binding_states_the_three_steps_it_is_given() {
+        for (parents, rests, reparented) in [("any", "source", "model-space"), ("same", "target", "refuse")] {
+            let bind = BindFromSoftAnimation {
+                from: "c2010 havok skeleton".into(),
+                to: "c2010 skeleton".into(),
+                tolerance: 0.0001,
+                empty: "model-space".into(),
+                absent: "neutral".into(),
+                rate: 1,
+                root_motion: "translation".into(),
+                clips: "a000_000000".into(),
+                unmapped: "drop".into(),
+                parents: parents.into(),
+                rests: rests.into(),
+                reparented: reparented.into(),
+            };
+            let world = World::new();
             assert_eq!(
                 bind.expansion(&world).unwrap(),
                 vec![
@@ -639,6 +675,28 @@ mod binding_contract {
                     format!("map-clip{{unmapped=drop,rests={rests},reparented={reparented}}}")
                 ]
             );
+        }
+    }
+
+    #[test]
+    fn each_choice_of_the_three_steps_is_a_required_option() {
+        let mut registry = primase_core::pass::PassRegistry::new();
+        registry.add(&BIND_FROMSOFT_ANIMATION);
+        let stated = "from=c0000 havok skeleton,to=c0000 skeleton,tolerance=0.0001,empty=model-space,absent=neutral,            rate=1,root-motion=leave,clips=all,unmapped=drop,parents=any,rests=source,reparented=model-space";
+        registry
+            .parse(&format!("bind-fromsoft-animation{{{stated}}}"))
+            .expect("all stated");
+        for option in ["unmapped", "parents", "rests", "reparented"] {
+            let without: Vec<_> = stated
+                .split(',')
+                .filter(|part| !part.starts_with(&format!("{option}=")))
+                .collect();
+            let err = registry
+                .parse(&format!("bind-fromsoft-animation{{{}}}", without.join(",")))
+                .err()
+                .unwrap_or_else(|| panic!("{option} has a default"))
+                .to_string();
+            assert!(err.contains(option), "{err}");
         }
     }
 }

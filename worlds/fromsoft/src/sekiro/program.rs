@@ -364,7 +364,12 @@ fn with_sky(texts: Vec<String>, sky: bool) -> Vec<String> {
 /// The animation a clip binds: the Havok animations lowered to clips on the model's skeleton, the skeletons made to
 /// correspond by name and rest, the clips mapped by that. Each choice is the program's: `absent` (what a component a
 /// track does not store stands for), `rate` (clip keys per source frame), `clips` (which animations: `all`, or names
-/// joined by `;`) and `root_motion` (what becomes of the extracted motion).
+/// joined by `;`), `root_motion` (what becomes of the extracted motion), `unmapped` (what becomes of a track with no
+/// joint on the model: `drop`) and how the skeletons correspond and the clips map where they share a hierarchy:
+/// `parents` (`same` or `any`), `rests` (`source` or `target`) and `reparented` (`model-space` or `refuse`). A model
+/// whose skeleton is not the Havok one's (Elden Ring's) states `any`, `source` and `model-space`; one that is
+/// (Sekiro's) states `same`, `target` and `refuse`, and the binding's `empty=model-space` maps in model space where
+/// no joint pair shares a hierarchy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClipBinding {
     /// The character whose animation binders are read (`c1010`; the player's is `c0000`).
@@ -377,6 +382,10 @@ pub struct ClipBinding {
     pub rate: u32,
     pub clips: String,
     pub root_motion: String,
+    pub unmapped: String,
+    pub parents: String,
+    pub rests: String,
+    pub reparented: String,
 }
 
 impl ClipBinding {
@@ -384,8 +393,18 @@ impl ClipBinding {
     /// Havok skeleton correspond to the model's by name and rest, then map the clips by that.
     pub fn pass(&self) -> String {
         format!(
-            "bind-fromsoft-animation{{from={} havok skeleton,to={},tolerance={},empty=model-space,absent={},rate={},root-motion={},clips={}}}",
-            self.of, self.skeleton, self.tolerance, self.absent, self.rate, self.root_motion, self.clips
+            "bind-fromsoft-animation{{from={} havok skeleton,to={},tolerance={},empty=model-space,absent={},rate={},root-motion={},clips={},unmapped={},parents={},rests={},reparented={}}}",
+            self.of,
+            self.skeleton,
+            self.tolerance,
+            self.absent,
+            self.rate,
+            self.root_motion,
+            self.clips,
+            self.unmapped,
+            self.parents,
+            self.rests,
+            self.reparented
         )
     }
 }
