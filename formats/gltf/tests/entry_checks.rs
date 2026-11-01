@@ -120,8 +120,7 @@ fn a_spots_cones_are_gltfs() {
         let e = write_spot(inner, outer).unwrap_err();
         assert!(e.contains("spot cones"), "{inner} {outer}: {e}");
     }
-    // a NaN cone never reaches the cone check: the light's component is written into the node's extras first, as
-    // JSON, which has no NaN, and that refusal names the field
+    // a NaN cone is in no range: the cone check refuses it
     let e = write_spot(0.2, f32::NAN).unwrap_err();
-    assert!(e.contains("outer_cone") && e.contains("non-finite"), "{e}");
+    assert!(e.contains("spot cones 0.2 and NaN"), "{e}");
 }

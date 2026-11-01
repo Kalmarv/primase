@@ -323,7 +323,8 @@ pub struct WriteReport {
     /// express and glTF has no form for, by name, counted per object written (a shared mesh once): not written. What
     /// an extension writes of a material ([`crate::extend`]) is not counted.
     pub components_without_form: BTreeMap<String, u64>,
-    /// The world's resources, by name: glTF has no form for any of them, not written.
+    /// The world's resources, by name (a conversion's own, [`primase_core::convert::OPERATIONAL_RESOURCES`], aside):
+    /// glTF has no form for any of them, not written.
     pub resources_without_form: BTreeMap<String, u64>,
     /// Lights whose stated `cast_shadows` `KHR_lights_punctual` has no form for: written without it.
     pub lights_shadows_unwritten: u64,
@@ -876,7 +877,13 @@ impl Writer<'_> {
         {
             self.report.ambient_unlit = 1;
         }
-        for name in self.world.resource_names() {
+        // the conversion's own resources (its partition plan, a part's scope) are its work, not the world's content
+        for name in self
+            .world
+            .resource_names()
+            .into_iter()
+            .filter(|name| !primase_core::convert::OPERATIONAL_RESOURCES.contains(name))
+        {
             *self
                 .report
                 .resources_without_form
