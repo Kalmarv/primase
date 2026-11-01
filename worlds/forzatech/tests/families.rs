@@ -47,9 +47,20 @@ fn shibuya_families() {
     let mut reader = ForzaReader::new(track, scope());
     let (world, _) = reader.read().unwrap();
     let prototypes: BTreeSet<Entity> = world.iter::<Instance>().map(|(_, i)| i.prototype).collect();
-    let sample: BTreeSet<Entity> = prototypes.iter().copied().step_by(20).collect();
+    let sample: BTreeSet<Entity> = prototypes
+        .iter()
+        .copied()
+        .step_by(
+            std::env::var("STEP")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(20),
+        )
+        .collect();
     let (part, _) = reader.load(&world, &sample).unwrap();
-    census(&part, &family);
+    for family in family.split(',') {
+        census(&part, family);
+    }
 }
 
 fn census(part: &World, family: &str) {

@@ -217,7 +217,17 @@ macro_rules! plain {
     };
 }
 
+/// A lowered material whose textures are read by the position of a surface point in the game's ground plane, not by the
+/// mesh's stored coordinates: `texcoord` is the set `lower-forzatech-planar-uv` fills with the point's `(x, z)` in the
+/// game's frame, per placement. The material's texture slots (or a layer's) name that set and carry the scale and
+/// offset the shader applies to the position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct PlanarUv {
+    pub texcoord: u8,
+}
+
 plain!(Placement, "forzatech.placement");
+plain!(PlanarUv, "forzatech.planar_uv");
 plain!(Template, "forzatech.template");
 plain!(MaterialRef, "forzatech.material_ref");
 

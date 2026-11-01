@@ -15,6 +15,7 @@ pub mod read;
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.add(&passes::COLLIDE_FORZATECH_DRAWN);
     reg.add(&passes::LOWER_FORZATECH_MATERIALS);
+    reg.add(&passes::LOWER_FORZATECH_PLANAR_UV);
     reg.add(&passes::SELECT_FORZATECH_DRAWN);
     reg.add(&passes::SELECT_FORZATECH_MAIN_VIEW);
 }

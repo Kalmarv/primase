@@ -39,6 +39,21 @@ use primase_core::pass::PassLog;
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::{ColorSpace, Entity, TexRole, Texture, World};
 
+/// The `environment` rule's simplifications, by the switch that asks for what is left out.
+const LEFT_OUT: &[(&str, &str)] = &[
+    ("SwatchTint", "swatch tint left out"),
+    ("Modulate", "modulate texture left out"),
+    ("Deposits", "deposits left out"),
+    ("TriPlanarMapping", "triplanar mapping left out"),
+    ("RCSM", "relaxed cone-step mapping left out"),
+    ("MegaSkirt", "mega-skirt terrain blend left out"),
+    ("Emissive", "emission left out"),
+    ("RetroReflective", "retro-reflection left out"),
+    ("RandomOffsetOnOff", "per-instance random UV offset left out"),
+    ("DualUv", "second UV set of a dual-UV material left out"),
+    ("WetnessMask", "wetness (run-time) left out: dry"),
+];
+
 impl Lowering {
     /// The `environment` family's material.
     pub(super) fn environment(
@@ -47,6 +62,19 @@ impl Lowering {
         e: Entity,
         m: &ForzaMaterial,
         log: &mut PassLog,
+    ) -> Result<PbrMaterial, String> {
+        self.environment_maps(w, e, m, log, LEFT_OUT)
+    }
+
+    /// The three-map material the `environment` and `environment_plot` families share, whose `left_out` switches
+    /// are each family's own.
+    pub(super) fn environment_maps(
+        &mut self,
+        w: &mut World,
+        e: Entity,
+        m: &ForzaMaterial,
+        log: &mut PassLog,
+        left_out_switches: &[(&str, &str)],
     ) -> Result<PbrMaterial, String> {
         let bound = w.get::<MaterialTextures>(e).cloned();
         let p = Params::new(m, bound.as_ref());
@@ -114,19 +142,7 @@ impl Lowering {
             pbr.alpha_mode = AlphaMode::Blend;
         }
 
-        for (switch, what) in [
-            ("SwatchTint", "swatch tint left out"),
-            ("Modulate", "modulate texture left out"),
-            ("Deposits", "deposits left out"),
-            ("TriPlanarMapping", "triplanar mapping left out"),
-            ("RCSM", "relaxed cone-step mapping left out"),
-            ("MegaSkirt", "mega-skirt terrain blend left out"),
-            ("Emissive", "emission left out"),
-            ("RetroReflective", "retro-reflection left out"),
-            ("RandomOffsetOnOff", "per-instance random UV offset left out"),
-            ("DualUv", "second UV set of a dual-UV material left out"),
-            ("WetnessMask", "wetness (run-time) left out: dry"),
-        ] {
+        for &(switch, what) in left_out_switches {
             left_out(log, &p, e, switch, what, triangles);
         }
         Ok(pbr)

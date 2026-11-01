@@ -43,17 +43,30 @@
 //! 532; `environment_signage` 88, 520; `glass` 8, 188; `uber_roaddecal` 2, 146; `window_linecastroom` 51, 78;
 //! `emissiveonly` 2, 64; and the `uber_foliage` billboard and impostor, 2, 4. The normal maps are made in
 //! `NormalZ::Rebuild`: `normalize-normals` converts them to glTF's before a writer.
+//!
+//! The ground families are in the whole box (`tests/shibuya_ground.rs`, every prototype) and all are lowered (materials,
+//! triangles): `environment_plot` 286, 91,811; `terr_mega` 12, 14,462; `terr_distant` 13, 10,481;
+//! `uber_road` 140, 66,426, of which 52, 9,157 are a `core.layered` of two or three layers. The terrain families and
+//! the roads' planar layers are mapped by position: `lower-forzatech-planar-uv` writes `TexCoord(3)` for 11 placements
+//! (144 primitives), and all 35,858 vertices of the terrain land on their textures through the rule's own scale and
+//! offset (the frame, the map scale and the offset agree). Left out by name (materials, triangles): `environment_plot`
+//! terrain snow and wetness 286, 91,811, macro occlusion 286, 91,811, lightmap 12, 126; `terr_*` the world-space normal
+//! taken as a tangent-space one over the planar coordinates 25, 24,943; `uber_road` the tint overlay 140, 66,426, frost
+//! and snow 140, 66,426, the modulate maps 94, 18,340, the blend's smoothstep taken as a linear ramp 52, 9,157.
 mod branch;
 mod environment;
+mod environment_plot;
 mod foliage;
 mod projection_lod;
+mod terrain;
+mod uber_road;
 
-use crate::components::{ForzaMaterial, MaterialTextures, Value};
+use crate::components::{ForzaMaterial, MaterialTextures, PlanarUv, Value};
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
-    ColorSpace, Component, Entity, Mesh, Name, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ,
-    TexFormat, TexRole, Texture, World,
+    ColorSpace, Component, Entity, LayeredMaterial, Mesh, Name, NormalBasis, NormalConvention, NormalGreen,
+    NormalX, NormalZ, TexFormat, TexRole, Texture, World,
 };
 use primase_foundations::color::srgb_to_linear;
 use std::collections::{BTreeMap, HashMap};
@@ -95,6 +108,14 @@ impl<'a> Params<'a> {
         }
     }
 
+    /// An integer parameter.
+    fn int(&self, name: &str) -> Option<i32> {
+        match self.by_name.get(name)? {
+            Value::Int(i) => Some(*i),
+            _ => None,
+        }
+    }
+
     /// A scalar parameter.
     fn float(&self, name: &str) -> Option<f32> {
         match self.by_name.get(name)? {
@@ -107,6 +128,14 @@ impl<'a> Params<'a> {
     fn vec4(&self, name: &str) -> Option<[f32; 4]> {
         match self.by_name.get(name)? {
             Value::Vector(v) | Value::Colour(v) if v.iter().all(|x| x.is_finite()) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// A four-component swizzle or vector parameter.
+    fn swizzle(&self, name: &str) -> Option<[f32; 4]> {
+        match self.by_name.get(name)? {
+            Value::Swizzle(v) | Value::Vector(v) if v.iter().all(|x| x.is_finite()) => Some(*v),
             _ => None,
         }
     }
@@ -156,8 +185,18 @@ enum Derived {
     BlueOcclusion,
     /// An occlusion in the alpha channel: R occlusion.
     AlphaOcclusion,
+    /// A height in the alpha channel, read as a mask: R height.
+    AlphaHeight,
     /// Roughness in R and metalness in G (BC5, signed or not, or an sRGB view): G roughness, B metallic, R 1.
     RoughnessMetalRg,
+    /// A roughness in the red channel times a scale (the `f32`'s bits): G roughness, B 0 (no metal), R 1.
+    RedRoughness(u32),
+    /// An occlusion in the alpha channel, squared: R occlusion.
+    SquaredAlphaOcclusion,
+    /// A world-space normal's `x` and `z` (the game's frame) in red and green, as a tangent-space normal map over
+    /// coordinates `(x, z)` of the game's ground plane: red `x`, green `-z` (the world's frame negates `z`, and
+    /// the coordinates' `v` runs down the image), blue the rebuilt `y`.
+    WorldNormalXz,
 }
 
 /// The value a shader reads from a texel channel `x` of a texture in `space`: decoded to linear when it is sRGB (the
@@ -221,7 +260,11 @@ impl Lowering {
             Derived::AlphaRoughness(_) => ("roughness-in-alpha", "roughness"),
             Derived::BlueOcclusion => ("occlusion-in-blue", "occlusion"),
             Derived::AlphaOcclusion => ("occlusion-in-alpha", "occlusion"),
+            Derived::AlphaHeight => ("height-in-alpha", "height"),
             Derived::RoughnessMetalRg => ("roughness-metalness-in-rg", "roughness metallic"),
+            Derived::RedRoughness(_) => ("roughness-in-red", "roughness"),
+            Derived::SquaredAlphaOcclusion => ("occlusion-in-alpha, squared,", "occlusion"),
+            Derived::WorldNormalXz => ("world-space normal", "normal"),
         };
         let Some(t) = w.get::<Texture>(source) else {
             log.count(&format!("{what} textures left out: no pixels"), 1);
@@ -266,7 +309,22 @@ impl Lowering {
                         let o = byte(seen(space, b));
                         [o, o, o, 255]
                     }
-                    Derived::AlphaOcclusion => [a, a, a, 255],
+                    Derived::AlphaOcclusion | Derived::AlphaHeight => [a, a, a, 255],
+                    Derived::SquaredAlphaOcclusion => {
+                        let o = byte((f64::from(a) / 255.0).powi(2));
+                        [o, o, o, 255]
+                    }
+                    Derived::RedRoughness(scale) => [
+                        255,
+                        byte(seen(space, r) * f64::from(f32::from_bits(scale))),
+                        0,
+                        255,
+                    ],
+                    Derived::WorldNormalXz => {
+                        let (x, z) = (seen(space, r) * 2.0 - 1.0, seen(space, g) * 2.0 - 1.0);
+                        let y = (1.0 - x * x - z * z).max(0.0).sqrt();
+                        [byte(x * 0.5 + 0.5), byte(0.5 - z * 0.5), byte(y * 0.5 + 0.5), 255]
+                    }
                     Derived::RoughnessMetalRg => {
                         let read = |x: u8| {
                             if signed {
@@ -319,6 +377,11 @@ impl Lowering {
     }
 }
 
+/// The texture coordinate set `lower-forzatech-planar-uv` fills with a point's position in the ground plane: the sets
+/// the meshes carry are 0 to 4, and a lowered slot samples one of the first three (the second and third are the
+/// lightmap and blend coordinates a layered road reads).
+const PLANAR_TEXCOORD: u8 = 3;
+
 /// The alpha-test reference of a masked material, in the absence of one in the material: the middle of the range.
 const ALPHA_REFERENCE: f32 = 0.5;
 
@@ -344,7 +407,13 @@ impl Pass for LowerForzaMaterials {
         &[ForzaMaterial::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[PbrMaterial::NAME, Texture::NAME, Name::NAME]
+        &[
+            PbrMaterial::NAME,
+            LayeredMaterial::NAME,
+            PlanarUv::NAME,
+            Texture::NAME,
+            Name::NAME,
+        ]
     }
     fn modifies(&self) -> &[&'static str] {
         &[Texture::NAME]
@@ -376,6 +445,9 @@ impl Pass for LowerForzaMaterials {
             let family = m.shader.as_ref().map(|s| s.family.as_str());
             let lowered = match family {
                 Some("environment") => Some(lowering.environment(world, *e, m, log)?),
+                Some("uber_road") => Some(lowering.uber_road(world, *e, m, log)?),
+                Some("terr_mega" | "terr_distant") => Some(lowering.terrain(world, *e, m, log)?),
+                Some("environment_plot") => Some(lowering.environment_plot(world, *e, m, log)?),
                 Some("uber_foliage") => lowering.uber_foliage(world, *e, m, log)?,
                 Some("uber_branch") => lowering.uber_branch(world, *e, m, log)?,
                 Some("projection_lod") => lowering.projection_lod(world, *e, m, log)?,
