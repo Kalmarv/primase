@@ -9,6 +9,79 @@ use primase_fromsoft::sekiro::{CharacterOutfit, CharacterReader, OutfitVariants}
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+/// The lowering an outfit's assembly is tested through, every pass as the examples state it: layers kept, the skinned
+/// parts' stored bind pose, winding, degenerates and UVs, nothing left out, blocker cards drawn, SpeedTree frames from
+/// the programs; unbound textures previewed; water without a texture `48,98,122,190`; the surface bake at 2048 pixels
+/// and time 0 with no memo store; a part's collision rounded within 1 cm, every motion type; the parts assembled by
+/// joint name at the assembled rest, within 1 mm (0.1 mm for a reparented joint), disagreements reported; simulations
+/// at 30 Hz with 30 steps of pre-roll and at most 8 steps a frame. `dressed`: the outfit's display masks resolved and
+/// the entities named.
+fn preparation(
+    game: Game,
+    parts: usize,
+    dressed: bool,
+) -> primase_fromsoft::sekiro::program::CharacterPreparation {
+    use primase_animation::simulation_schedule::{ConfigureSimulations, SimulationSchedule};
+    use primase_animation::{
+        AssembleCharacter, Correspondence, ReferencePose, UnweightedRests, WeightedRests,
+    };
+    use primase_fromsoft::sekiro::passes::bake_materials::BakeFromSoftMaterials;
+    use primase_fromsoft::sekiro::passes::object_collision::{
+        ConvexBodies, LowerFromSoftPartCollision, MotionSelection,
+    };
+    use primase_fromsoft::sekiro::passes::pbr::Layers;
+    use primase_fromsoft::sekiro::passes::settings::{Metres, PixelCap, Seconds};
+    use primase_fromsoft::sekiro::passes::{
+        Cards, Degenerates, LowerFromSoftGeometry, LowerFromSoftMaterials, Pose, ResolveFromSoftShaders,
+        SpeedTreeFrame, Tiling, Unbound, Winding,
+    };
+    use primase_fromsoft::sekiro::program::{CharacterPreparation, Materials};
+    CharacterPreparation {
+        game,
+        materials: Materials::Preserve,
+        parts,
+        select_assets: Vec::new(),
+        animations: None,
+        dressing: dressed,
+        entity_names: dressed,
+        held: None,
+        geometry: LowerFromSoftGeometry {
+            pose: Pose::Stored,
+            uv_tiling: Tiling::Keep,
+            winding: Winding::Stored,
+            degenerates: Degenerates::Keep,
+            leave_out: Default::default(),
+            blocker_cards: Cards::Draw,
+            speedtree_frame: SpeedTreeFrame::Program,
+        },
+        resolve_shaders: ResolveFromSoftShaders::new(Unbound::Preview),
+        lower_materials: LowerFromSoftMaterials::new(
+            Some(Layers::Preserve),
+            primase_image::Srgba8([48, 98, 122, 190]),
+        ),
+        material_bake: BakeFromSoftMaterials::new(
+            PixelCap::new(2048).expect("a pixel cap"),
+            Seconds::new(0.).expect("a time"),
+        )
+        .with_cache(false),
+        part_collision: LowerFromSoftPartCollision {
+            convex: ConvexBodies::Rounded(Metres::new(0.01).expect("an error bound")),
+            motion: MotionSelection::All,
+        },
+        assembly: AssembleCharacter {
+            correspondence: Correspondence::ByName,
+            reference_pose: ReferencePose::Assembled,
+            tolerance: 0.001,
+            reference_tolerance: 0.0001,
+            unweighted_rests: UnweightedRests::Report,
+            weighted_rests: WeightedRests::Report,
+            name: "assembled".into(),
+            leave_out: Vec::new(),
+        },
+        simulations: ConfigureSimulations(SimulationSchedule::new(1. / 30., 30, 8).expect("a schedule")),
+    }
+}
+
 // Setup-only migration: the program states the same presentation/level choices through the registered pass.
 fn character_outfits(
     install: &fromsoft_formats::Install,
@@ -219,7 +292,6 @@ fn warrior_confessor_and_wolf_assemble_against_their_authored_animation_hierarch
 fn an_outfit_read_without_animations_assembles_against_the_players_skeleton() -> Result<()> {
     use primase_core::pass::{MissingInputs, PassManager, PassRegistry, RunReport};
     use primase_core::{AssemblyReference, Asset, Name, Role, Source};
-    use primase_fromsoft::sekiro::program::{CharacterPreparation, Materials};
     use primase_fromsoft::sekiro::standalone::{
         InventoryRequest, SelectedModelRequest, StandaloneAsset, read_inventory, read_selected_models,
     };
@@ -314,20 +386,7 @@ fn an_outfit_read_without_animations_assembles_against_the_players_skeleton() ->
     }
 
     // the example's lowering assembles them
-    let texts = CharacterPreparation {
-        game: Game::EldenRing,
-        materials: Materials::Preserve,
-        game_shaders: false,
-        water_colour: [48, 98, 122, 190],
-        parts,
-        select_assets: Vec::new(),
-        animations: None,
-        dressing: true,
-        entity_names: true,
-        held: None,
-        bake_cache: primase_fromsoft::sekiro::passes::bake_materials::Cache::Off,
-    }
-    .texts();
+    let texts = preparation(Game::EldenRing, parts, true).texts()?;
     let mut report = RunReport::default();
     // texture baking is not what assembly depends on, and decoding the textures of four parts takes minutes
     let lowering: Vec<_> = texts
@@ -375,8 +434,6 @@ fn an_installed_npc_outfit_of_several_parts_assembles_without_a_reference() -> R
     use primase_core::pass::{MissingInputs, PassManager, PassRegistry, RunReport};
     use primase_core::{AssemblyReference, Asset, Role};
     use primase_fromsoft::sekiro::outfit_data::NpcOutfitVariants;
-    use primase_fromsoft::sekiro::passes::bake_materials::Cache;
-    use primase_fromsoft::sekiro::program::{CharacterPreparation, Materials};
     use primase_fromsoft::sekiro::standalone::{
         InventoryRequest, SelectedModelRequest, StandaloneAsset, read_inventory, read_selected_models,
     };
@@ -463,20 +520,7 @@ fn an_installed_npc_outfit_of_several_parts_assembles_without_a_reference() -> R
                 );
             }
         }
-        let texts = CharacterPreparation {
-            game,
-            materials: Materials::Preserve,
-            game_shaders: false,
-            water_colour: [48, 98, 122, 190],
-            parts: parts.len(),
-            select_assets: Vec::new(),
-            animations: None,
-            dressing: false,
-            entity_names: false,
-            held: None,
-            bake_cache: Cache::Off,
-        }
-        .texts();
+        let texts = preparation(game, parts.len(), false).texts()?;
         let mut report = RunReport::default();
         // texture baking is not what assembly depends on, and decoding the textures of four parts takes minutes
         let lowering: Vec<_> = texts

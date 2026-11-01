@@ -16,17 +16,34 @@ use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::{Game, Install, Keys};
 use primase_core::convert::Reader;
 use primase_core::pass::{MissingInputs, PassManager, PassRegistry, RunReport};
+use primase_core::{LodChoice, SelectLod};
 use primase_fromsoft::game::ParamKey;
+use primase_fromsoft::materials::SkipClass;
 use primase_fromsoft::sekiro;
 use primase_fromsoft::sekiro::area_plan::AreaSelection;
 use primase_fromsoft::sekiro::convert::AreaReader;
 use primase_fromsoft::sekiro::groups::DisplayGroups;
-use primase_fromsoft::sekiro::passes::bake_materials::Cache;
+use primase_fromsoft::sekiro::passes::bake_materials::BakeFromSoftMaterials;
+use primase_fromsoft::sekiro::passes::collision::{FMeshes, LowerFromSoftCollision};
+use primase_fromsoft::sekiro::passes::draw_params::SampleFromSoftDrawParams;
+use primase_fromsoft::sekiro::passes::environment::LowerFromSoftEnvironment;
+use primase_fromsoft::sekiro::passes::lights::{Brightness, Disabled, LowerFromSoftLights};
+use primase_fromsoft::sekiro::passes::object_collision::{
+    ConvexBodies, ConvexSurface, LowerFromSoftObjectCollision, MotionSelection, ResolutionChoice,
+};
+use primase_fromsoft::sekiro::passes::pbr::Layers;
+use primase_fromsoft::sekiro::passes::records::LowerFromSoftMapRecords;
+use primase_fromsoft::sekiro::passes::settings::{Factor, Fraction, Metres, PixelCap, Seconds};
+use primase_fromsoft::sekiro::passes::{
+    Cards, Degenerates, LowerFromSoftGeometry, LowerFromSoftMaterials, Pose, ResolveFromSoftShaders, SpeedTreeFrame,
+    Tiling, Unbound, Winding,
+};
 use primase_fromsoft::sekiro::program::{AreaGame, AreaPreparation};
 use primase_fromsoft::sekiro::sky::Sky;
 use primase_fromsoft::sekiro::source::StateReadScope;
 use primase_fromsoft::sekiro::texture_switch::TextureQuality;
 use primase_fromsoft::sekiro::{AreaRead, Parents, StateClasses};
+use primase_image::Srgba8;
 
 #[path = "../tests/inputs/mod.rs"]
 mod inputs;
@@ -45,23 +62,74 @@ const ENVIRONMENT: &str = "file:m10_00_0000";
 /// The hour of the game's clock (0 to 24) at which each time-of-day field of that environment is sampled: noon.
 const HOUR: f32 = 12.0;
 
-/// The area's lowering, as primase's FromSoft preparation program states it, with this program's choices: Elden Ring,
-/// the sky read with the area and lowered after the environment, water without a texture `water_colour` (sRGB bytes, a
-/// linear alpha byte), the environment sampled at `HOUR`, no environment probes, weather, irradiance or effects, and
-/// the material bake storing nothing in a memo store (`Cache::Off`).
-fn preparation() -> AreaPreparation {
-    AreaPreparation {
+type Error = Box<dyn std::error::Error + Send + Sync>;
+
+/// The area's lowering: the passes primase's FromSoft preparation program runs, in its order, each as this program
+/// states it.
+///
+/// - What the read took: the sky, lowered after the environment; the environment sampled at `HOUR`; no environment
+///   probes, weather, irradiance or effects.
+/// - Collision: the map's and the assets' triangles whose centre lies more than 50 m outside the read region are left
+///   out, and the map's `f` binder is not lowered. An asset's collision is the high-resolution file where the game
+///   stores one, else the low one every collidable asset has, no motion type left out (its stored motion types are not
+///   mapped), each convex body its rounded surface (the core swept by the Havok radius) within 0.01 m rather than the
+///   sharp intersection of its offset planes, with the surface of the asset's largest colliding render area.
+/// - Geometry: the posed static models, UVs as stored (the surface bake reads the authored UVs), a part's winding
+///   reversed where its stored normals oppose it, degenerate triangles dropped; light volumes, shadow proxies and
+///   SpeedTree's billboard cards left out (a billboard's program turns it to the camera; the trees' own meshes are
+///   drawn), the sky's meshes kept for the sky; blocker cards recorded, not drawn; a SpeedTree mesh framed by the
+///   members its program reads. Every prototype keeps its finest level of detail.
+/// - The environment's stored colours at 1 lux for a colour of 1: the display shows the sun as its key light, at an
+///   intensity that is its own setting, so the scale is all the program states.
+/// - Each material's program is resolved, a texture slot with no texture reading a stated preview colour; the
+///   materials keep their layers as source data, water without a texture `48,98,122,190` (sRGB bytes, a linear alpha
+///   byte); the surface bake makes images of at most 2048 pixels at time 0, storing nothing in a memo store.
+/// - The lights at 1 candela per unit of stored power, a spot's inner cone at 0.85 of its outer (the game's spot has
+///   none), an effect light at its settled brightness, every light reaching at least 0.5 m, the lights of regions that
+///   start disabled left out.
+/// - Every map record lowered: the display lists them all, and the markers' kinds tell them apart.
+fn preparation() -> Result<AreaPreparation, Error> {
+    let reach = Some(Metres::new(50.)?);
+    Ok(AreaPreparation {
         game: AreaGame::EldenRing,
         sky: true,
-        water_colour: [48, 98, 122, 190],
-        hour: Some(HOUR),
+        draw_params: Some(SampleFromSoftDrawParams::new(HOUR)?),
         environment_probes: false,
         weather: false,
         irradiance_package: None,
         irradiance_states: false,
-        effects: false,
-        bake_cache: Cache::Off,
-    }
+        effects: None,
+        collision: LowerFromSoftCollision { reach, f_meshes: FMeshes::Off },
+        object_collision: LowerFromSoftObjectCollision {
+            resolution: ResolutionChoice::HighElseLow,
+            convex: ConvexBodies::Rounded(Metres::new(0.01)?),
+            motion: MotionSelection::All,
+            convex_surface: ConvexSurface::Render,
+            reach,
+        },
+        geometry: LowerFromSoftGeometry {
+            pose: Pose::Rigid,
+            uv_tiling: Tiling::Keep,
+            winding: Winding::Normals,
+            degenerates: Degenerates::Drop,
+            leave_out: [SkipClass::LightVolume, SkipClass::Shadow, SkipClass::Billboard].into(),
+            blocker_cards: Cards::Record,
+            speedtree_frame: SpeedTreeFrame::Program,
+        },
+        lod: SelectLod { choice: LodChoice::Finest },
+        environment: LowerFromSoftEnvironment::new(Factor::new(1.)?),
+        resolve_shaders: ResolveFromSoftShaders::new(Unbound::Preview),
+        lower_materials: LowerFromSoftMaterials::new(Some(Layers::Preserve), Srgba8([48, 98, 122, 190])),
+        material_bake: BakeFromSoftMaterials::new(PixelCap::new(2048)?, Seconds::new(0.)?).with_cache(false),
+        lights: LowerFromSoftLights {
+            candela_per_power: Factor::new(1.)?,
+            spot_blend: Fraction::new(0.15)?,
+            brightness: Brightness::Settled,
+            min_range: Metres::new(0.5)?,
+            include_disabled: Disabled::Skip,
+        },
+        map_records: LowerFromSoftMapRecords { leave_out: Default::default() },
+    })
 }
 
 /// The area reader's choices beyond the selected region and environment file: a 30 m margin around the slice, the map
@@ -104,9 +172,9 @@ fn selection() -> String {
 }
 
 /// The lowering and the writer's preparation.
-fn lowering() -> Vec<String> {
+fn lowering() -> Result<Vec<String>, Error> {
     let writer = WRITER.iter().map(|text| (*text).to_owned());
-    preparation().texts().into_iter().chain(writer).collect()
+    Ok(preparation()?.texts()?.into_iter().chain(writer).collect())
 }
 
 fn registry() -> PassRegistry {
@@ -125,7 +193,7 @@ fn manager() -> PassManager {
     PassManager::new(registry()).with_missing_inputs(MissingInputs::Skip)
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn main() -> Result<(), Error> {
     let out = std::env::args().nth(1).ok_or("usage: elden_stormveil_gltf <output.glb>")?;
     let root = inputs::install(inputs::Game::Elden).ok_or("GAME_DATA states no `elden` install")?;
     let keys = inputs::keys(inputs::Game::Elden).ok_or("GAME_DATA states no `elden` keys")?;
@@ -161,7 +229,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     // The lowering and the writer's preparation, as registered passes.
-    let pipeline = manager.registry.parse(&lowering().join(", "))?;
+    let pipeline = manager.registry.parse(&lowering()?.join(", "))?;
     let mut lowered = RunReport::default();
     manager.run(&mut world, &pipeline, &mut lowered)?;
     println!("{lowered}");
@@ -179,14 +247,48 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use primase_core::pass::pass_text;
 
     /// Every stated pass text names a registered pass with the options it declares, and the order of the whole pipeline
     /// is one the passes' own declarations accept.
     #[test]
-    fn the_stated_pipelines_parse_and_order() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn the_stated_pipelines_parse_and_order() -> Result<(), Error> {
         let manager = manager();
         manager.registry.parse(&selection())?.check()?;
-        manager.registry.parse(&lowering().join(", "))?.check()?;
+        manager.registry.parse(&lowering()?.join(", "))?.check()?;
+        Ok(())
+    }
+
+    /// The area's lowering, pass by pass as each pass states itself: the passes and values below, the writer's
+    /// preparation after them.
+    #[test]
+    fn the_lowering_states_these_passes() -> Result<(), Error> {
+        let stated = [
+            "lower-fromsoft-render-graph",
+            "lower-fromsoft-collision{reach=50}",
+            "lower-fromsoft-object-collision{resolution=high-else-low,convex=rounded:0.01,motion=all,convex-surface=render,reach=50}",
+            "fromsoft-apply-rigid-skinning",
+            "lower-fromsoft-geometry{pose=rigid,uv-tiling=keep,winding=normals,degenerates=drop,leave-out=light-volume+shadow+billboard,blocker-cards=record,speedtree-frame=program}",
+            "select-lod{form=finest}",
+            "sample-fromsoft-draw-params{hour=12}",
+            "lower-fromsoft-environment{lux-per-unit=1}",
+            "lower-elden-ring-reinhard",
+            "resolve-fromsoft-shaders{unbound-textures=preview}",
+            "lower-fromsoft-materials{layers=preserve,water-colour=48,98,122,190}",
+            "bake-fromsoft-materials{max-size=2048,sample-time=0,cache=off}",
+            "lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15,brightness=settled,min-range=0.5,include-disabled=off}",
+            "lower-fromsoft-sky",
+            "lower-fromsoft-extras",
+            "lower-fromsoft-map-records{leave-out=}",
+            "name-fromsoft-entities{game=elden}",
+        ];
+        let registry = registry();
+        let canonical = |texts: &[String]| -> Result<Vec<String>, Error> {
+            Ok(registry.parse(&texts.join(", "))?.passes.iter().map(|p| pass_text(p.as_ref())).collect())
+        };
+        let mut expected: Vec<String> = stated.iter().map(|t| (*t).to_owned()).collect();
+        expected.extend(WRITER.iter().map(|t| (*t).to_owned()));
+        assert_eq!(canonical(&lowering()?)?, canonical(&expected)?);
         Ok(())
     }
 }

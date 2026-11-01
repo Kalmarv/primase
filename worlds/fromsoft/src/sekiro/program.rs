@@ -1,104 +1,41 @@
 //! The FromSoft preparation programs: the registered passes, in order, that lower what the area and character readers
-//! produce for a program that draws or writes it, as pass texts a [`primase_core::pass::PassRegistry`] parses. The pass
-//! list is part of the program, so it is stated here once and every program that lowers FromSoft data calls these
-//! builders. Each builder takes a struct whose fields are the program's choices; every field is required and the
-//! structs have no `Default`, so a program states each one.
+//! produce for a program that draws or writes it, as pass texts a [`primase_core::pass::PassRegistry`] parses. Which
+//! passes run and in what order is stated here once, and every program that lowers FromSoft data calls these builders;
+//! every setting is the program's. Each builder takes a struct whose fields are the program's choices: what the read
+//! took and which lowering it wants (which passes run), and each pass it runs as the program states it, as that pass's
+//! own struct. Every field is required and the structs have no `Default`, so a program states each one.
+//!
+//! A builder writes each pass as the program stated it ([`pass_text`]) and never rewrites a stated value: where two of
+//! the program's choices conflict, it refuses, naming both, and the program states the consistent value.
 //!
 //! [`AreaPreparation`] lowers an area read; [`CharacterPreparation`] lowers a character or a set of parts;
 //! [`ClipPreparation`] lowers one loaded animation clip.
 use fromsoft_formats::Game;
+use primase_animation::AssembleCharacter;
+use primase_animation::simulation_schedule::ConfigureSimulations;
+use primase_core::SelectLod;
+use primase_core::pass::pass_text;
 
-use super::passes::bake_materials::Cache;
+use super::passes::bake_materials::BakeFromSoftMaterials;
+use super::passes::collision::LowerFromSoftCollision;
+use super::passes::draw_params::SampleFromSoftDrawParams;
+use super::passes::effects::LowerFromSoftEffects;
+use super::passes::environment::LowerFromSoftEnvironment;
+use super::passes::lights::LowerFromSoftLights;
+use super::passes::object_collision::{LowerFromSoftObjectCollision, LowerFromSoftPartCollision};
+use super::passes::pbr::Layers;
+use super::passes::records::LowerFromSoftMapRecords;
+use super::passes::standalone::BindFromSoftAnimation;
+use super::passes::weapons::HoldFromSoftWeapons;
+use super::passes::{
+    BakeFromSoftLayers, LowerFromSoftGeometry, LowerFromSoftMaterials, ResolveFromSoftShaders, Tiling,
+};
+use crate::materials::SkipClass;
 
-/// The public FromSoft lowering for an area, in the order the primase example runs it: Sekiro's source records become
-/// the core components a viewer draws (geometry, materials, collision, lights, extras). Every choice is the example's
-/// faithful one, but for the object collision's convex bodies, given their rounded surface (the core swept by the
-/// Havok radius) within 0.01 m (`convex=rounded:0.01`) rather than the sharp intersection of their offset planes; a
-/// SpeedTree mesh's normal and tangent are the members its program reads (`speedtree-frame=program`). The environment
-/// is lowered before the materials ([`ENVIRONMENT_PASS`]): it states the hour of the day, which the bakes read.
-const AREA_PREP: &[&str] = &[
-    "lower-fromsoft-render-graph",
-    "lower-fromsoft-collision{reach=50}",
-    "lower-fromsoft-object-collision{resolution=high,convex=rounded:0.01,motion=fixed,convex-surface=render,reach=50}",
-    "drop-fromsoft-far",
-    "fromsoft-apply-rigid-skinning",
-    "lower-fromsoft-geometry{pose=rigid,uv-tiling=apply,winding=normals,degenerates=drop,leave-out=sky+light-volume+shadow,blocker-cards=record,speedtree-frame=program}",
-    "select-lod{form=finest}",
-    ENVIRONMENT_PASS,
-    "lower-sekiro-reinhard",
-    "bake-fromsoft-layers{max-size=512,sample-time=0}",
-    MATERIALS_PASS,
-    "lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15,brightness=settled,min-range=0.5,include-disabled=off}",
-    "lower-fromsoft-extras",
-    MAP_RECORDS_PASS,
-];
-
-/// Where an area recipe lowers the source materials: the builder puts the form the program's choices state in its place
-/// (the layer options and the water colour).
-const MATERIALS_PASS: &str = "lower-fromsoft-materials";
-
-/// The map layout's regions (sounds, effects, wind, environment-map points, weather overrides ...) as markers named by
-/// their type and its events as named records, none left out: the display lists every one, and the markers' kinds tell
-/// them apart.
-const MAP_RECORDS_PASS: &str = "lower-fromsoft-map-records{leave-out=}";
-
-/// The draw-param environment's lowering (`fromsoft.draw_param` to the sun and ambient of `core.environment`), run
-/// where the area was read with a draw-param file and skipped where it was not. The display shows the sun's direction
-/// and colour as its key light; the intensity a display shows the key light at is its own setting, so the calibration
-/// states only the stored colours' scale (1 lux for a colour of 1). It states the hour of the day too
-/// (`core.time_of_day`: the draw-param sample's, else the reader's default hour), so it runs before the first bake: a
-/// bake gives a program that reads the hour the scene's, and refuses the program where the scene states none.
-const ENVIRONMENT_PASS: &str = "lower-fromsoft-environment{lux-per-unit=1}";
-
-/// Elden Ring's area lowering: the same passes, with its main collision (hit filter 8, as its layouts' collision parts
-/// use it) and its own HitMtrl classes (the passes read the game's table from the read: Sand is 3 here, Dirt 5): the
-/// water class 21 (its param row "Water") is the water soup, and the assets' collision leaves it out as Sekiro's
-/// leaves out its water classes. The class 0 ("None") that Sekiro's 29 would correspond to is not left out: whether
-/// ER's untagged collision is invisible blockers or ordinary ground is a census of the install to answer
-/// (`tests/hit_class_census.rs`), so its triangles stay ground, counted by class. Its assets' collision is
-/// the high-resolution file where the game stores one, else the low one every collidable asset has, no motion type
-/// left out (its stored motion types are not mapped yet), convex bodies rounded within 0.01 m as Sekiro's; SpeedTree's
-/// billboard cards left out (`billboard`: their program turns them to the camera, the trees' own meshes are drawn) and
-/// a SpeedTree mesh's normal and tangent the members its program reads. `surface_bakes` adds the resolved program's
-/// static surface bake while retaining its material source and binding for the Game shader view. Its environment is
-/// lowered before the materials as Sekiro's is ([`ENVIRONMENT_PASS`]): its sky programs read the hour.
-const ELDEN_AREA_PREP: &[&str] = &[
-    "lower-fromsoft-render-graph",
-    "lower-fromsoft-collision{reach=50}",
-    "lower-fromsoft-object-collision{resolution=high-else-low,convex=rounded:0.01,motion=all,convex-surface=render,reach=50}",
-    "fromsoft-apply-rigid-skinning",
-    "lower-fromsoft-geometry{pose=rigid,uv-tiling=apply,winding=normals,degenerates=drop,leave-out=sky+light-volume+shadow+billboard,blocker-cards=record,speedtree-frame=program}",
-    "select-lod{form=finest}",
-    ENVIRONMENT_PASS,
-    "lower-elden-ring-reinhard",
-    MATERIALS_PASS,
-    "lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15,brightness=settled,min-range=0.5,include-disabled=off}",
-    "lower-fromsoft-extras",
-    MAP_RECORDS_PASS,
-];
-
-/// Binds each layered material's G-buffer program and constants, textures and outputs as roles (`core.shader_binding`).
-const RESOLVE_SHADERS: &str = "resolve-fromsoft-shaders{unbound-textures=preview}";
-/// A part's collision (a weapon's `_collidable.hkx`) as collision on the part, for the Collision view: convex bodies as
-/// their rounded surface within 1 cm (the area's choice), every stored motion type lowered at its stored pose.
-const PART_COLLISION: &str = "lower-fromsoft-part-collision{convex=rounded:0.01,motion=all}";
+/// The pass that lowers the area's render graph: the first of an area's preparation.
+const RENDER_GRAPH: &str = "lower-fromsoft-render-graph";
 /// The pass that lowers the sky an area read brought in to core's sky layer and anchors.
 const SKY_PASS: &str = "lower-fromsoft-sky";
-
-/// How several parts are related into one character: the rule `assemble-character` takes (`by-name` correspondence of
-/// joints, each part's skins moved onto the assembled skeleton at the assembled rest, rest disagreements up to a
-/// millimetre taken, one a part does not weight reported, not refused). A weighted joint that disagrees by more keeps
-/// the part's own inverse bind (`weighted-rests=report`): the game poses a part through its own inverse binds, so the
-/// face of Ashina's Memory costume (`_m_9120_l` parts: its Head and the joints under it stand 4.7e-3 from the other parts',
-/// 0.27 degrees) is drawn about a millimetre off its stored rest, as the game draws it; in the Wolf's default parts the
-/// body's Head stands 4.675e-3 from the face's. Every such joint and the displacement are in the preparation
-/// report as approximations.
-pub const ASSEMBLE_PARTS: &str = "assemble-character{correspondence=by-name,reference-pose=assembled,tolerance=0.001,unweighted-rests=report,weighted-rests=report,name=assembled}";
-
-/// The simulation schedule a character's simulations run at: a 30 Hz step, 30 steps of pre-roll, at most 8 steps per
-/// frame.
-const CONFIGURE_SIMULATIONS: &str =
-    "configure-simulations{step-seconds=0.03333333333333333,pre-roll=30,max-steps-per-frame=8}";
 
 /// The key a game's passes and sources are named by.
 pub fn game_key(game: Game) -> &'static str {
@@ -108,33 +45,35 @@ pub fn game_key(game: Game) -> &'static str {
     }
 }
 
-/// How an area's or a character's source materials are lowered.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What becomes of the layered source materials of an area or a character, and so whether the layer bake runs. The
+/// program's `lower-fromsoft-materials` states the same choice (its `layers`); a builder refuses the two where they
+/// differ.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Materials {
-    /// Layered source materials are kept as source data (`layers=preserve`): their `fromsoft.material`, layered
+    /// Kept as source data: `lower-fromsoft-materials` with `layers=preserve` leaves their `fromsoft.material`, layered
     /// definition, bindings and per-primitive `fromsoft.layer_inputs` intact.
     Preserve,
-    /// Primase's main-layer preview instead (`layers=preview`), a reported approximation that drops the layer inputs.
+    /// Lowered from their main-layer preview: `lower-fromsoft-materials` with `layers=preview`, a reported
+    /// approximation that drops the layer inputs.
     Preview,
-    /// The full public shader bake (`bake-fromsoft-layers`).
-    Bake,
+    /// Baked by the full public shader bake, `bake-fromsoft-layers` as stated, before the materials are lowered; the
+    /// materials' lowering then states no `layers`, every layered material being baked.
+    Bake(BakeFromSoftLayers),
 }
 
 /// The game of an area, with the choices only that game's lowering takes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AreaGame {
     /// Sekiro.
     Sekiro {
-        /// How the source materials are lowered.
+        /// What becomes of the layered source materials.
         materials: Materials,
-        /// Resolve each material's game program first (`resolve-fromsoft-shaders`) even without the layer bake, for
-        /// the Game shader view.
-        game_shaders: bool,
         /// `resolve-state` first, so the working world holds one concrete state at the axes' defaults while a reset
         /// snapshot taken before the preparation keeps the raw conditions.
         read_states: bool,
     },
-    /// Elden Ring: layers preserved, programs resolved for the Game shader view.
+    /// Elden Ring: its layered materials are what its `lower-fromsoft-materials` states (there is no layer bake in
+    /// its lowering).
     EldenRing,
 }
 
@@ -147,19 +86,26 @@ pub struct IrradiancePackage {
     pub package: u32,
 }
 
-/// An area's preparation: the lowering and the program's choices about it.
+/// An area's preparation: which passes run, from what the read took, and each pass as the program states it.
+///
+/// The order: the render graph (with the environment probes, where the read took them), the map's collision and the
+/// objects' collision, Sekiro's distant backdrop dropped, the rigid skinning, the geometry, the level of detail, the
+/// environment (after the draw-param sample, where there is one), the game's tone mapping, the shader resolution, the
+/// layer bake (Sekiro, where the program bakes), the materials and their surface bake, the lights, the sky (where the
+/// read brought it in), the extras, the map records; then the irradiance, the effects and the entities' names. The
+/// environment states the hour of the day (`core.time_of_day`) and runs before the first bake: a bake gives a program
+/// that reads the hour the scene's, and refuses the program where the scene states none. The sky is lowered after the
+/// lights, so after the environment, whose sun the moon stands towards, and after the materials, which it orders the
+/// sky's draws over.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AreaPreparation {
     pub game: AreaGame,
-    /// The read brought in the sky (`sky: include`): its geometry is kept and `lower-fromsoft-sky` lowers it after the
-    /// lights, so after the environment, whose sun the moon stands towards.
+    /// The read brought in the sky (`sky: include`): `lower-fromsoft-sky` lowers it after the lights. The geometry's
+    /// `leave-out` must then keep the sky's meshes.
     pub sky: bool,
-    /// The colour of water where it has no texture: sRGB bytes and a linear alpha byte.
-    pub water_colour: [u8; 4],
-    /// The hour of the game's clock (0 to 24) at which each time-of-day field of the draw-param environment is
-    /// sampled (`sample-fromsoft-draw-params`). None: no pass samples, and the lowering uses its documented fallback
-    /// hour, a counted approximation.
-    pub hour: Option<f32>,
+    /// The draw-param environment sampled at an hour of the game's clock before it is lowered. None: no pass samples,
+    /// and the lowering uses its documented fallback hour, a counted approximation.
+    pub draw_params: Option<SampleFromSoftDrawParams>,
     /// The read took environment probes (`select-fromsoft-environment`): lower and bind them after the render graph.
     pub environment_probes: bool,
     /// A weather snapshot was applied: `resolve-state` runs first.
@@ -168,62 +114,104 @@ pub struct AreaPreparation {
     pub irradiance_package: Option<IrradiancePackage>,
     /// The read took Sekiro's irradiance boxes and coefficient states: the irradiance is lowered last.
     pub irradiance_states: bool,
-    /// The read took effects: `lower-fromsoft-effects` runs last.
-    pub effects: bool,
-    /// Whether the material bake looks each material up in, and stores it to, the caller's memo store.
-    pub bake_cache: Cache,
+    /// The read took effects: they are lowered last, as stated.
+    pub effects: Option<LowerFromSoftEffects>,
+    /// The map's collision.
+    pub collision: LowerFromSoftCollision,
+    /// The objects' collision.
+    pub object_collision: LowerFromSoftObjectCollision,
+    /// The geometry. Its `uv-tiling` must be `keep`: the surface bake reads the authored UVs.
+    pub geometry: LowerFromSoftGeometry,
+    /// The level of detail each prototype keeps.
+    pub lod: SelectLod,
+    /// The draw-param environment.
+    pub environment: LowerFromSoftEnvironment,
+    /// Each material's game program bound, before the first pass that consumes the source materials: the bakes read
+    /// the binding and the Game shader view draws it.
+    pub resolve_shaders: ResolveFromSoftShaders,
+    /// The materials. Its `layers` must be what the Sekiro `materials` choice states.
+    pub lower_materials: LowerFromSoftMaterials,
+    /// The surface bake of each resolved program, after the materials are lowered.
+    pub material_bake: BakeFromSoftMaterials,
+    /// The lights.
+    pub lights: LowerFromSoftLights,
+    /// The map layout's regions and events.
+    pub map_records: LowerFromSoftMapRecords,
 }
 
 impl AreaPreparation {
-    /// The pass texts, in order.
-    pub fn texts(&self) -> Vec<String> {
-        let mut texts = match self.game {
-            AreaGame::EldenRing => {
-                let water = water_option(self.water_colour);
-                let recipe = ELDEN_AREA_PREP
-                    .iter()
-                    .map(|text| match *text {
-                        MATERIALS_PASS => {
-                            format!("lower-fromsoft-materials{{layers=preserve,water-colour={water}}}")
-                        }
-                        text => text.to_owned(),
-                    })
-                    .collect();
-                surface_bakes(with_sky(recipe, self.sky), self.bake_cache)
+    /// The pass texts, in order; refused where two of the choices conflict.
+    pub fn texts(&self) -> Result<Vec<String>, String> {
+        if let AreaGame::Sekiro { materials, .. } = self.game {
+            materials_agree(materials, &self.lower_materials)?;
+        }
+        keeps_the_authored_uvs(&self.geometry)?;
+        if self.sky && self.geometry.leave_out.contains(&SkipClass::Sky) {
+            return Err(
+                "sky: the read brought in the sky, and lower-fromsoft-geometry's leave-out leaves out its meshes \
+                 (sky); state a leave-out without sky"
+                    .to_owned(),
+            );
+        }
+        let environment = pass_text(&self.environment);
+        let mut texts = vec![
+            RENDER_GRAPH.to_owned(),
+            pass_text(&self.collision),
+            pass_text(&self.object_collision),
+        ];
+        if let AreaGame::Sekiro { .. } = self.game {
+            texts.push("drop-fromsoft-far".to_owned());
+        }
+        texts.extend([
+            "fromsoft-apply-rigid-skinning".to_owned(),
+            pass_text(&self.geometry),
+            pass_text(&self.lod),
+        ]);
+        if let Some(sample) = &self.draw_params {
+            texts.push(pass_text(sample));
+        }
+        texts.push(environment);
+        texts.push(
+            match self.game {
+                AreaGame::Sekiro { .. } => "lower-sekiro-reinhard",
+                AreaGame::EldenRing => "lower-elden-ring-reinhard",
             }
-            AreaGame::Sekiro {
-                materials,
-                game_shaders,
-                read_states,
-            } => sekiro_area(
-                materials,
-                game_shaders,
-                read_states,
-                self.sky,
-                self.water_colour,
-                self.bake_cache,
-            ),
-        };
+            .to_owned(),
+        );
+        texts.push(pass_text(&self.resolve_shaders));
+        if let AreaGame::Sekiro {
+            materials: Materials::Bake(bake),
+            ..
+        } = self.game
+        {
+            texts.push(pass_text(&bake));
+        }
+        texts.extend([
+            pass_text(&self.lower_materials),
+            pass_text(&self.material_bake),
+            pass_text(&self.lights),
+        ]);
+        if self.sky {
+            texts.push(SKY_PASS.to_owned());
+        }
+        texts.extend(["lower-fromsoft-extras".to_owned(), pass_text(&self.map_records)]);
         if self.environment_probes {
-            let after = texts
-                .iter()
-                .position(|text| text == "lower-fromsoft-render-graph")
-                .map_or(texts.len(), |index| index + 1);
             texts.splice(
-                after..after,
+                1..1,
                 [
-                    "lower-fromsoft-environment-probes".into(),
-                    "bind-fromsoft-environment-probes".into(),
+                    "lower-fromsoft-environment-probes".to_owned(),
+                    "bind-fromsoft-environment-probes".to_owned(),
                 ],
             );
         }
-        if self.weather {
-            texts.insert(0, "resolve-state".into());
-        }
-        if let Some(hour) = self.hour
-            && let Some(index) = texts.iter().position(|text| text == ENVIRONMENT_PASS)
+        if let AreaGame::Sekiro {
+            read_states: true, ..
+        } = self.game
         {
-            texts.insert(index, format!("sample-fromsoft-draw-params{{hour={hour}}}"));
+            texts.insert(0, "resolve-state".to_owned());
+        }
+        if self.weather {
+            texts.insert(0, "resolve-state".to_owned());
         }
         if let Some(package) = &self.irradiance_package {
             texts.insert(
@@ -233,16 +221,16 @@ impl AreaPreparation {
                     package.area, package.package
                 ),
             );
-            texts.push("lower-fromsoft-irradiance".into());
+            texts.push("lower-fromsoft-irradiance".to_owned());
         }
         if self.irradiance_states {
-            texts.push("lower-fromsoft-irradiance".into());
+            texts.push("lower-fromsoft-irradiance".to_owned());
         }
-        if self.effects {
-            texts.push("lower-fromsoft-effects{candela-per-power=1}".to_owned());
+        if let Some(effects) = &self.effects {
+            texts.push(pass_text(effects));
         }
         texts.push(format!("name-fromsoft-entities{{game={}}}", self.game_key()));
-        texts
+        Ok(texts)
     }
 
     fn game_key(&self) -> &'static str {
@@ -253,296 +241,150 @@ impl AreaPreparation {
     }
 }
 
-/// Sekiro's area lowering ([`AREA_PREP`]) with the materials the choices state. With the layer bake the full public
-/// shader bake runs. Otherwise layered source materials are kept as source data (`layers=preserve`) or lowered by
-/// primase's main-layer preview (`layers=preview`).
-fn sekiro_area(
-    materials: Materials,
-    game_shaders: bool,
-    read_states: bool,
-    sky: bool,
-    water_colour: [u8; 4],
-    cache: Cache,
-) -> Vec<String> {
-    let bake = materials == Materials::Bake;
-    let water = water_option(water_colour);
-    let mut texts: Vec<String> = AREA_PREP
-        .iter()
-        .flat_map(|text| {
-            // The binding the bake reads and the Game shader view draws from, resolved once before the first pass that
-            // consumes the source materials.
-            let first_consumer = if bake {
-                "bake-fromsoft-layers"
-            } else {
-                "lower-fromsoft-materials"
-            };
-            let mut out = Vec::new();
-            if (bake || game_shaders) && text.starts_with(first_consumer) {
-                out.push(RESOLVE_SHADERS.to_owned());
-            }
-            out.extend(if !bake && text.starts_with("bake-fromsoft-layers") {
-                None
-            } else if *text == MATERIALS_PASS {
-                Some(match materials {
-                    Materials::Bake => format!("lower-fromsoft-materials{{water-colour={water}}}"),
-                    Materials::Preview => {
-                        format!("lower-fromsoft-materials{{layers=preview,water-colour={water}}}")
-                    }
-                    Materials::Preserve => {
-                        format!("lower-fromsoft-materials{{layers=preserve,water-colour={water}}}")
-                    }
-                })
-            } else {
-                Some((*text).into())
-            });
-            out
-        })
-        .collect();
-    if read_states {
-        texts.insert(0, "resolve-state".into());
+/// `materials` and the materials' lowering state one choice: refused where `lower`'s `layers` is not the one
+/// `materials` names.
+fn materials_agree(materials: Materials, lower: &LowerFromSoftMaterials) -> Result<(), String> {
+    let stated = match materials {
+        Materials::Preserve => Some(Layers::Preserve),
+        Materials::Preview => Some(Layers::Preview),
+        Materials::Bake(_) => None,
+    };
+    if lower.layers() == stated {
+        return Ok(());
     }
-    surface_bakes(with_sky(texts, sky), cache)
+    let word = |layers: Option<Layers>| match layers {
+        Some(Layers::Preserve) => "layers=preserve",
+        Some(Layers::Preview) => "layers=preview",
+        None => "no layers",
+    };
+    Err(format!(
+        "materials {}: lower-fromsoft-materials states {}, and {} is that choice's",
+        match materials {
+            Materials::Preserve => "Preserve",
+            Materials::Preview => "Preview",
+            Materials::Bake(_) => "Bake",
+        },
+        word(lower.layers()),
+        word(stated)
+    ))
 }
 
-/// Both surface views consume the program: Shaded bakes its surface channels, Game shader draws it directly.
-/// Keep one resolution before either bake; the texture-space bake reads the authored UVs, including their scale.
-fn surface_bakes(texts: Vec<String>, cache: Cache) -> Vec<String> {
-    let resolved = texts.iter().any(|s| s.starts_with("resolve-fromsoft-shaders"));
-    let mut inserted = resolved;
-    let mut result = Vec::new();
-    for text in texts {
-        if !inserted
-            && (text.starts_with("lower-fromsoft-materials") || text.starts_with("bake-fromsoft-layers"))
-        {
-            result.push(RESOLVE_SHADERS.to_owned());
-            inserted = true;
-        }
-        let lower = text.starts_with("lower-fromsoft-materials");
-        result.push(text.replace("uv-tiling=apply", "uv-tiling=keep"));
-        if lower {
-            result.push(format!(
-                "bake-fromsoft-materials{{max-size=2048,sample-time=0,cache={}}}",
-                cache_text(cache)
-            ));
-        }
+/// The surface bake every preparation runs reads the authored UVs, including their scale: refused where the
+/// geometry multiplies them by the material's tiling.
+fn keeps_the_authored_uvs(geometry: &LowerFromSoftGeometry) -> Result<(), String> {
+    if geometry.uv_tiling == Tiling::Apply {
+        return Err(
+            "lower-fromsoft-geometry uv-tiling=apply: bake-fromsoft-materials, which the preparation runs, bakes over \
+             the authored UVs; state uv-tiling=keep"
+                .to_owned(),
+        );
     }
-    result
+    Ok(())
 }
 
-fn cache_text(cache: Cache) -> &'static str {
-    match cache {
-        Cache::On => "on",
-        Cache::Off => "off",
-    }
-}
-
-fn water_option([r, g, b, a]: [u8; 4]) -> String {
-    format!("{r},{g},{b},{a}")
-}
-
-/// `texts`, an area's lowering, for a read that brought in the sky (`sky`): the sky's meshes kept by the geometry
-/// lowering (what else it leaves out stays out) and [`SKY_PASS`] after the lights, so after the environment, whose sun
-/// the moon stands towards (and after the materials, which it orders the sky's draws over); else `texts` as they are.
-fn with_sky(texts: Vec<String>, sky: bool) -> Vec<String> {
-    if !sky {
-        return texts;
-    }
-    texts
-        .into_iter()
-        .flat_map(|text| {
-            if text.starts_with("lower-fromsoft-geometry") {
-                vec![text.replace("leave-out=sky+", "leave-out=")]
-            } else if text.starts_with("lower-fromsoft-lights") {
-                vec![text, SKY_PASS.into()]
-            } else {
-                vec![text]
-            }
-        })
-        .collect()
-}
-
-/// The animation a clip binds: the Havok animations lowered to clips on the model's skeleton, the skeletons made to
-/// correspond by name and rest, the clips mapped by that. Each choice is the program's: `absent` (what a component a
-/// track does not store stands for), `rate` (clip keys per source frame), `clips` (which animations: `all`, or names
-/// joined by `;`), `root_motion` (what becomes of the extracted motion), `unmapped` (what becomes of a track with no
-/// joint on the model: `drop`) and how the skeletons correspond and the clips map where they share a hierarchy:
-/// `parents` (`same` or `any`), `rests` (`source` or `target`) and `reparented` (`model-space` or `refuse`). A model
-/// whose skeleton is not the Havok one's (Elden Ring's) states `any`, `source` and `model-space`; one that is
-/// (Sekiro's) states `same`, `target` and `refuse`, and the binding's `empty=model-space` maps in model space where
-/// no joint pair shares a hierarchy.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ClipBinding {
-    /// The character whose animation binders are read (`c1010`; the player's is `c0000`).
-    pub of: String,
-    /// The model skeleton the clips are mapped onto, named after the asset's reader or its assembly.
-    pub skeleton: String,
-    /// How closely the Havok skeleton's rests must agree with the model's to correspond.
-    pub tolerance: String,
-    pub absent: String,
-    pub rate: u32,
-    pub clips: String,
-    pub root_motion: String,
-    pub unmapped: String,
-    pub parents: String,
-    pub rests: String,
-    pub reparented: String,
-}
-
-impl ClipBinding {
-    /// The pass that makes the animations clips on the model's skeleton: lower the Havok animations to clips, make the
-    /// Havok skeleton correspond to the model's by name and rest, then map the clips by that.
-    pub fn pass(&self) -> String {
-        format!(
-            "bind-fromsoft-animation{{from={} havok skeleton,to={},tolerance={},empty=model-space,absent={},rate={},root-motion={},clips={},unmapped={},parents={},rests={},reparented={}}}",
-            self.of,
-            self.skeleton,
-            self.tolerance,
-            self.absent,
-            self.rate,
-            self.root_motion,
-            self.clips,
-            self.unmapped,
-            self.parents,
-            self.rests,
-            self.reparented
-        )
-    }
-}
-
-/// Held weapons: the sources of their models' assets (the body's assembly leaves them out) and the explicitly stated
-/// grip they are held in after the assets are placed (`hold-fromsoft-weapons`).
+/// Held weapons: the sources of their models' assets, which the body's assembly leaves out, and how they are held
+/// after the assets are placed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeldWeapons {
     pub held: Vec<String>,
-    pub grip: String,
+    pub hold: HoldFromSoftWeapons,
 }
 
 /// A character's or a set of parts' preparation: the geometry and material lowering they need, then (for several
-/// parts, which each carry a skeleton of their own) `assemble-character`, then `place-assets` so the standalone asset
-/// is drawn at the origin. No area collision, state, far, light or extra passes.
+/// parts, which each carry a skeleton of their own) the assembly, then `place-assets` so the standalone asset is drawn
+/// at the origin. No area collision, state, far, light or extra passes.
+///
+/// The order: the asset forms selected, the geometry, the selected outfit (where it is dressed), the shader
+/// resolution, the layer bake (where the program bakes), the materials and their surface bake, the part's collision,
+/// the assembly (several parts), the animations' binding, the simulation schedule, the display masks and material
+/// events (where it is dressed), the entities' names, `place-assets`, and the held weapons.
 #[derive(Clone, Debug)]
 pub struct CharacterPreparation {
     pub game: Game,
-    /// How the source materials are lowered.
+    /// What becomes of the layered source materials.
     pub materials: Materials,
-    /// Resolve each material's game program first, as an area's preparation does, so the Game shader view draws the
-    /// character through its programs.
-    pub game_shaders: bool,
-    /// The colour of water where it has no texture: sRGB bytes and a linear alpha byte.
-    pub water_colour: [u8; 4],
-    /// How many parts the asset assembles: more than one are related into one character.
+    /// How many parts the asset assembles: more than one are related into one character (`assembly`).
     pub parts: usize,
     /// The names `select-assets` keeps (one form of a part and the animations' asset): none keeps everything.
     pub select_assets: Vec<String>,
     /// The animations bound onto the asset's skeleton.
-    pub animations: Option<ClipBinding>,
+    pub animations: Option<BindFromSoftAnimation>,
     /// The selected outfit's display masks, resolved after the geometry, and lowered with the material events.
     pub dressing: bool,
     /// The entities' names (`name-fromsoft-entities`).
     pub entity_names: bool,
-    /// The weapons held and their grip.
+    /// The weapons held. The assembly's `leave_out` must be their sources.
     pub held: Option<HeldWeapons>,
-    /// Whether the material bake looks each material up in, and stores it to, the caller's memo store.
-    pub bake_cache: Cache,
+    /// The geometry. Its `uv-tiling` must be `keep`: the surface bake reads the authored UVs.
+    pub geometry: LowerFromSoftGeometry,
+    /// Each material's game program bound before the materials are consumed.
+    pub resolve_shaders: ResolveFromSoftShaders,
+    /// The materials. Its `layers` must be what `materials` states.
+    pub lower_materials: LowerFromSoftMaterials,
+    /// The surface bake of each resolved program, after the materials are lowered.
+    pub material_bake: BakeFromSoftMaterials,
+    /// A part's own collision (a weapon's `_collidable.hkx`) as collision on the part.
+    pub part_collision: LowerFromSoftPartCollision,
+    /// How several parts are related into one character; run where there is more than one part.
+    pub assembly: AssembleCharacter,
+    /// The schedule the character's simulations run at.
+    pub simulations: ConfigureSimulations,
 }
 
 impl CharacterPreparation {
-    /// The pass texts, in order.
-    pub fn texts(&self) -> Vec<String> {
-        let mut texts = character_lowering(
-            self.materials,
-            self.game_shaders,
-            self.water_colour,
-            self.bake_cache,
-        );
-        if self.parts > 1 {
-            texts.push(ASSEMBLE_PARTS.to_owned());
-        }
-        if let Some(binding) = &self.animations {
-            texts.push(binding.pass());
-        }
-        texts.push(CONFIGURE_SIMULATIONS.to_owned());
-        texts.push("place-assets".to_owned());
-        if self.dressing {
-            texts.insert(1, "lower-fromsoft-selected-outfit".into());
-        }
-        if !self.select_assets.is_empty() {
-            texts.insert(
-                0,
-                format!("select-assets{{names={}}}", self.select_assets.join(";")),
-            );
+    /// The pass texts, in order; refused where two of the choices conflict.
+    pub fn texts(&self) -> Result<Vec<String>, String> {
+        materials_agree(self.materials, &self.lower_materials)?;
+        keeps_the_authored_uvs(&self.geometry)?;
+        let held: &[String] = self.held.as_ref().map_or(&[], |h| &h.held);
+        if self.parts > 1 && self.assembly.leave_out != held {
+            return Err(format!(
+                "held weapons [{}]: assemble-character leaves out [{}]; the assembly leaves out exactly the held \
+                 weapons' sources",
+                held.join(", "),
+                self.assembly.leave_out.join(", ")
+            ));
         }
         let key = game_key(self.game);
-        let mut before_placing = Vec::new();
+        let mut texts = Vec::new();
+        if !self.select_assets.is_empty() {
+            texts.push(format!("select-assets{{names={}}}", self.select_assets.join(";")));
+        }
+        texts.push(pass_text(&self.geometry));
         if self.dressing {
-            before_placing.push("lower-fromsoft-display-masks".to_owned());
-            before_placing.push(format!("lower-fromsoft-material-events{{game={key}}}"));
+            texts.push("lower-fromsoft-selected-outfit".to_owned());
+        }
+        texts.push(pass_text(&self.resolve_shaders));
+        if let Materials::Bake(bake) = self.materials {
+            texts.push(pass_text(&bake));
+        }
+        texts.extend([
+            pass_text(&self.lower_materials),
+            pass_text(&self.material_bake),
+            pass_text(&self.part_collision),
+        ]);
+        if self.parts > 1 {
+            texts.push(pass_text(&self.assembly));
+        }
+        if let Some(binding) = &self.animations {
+            texts.push(pass_text(binding));
+        }
+        texts.push(pass_text(&self.simulations));
+        if self.dressing {
+            texts.push("lower-fromsoft-display-masks".to_owned());
+            texts.push(format!("lower-fromsoft-material-events{{game={key}}}"));
         }
         if self.entity_names {
-            before_placing.push(format!("name-fromsoft-entities{{game={key}}}"));
+            texts.push(format!("name-fromsoft-entities{{game={key}}}"));
         }
-        let final_place = texts.len() - 1;
-        texts.splice(final_place..final_place, before_placing);
-        if let Some(held) = &self.held {
-            held_weapon_passes(&mut texts, &held.held, &held.grip);
+        texts.push("place-assets".to_owned());
+        if let Some(weapons) = &self.held
+            && !weapons.held.is_empty()
+        {
+            texts.push(pass_text(&weapons.hold));
         }
-        texts
+        Ok(texts)
     }
-}
-
-/// With held weapons (the sources of their models' assets, `held`): the body's assembly leaves them out, and after the
-/// assets are placed `hold-fromsoft-weapons` puts each where the explicitly stated grip holds it.
-fn held_weapon_passes(texts: &mut Vec<String>, held: &[String], grip: &str) {
-    if held.is_empty() {
-        return;
-    }
-    for text in texts.iter_mut().filter(|t| t.as_str() == ASSEMBLE_PARTS) {
-        *text = format!(
-            "{},leave-out={}}}",
-            ASSEMBLE_PARTS.trim_end_matches('}'),
-            held.join("+")
-        );
-    }
-    let after = texts
-        .iter()
-        .position(|t| t == "place-assets")
-        .map_or(texts.len(), |i| i + 1);
-    texts.insert(after, format!("hold-fromsoft-weapons{{grip={grip}}}"));
-}
-
-/// The geometry and material lowering a character needs before anything is related to its skeleton or placed. With
-/// `game_shaders` (or the layer bake, which reads the binding) `resolve-fromsoft-shaders` binds each material's G-buffer
-/// program first, as the area's preparation does, so the Game shader view draws the character through its programs.
-fn character_lowering(
-    materials: Materials,
-    game_shaders: bool,
-    water_colour: [u8; 4],
-    cache: Cache,
-) -> Vec<String> {
-    let water = water_option(water_colour);
-    // Characters are skinned: preserve their model-space bind pose (`pose=stored`), source winding, degenerates and
-    // UVs, unlike the area's rigid policy. `place-assets` then places the standalone asset at the origin; the
-    // reader's skeleton and rig-instance bindings are what the mesh draws through.
-    let mut texts = vec![
-        "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program}".to_owned(),
-    ];
-    if materials == Materials::Bake || game_shaders {
-        texts.push(RESOLVE_SHADERS.to_owned());
-    }
-    match materials {
-        Materials::Bake => {
-            texts.push("bake-fromsoft-layers{max-size=512,sample-time=0}".to_owned());
-            texts.push(format!("lower-fromsoft-materials{{water-colour={water}}}"));
-        }
-        Materials::Preview => texts.push(format!(
-            "lower-fromsoft-materials{{layers=preview,water-colour={water}}}"
-        )),
-        Materials::Preserve => texts.push(format!(
-            "lower-fromsoft-materials{{layers=preserve,water-colour={water}}}"
-        )),
-    }
-    texts.push(PART_COLLISION.to_owned());
-    surface_bakes(texts, cache)
 }
 
 /// A loaded animation clip's preparation: the animations bound onto the skeleton of the asset, the clip's events, the
@@ -550,28 +392,27 @@ fn character_lowering(
 #[derive(Clone, Debug)]
 pub struct ClipPreparation {
     pub game: Game,
-    pub binding: ClipBinding,
-    /// The effects the clip's events start are lowered too.
-    pub effects: bool,
+    pub binding: BindFromSoftAnimation,
+    /// The effects the clip's events start, lowered as stated after the events.
+    pub effects: Option<LowerFromSoftEffects>,
 }
 
 impl ClipPreparation {
     /// The pass texts, in order.
     pub fn texts(&self) -> Vec<String> {
         let key = game_key(self.game);
-        let mut texts = vec![self.binding.pass()];
-        texts.extend([
+        let mut texts = vec![
+            pass_text(&self.binding),
             format!("lower-fromsoft-clip-events{{game={key}}}"),
-            "lower-fromsoft-display-masks".into(),
+        ];
+        if let Some(effects) = &self.effects {
+            texts.push(pass_text(effects));
+        }
+        texts.extend([
+            "lower-fromsoft-display-masks".to_owned(),
             format!("lower-fromsoft-material-events{{game={key}}}"),
             format!("name-fromsoft-entities{{game={key}}}"),
         ]);
-        if self.effects {
-            texts.insert(
-                texts.len() - 3,
-                "lower-fromsoft-effects{candela-per-power=1}".into(),
-            );
-        }
         texts
     }
 }

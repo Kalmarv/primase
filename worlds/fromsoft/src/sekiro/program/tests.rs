@@ -1,5 +1,19 @@
+use std::collections::BTreeSet;
+
+use super::super::passes::collision::FMeshes;
+use super::super::passes::lights::{Brightness, Disabled};
+use super::super::passes::object_collision::{
+    ConvexBodies, ConvexSurface, MotionSelection, ResolutionChoice,
+};
+use super::super::passes::settings::{Factor, Fraction, Metres, PixelCap, Seconds};
+use super::super::passes::weapons::Grip;
+use super::super::passes::{Cards, Degenerates, Pose, SpeedTreeFrame, Unbound, Winding};
 use super::*;
+use primase_animation::simulation_schedule::SimulationSchedule;
+use primase_animation::{Correspondence, ReferencePose, UnweightedRests, WeightedRests};
+use primase_core::LodChoice;
 use primase_core::pass::PassRegistry;
+use primase_image::Srgba8;
 
 fn registry() -> PassRegistry {
     let mut registry = PassRegistry::new();
@@ -9,103 +23,437 @@ fn registry() -> PassRegistry {
     registry
 }
 
-const WATER: [u8; 4] = [48, 98, 122, 190];
+/// Each text parsed and written back as its pass states itself ([`pass_text`]): the same pass gives the same text
+/// whatever the order its options were written in.
+fn canonical(texts: &[String]) -> Vec<String> {
+    registry()
+        .parse(&texts.join(", "))
+        .expect("the texts parse")
+        .passes
+        .iter()
+        .map(|pass| pass_text(pass.as_ref()))
+        .collect()
+}
+
+fn parses_and_orders(texts: &[String]) {
+    let pipeline = registry()
+        .parse(&texts.join(", "))
+        .expect("the preparation parses");
+    pipeline.check().expect("the preparation's order");
+}
+
+const WATER: Srgba8 = Srgba8([48, 98, 122, 190]);
+
+fn metres(m: f32) -> Metres {
+    Metres::new(m).unwrap()
+}
+
+fn lower_materials(materials: Materials) -> LowerFromSoftMaterials {
+    let layers = match materials {
+        Materials::Preserve => Some(Layers::Preserve),
+        Materials::Preview => Some(Layers::Preview),
+        Materials::Bake(_) => None,
+    };
+    LowerFromSoftMaterials::new(layers, WATER)
+}
+
+fn bake_layers() -> Materials {
+    Materials::Bake(BakeFromSoftLayers::new(
+        PixelCap::new(512).unwrap(),
+        Seconds::new(0.).unwrap(),
+    ))
+}
+
+fn material_bake(cache: bool) -> BakeFromSoftMaterials {
+    BakeFromSoftMaterials::new(PixelCap::new(2048).unwrap(), Seconds::new(0.).unwrap()).with_cache(cache)
+}
+
+fn resolve() -> ResolveFromSoftShaders {
+    ResolveFromSoftShaders::new(Unbound::Preview)
+}
+
+fn assembly(leave_out: &[String]) -> AssembleCharacter {
+    AssembleCharacter {
+        correspondence: Correspondence::ByName,
+        reference_pose: ReferencePose::Assembled,
+        tolerance: 0.001,
+        reference_tolerance: 0.0001,
+        unweighted_rests: UnweightedRests::Report,
+        weighted_rests: WeightedRests::Report,
+        name: "assembled".into(),
+        leave_out: leave_out.to_vec(),
+    }
+}
 
 fn character() -> CharacterPreparation {
     CharacterPreparation {
         game: Game::Sekiro,
         materials: Materials::Preserve,
-        game_shaders: false,
-        water_colour: WATER,
         parts: 1,
         select_assets: Vec::new(),
         animations: None,
         dressing: false,
         entity_names: false,
         held: None,
-        bake_cache: Cache::On,
+        geometry: LowerFromSoftGeometry {
+            pose: Pose::Stored,
+            uv_tiling: Tiling::Keep,
+            winding: Winding::Stored,
+            degenerates: Degenerates::Keep,
+            leave_out: BTreeSet::new(),
+            blocker_cards: Cards::Draw,
+            speedtree_frame: SpeedTreeFrame::Program,
+        },
+        resolve_shaders: resolve(),
+        lower_materials: lower_materials(Materials::Preserve),
+        material_bake: material_bake(true),
+        part_collision: LowerFromSoftPartCollision {
+            convex: ConvexBodies::Rounded(metres(0.01)),
+            motion: MotionSelection::All,
+        },
+        assembly: assembly(&[]),
+        simulations: ConfigureSimulations(SimulationSchedule::new(1. / 30., 30, 8).unwrap()),
     }
 }
 
-fn area(materials: Materials, game_shaders: bool, read_states: bool, sky: bool) -> AreaPreparation {
+/// A character's preparation with `materials`, and the materials' lowering stating the same choice.
+fn character_with(materials: Materials) -> CharacterPreparation {
+    CharacterPreparation {
+        materials,
+        lower_materials: lower_materials(materials),
+        ..character()
+    }
+}
+
+fn area_geometry(leave_out: &[SkipClass]) -> LowerFromSoftGeometry {
+    LowerFromSoftGeometry {
+        pose: Pose::Rigid,
+        uv_tiling: Tiling::Keep,
+        winding: Winding::Normals,
+        degenerates: Degenerates::Drop,
+        leave_out: leave_out.iter().copied().collect(),
+        blocker_cards: Cards::Record,
+        speedtree_frame: SpeedTreeFrame::Program,
+    }
+}
+
+/// A Sekiro area's preparation: the geometry keeps the sky's meshes where the read brought the sky in.
+fn area(materials: Materials, read_states: bool, sky: bool) -> AreaPreparation {
+    let leave_out: &[SkipClass] = if sky {
+        &[SkipClass::LightVolume, SkipClass::Shadow]
+    } else {
+        &[SkipClass::Sky, SkipClass::LightVolume, SkipClass::Shadow]
+    };
     AreaPreparation {
         game: AreaGame::Sekiro {
             materials,
-            game_shaders,
             read_states,
         },
         sky,
-        water_colour: WATER,
-        hour: None,
+        draw_params: None,
         environment_probes: false,
         weather: false,
         irradiance_package: None,
         irradiance_states: false,
-        effects: false,
-        bake_cache: Cache::On,
+        effects: None,
+        collision: LowerFromSoftCollision {
+            reach: Some(metres(50.)),
+            f_meshes: FMeshes::Off,
+        },
+        object_collision: LowerFromSoftObjectCollision {
+            resolution: ResolutionChoice::High,
+            convex: ConvexBodies::Rounded(metres(0.01)),
+            motion: MotionSelection::Fixed,
+            convex_surface: ConvexSurface::Render,
+            reach: Some(metres(50.)),
+        },
+        geometry: area_geometry(leave_out),
+        lod: SelectLod {
+            choice: LodChoice::Finest,
+        },
+        environment: LowerFromSoftEnvironment::new(Factor::new(1.).unwrap()),
+        resolve_shaders: resolve(),
+        lower_materials: lower_materials(materials),
+        material_bake: material_bake(true),
+        lights: LowerFromSoftLights {
+            candela_per_power: Factor::new(1.).unwrap(),
+            spot_blend: Fraction::new(0.15).unwrap(),
+            brightness: Brightness::Settled,
+            min_range: metres(0.5),
+            include_disabled: Disabled::Skip,
+        },
+        map_records: LowerFromSoftMapRecords {
+            leave_out: BTreeSet::new(),
+        },
     }
 }
 
+/// An Elden Ring area's preparation: every collision file at its best resolution, every motion type, and SpeedTree's
+/// billboard cards left out too.
 fn elden(sky: bool) -> AreaPreparation {
+    let sekiro = area(Materials::Preserve, false, sky);
+    let mut leave_out = sekiro.geometry.leave_out.clone();
+    leave_out.insert(SkipClass::Billboard);
     AreaPreparation {
         game: AreaGame::EldenRing,
-        ..area(Materials::Preserve, false, false, sky)
+        object_collision: LowerFromSoftObjectCollision {
+            resolution: ResolutionChoice::HighElseLow,
+            motion: MotionSelection::All,
+            ..sekiro.object_collision.clone()
+        },
+        geometry: LowerFromSoftGeometry {
+            leave_out,
+            ..sekiro.geometry.clone()
+        },
+        ..sekiro
     }
+}
+
+fn effects() -> LowerFromSoftEffects {
+    LowerFromSoftEffects::new(Factor::new(1.).unwrap())
+        .with_seed(0)
+        .with_include_disabled(Disabled::Skip)
+}
+
+fn binding(of: &str, parents: &str, rests: &str, reparented: &str) -> BindFromSoftAnimation {
+    BindFromSoftAnimation {
+        from: format!("{of} havok skeleton"),
+        to: format!("{of} skeleton"),
+        tolerance: 0.0001,
+        empty: "model-space".into(),
+        absent: "neutral".into(),
+        rate: 2,
+        root_motion: "translation".into(),
+        clips: "all".into(),
+        unmapped: "drop".into(),
+        parents: parents.into(),
+        rests: rests.into(),
+        reparented: reparented.into(),
+    }
+}
+
+fn texts(texts: &[&str]) -> Vec<String> {
+    texts.iter().map(|text| (*text).to_owned()).collect()
+}
+
+/// The values the programs state are the ones the builders once fixed, so these preparations are the pass lists the
+/// builders stated then: each list below is one of them as it was written, compared pass by pass as each pass states
+/// itself.
+#[test]
+fn the_stated_values_give_the_pass_lists_the_builders_fixed() {
+    const CHARACTER_GEOMETRY: &str = "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program}";
+    const RESOLVE: &str = "resolve-fromsoft-shaders{unbound-textures=preview}";
+    const PART_COLLISION: &str = "lower-fromsoft-part-collision{convex=rounded:0.01,motion=all}";
+    const SIMULATIONS: &str =
+        "configure-simulations{step-seconds=0.03333333333333333,pre-roll=30,max-steps-per-frame=8}";
+    const COLLISION: &str = "lower-fromsoft-collision{reach=50}";
+    const LIGHTS: &str = "lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15,brightness=settled,min-range=0.5,include-disabled=off}";
+    const ENVIRONMENT: &str = "lower-fromsoft-environment{lux-per-unit=1}";
+    const RECORDS: &str = "lower-fromsoft-map-records{leave-out=}";
+
+    let one_part = texts(&[
+        CHARACTER_GEOMETRY,
+        RESOLVE,
+        "lower-fromsoft-materials{layers=preserve,water-colour=48,98,122,190}",
+        "bake-fromsoft-materials{max-size=2048,sample-time=0,cache=on}",
+        PART_COLLISION,
+        SIMULATIONS,
+        "place-assets",
+    ]);
+    assert_eq!(canonical(&character().texts().unwrap()), canonical(&one_part));
+
+    let held = vec!["parts/wp_a_0300_l".to_owned()];
+    let dressed = CharacterPreparation {
+        game: Game::EldenRing,
+        parts: 2,
+        select_assets: vec!["wp_a_0300_l".into(), "c0000 animations".into()],
+        animations: Some(binding("c0000", "any", "source", "model-space")),
+        dressing: true,
+        entity_names: true,
+        held: Some(HeldWeapons {
+            held: held.clone(),
+            hold: HoldFromSoftWeapons {
+                grip: Grip::OneHanded,
+            },
+        }),
+        assembly: assembly(&held),
+        ..character_with(bake_layers())
+    };
+    let dressed_was = texts(&[
+        "select-assets{names=wp_a_0300_l;c0000 animations}",
+        CHARACTER_GEOMETRY,
+        "lower-fromsoft-selected-outfit",
+        RESOLVE,
+        "bake-fromsoft-layers{max-size=512,sample-time=0}",
+        "lower-fromsoft-materials{water-colour=48,98,122,190}",
+        "bake-fromsoft-materials{max-size=2048,sample-time=0,cache=on}",
+        PART_COLLISION,
+        "assemble-character{correspondence=by-name,reference-pose=assembled,tolerance=0.001,unweighted-rests=report,weighted-rests=report,name=assembled,leave-out=parts/wp_a_0300_l}",
+        "bind-fromsoft-animation{from=c0000 havok skeleton,to=c0000 skeleton,tolerance=0.0001,empty=model-space,absent=neutral,rate=2,root-motion=translation,clips=all,unmapped=drop,parents=any,rests=source,reparented=model-space}",
+        SIMULATIONS,
+        "lower-fromsoft-display-masks",
+        "lower-fromsoft-material-events{game=elden}",
+        "name-fromsoft-entities{game=elden}",
+        "place-assets",
+        "hold-fromsoft-weapons{grip=one-handed}",
+    ]);
+    assert_eq!(canonical(&dressed.texts().unwrap()), canonical(&dressed_was));
+
+    let everything = AreaPreparation {
+        draw_params: Some(SampleFromSoftDrawParams::new(6.5).unwrap()),
+        environment_probes: true,
+        weather: true,
+        irradiance_package: Some(IrradiancePackage {
+            area: "m11_01_00_00".into(),
+            package: 3,
+        }),
+        irradiance_states: true,
+        effects: Some(effects()),
+        ..area(Materials::Preserve, true, false)
+    };
+    let everything_was = texts(&[
+        "resolve-state{assign=fromsoft.irradiance.m11_01_00_00:package-03}",
+        "resolve-state",
+        "resolve-state",
+        "lower-fromsoft-render-graph",
+        "lower-fromsoft-environment-probes",
+        "bind-fromsoft-environment-probes",
+        COLLISION,
+        "lower-fromsoft-object-collision{resolution=high,convex=rounded:0.01,motion=fixed,convex-surface=render,reach=50}",
+        "drop-fromsoft-far",
+        "fromsoft-apply-rigid-skinning",
+        "lower-fromsoft-geometry{pose=rigid,uv-tiling=keep,winding=normals,degenerates=drop,leave-out=sky+light-volume+shadow,blocker-cards=record,speedtree-frame=program}",
+        "select-lod{form=finest}",
+        "sample-fromsoft-draw-params{hour=6.5}",
+        ENVIRONMENT,
+        "lower-sekiro-reinhard",
+        RESOLVE,
+        "lower-fromsoft-materials{layers=preserve,water-colour=48,98,122,190}",
+        "bake-fromsoft-materials{max-size=2048,sample-time=0,cache=on}",
+        LIGHTS,
+        "lower-fromsoft-extras",
+        RECORDS,
+        "lower-fromsoft-irradiance",
+        "lower-fromsoft-irradiance",
+        "lower-fromsoft-effects{candela-per-power=1}",
+        "name-fromsoft-entities{game=sekiro}",
+    ]);
+    assert_eq!(
+        canonical(&everything.texts().unwrap()),
+        canonical(&everything_was)
+    );
+
+    let baked_with_sky = texts(&[
+        "lower-fromsoft-render-graph",
+        COLLISION,
+        "lower-fromsoft-object-collision{resolution=high,convex=rounded:0.01,motion=fixed,convex-surface=render,reach=50}",
+        "drop-fromsoft-far",
+        "fromsoft-apply-rigid-skinning",
+        "lower-fromsoft-geometry{pose=rigid,uv-tiling=keep,winding=normals,degenerates=drop,leave-out=light-volume+shadow,blocker-cards=record,speedtree-frame=program}",
+        "select-lod{form=finest}",
+        ENVIRONMENT,
+        "lower-sekiro-reinhard",
+        RESOLVE,
+        "bake-fromsoft-layers{max-size=512,sample-time=0}",
+        "lower-fromsoft-materials{water-colour=48,98,122,190}",
+        "bake-fromsoft-materials{max-size=2048,sample-time=0,cache=on}",
+        LIGHTS,
+        "lower-fromsoft-sky",
+        "lower-fromsoft-extras",
+        RECORDS,
+        "name-fromsoft-entities{game=sekiro}",
+    ]);
+    assert_eq!(
+        canonical(&area(bake_layers(), false, true).texts().unwrap()),
+        canonical(&baked_with_sky)
+    );
+
+    let stormveil = AreaPreparation {
+        draw_params: Some(SampleFromSoftDrawParams::new(12.).unwrap()),
+        material_bake: material_bake(false),
+        ..elden(true)
+    };
+    let stormveil_was = texts(&[
+        "lower-fromsoft-render-graph",
+        COLLISION,
+        "lower-fromsoft-object-collision{resolution=high-else-low,convex=rounded:0.01,motion=all,convex-surface=render,reach=50}",
+        "fromsoft-apply-rigid-skinning",
+        "lower-fromsoft-geometry{pose=rigid,uv-tiling=keep,winding=normals,degenerates=drop,leave-out=light-volume+shadow+billboard,blocker-cards=record,speedtree-frame=program}",
+        "select-lod{form=finest}",
+        "sample-fromsoft-draw-params{hour=12}",
+        ENVIRONMENT,
+        "lower-elden-ring-reinhard",
+        RESOLVE,
+        "lower-fromsoft-materials{layers=preserve,water-colour=48,98,122,190}",
+        "bake-fromsoft-materials{max-size=2048,sample-time=0,cache=off}",
+        LIGHTS,
+        "lower-fromsoft-sky",
+        "lower-fromsoft-extras",
+        RECORDS,
+        "name-fromsoft-entities{game=elden}",
+    ]);
+    assert_eq!(canonical(&stormveil.texts().unwrap()), canonical(&stormveil_was));
+
+    let clip = ClipPreparation {
+        game: Game::EldenRing,
+        binding: binding("c0000", "any", "source", "model-space"),
+        effects: Some(effects()),
+    };
+    let clip_was = texts(&[
+        "bind-fromsoft-animation{from=c0000 havok skeleton,to=c0000 skeleton,tolerance=0.0001,empty=model-space,absent=neutral,rate=2,root-motion=translation,clips=all,unmapped=drop,parents=any,rests=source,reparented=model-space}",
+        "lower-fromsoft-clip-events{game=elden}",
+        "lower-fromsoft-effects{candela-per-power=1}",
+        "lower-fromsoft-display-masks",
+        "lower-fromsoft-material-events{game=elden}",
+        "name-fromsoft-entities{game=elden}",
+    ]);
+    assert_eq!(canonical(&clip.texts()), canonical(&clip_was));
 }
 
 #[test]
 fn character_preparation_keeps_the_skinned_bind_pose_and_places_the_asset() {
-    let texts = character().texts();
-    let joined = texts.join(", ");
+    let prep = character();
+    let texts = prep.texts().unwrap();
+    assert_eq!(texts[0], pass_text(&prep.geometry));
     assert!(
-        joined.contains("lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program}"),
-        "{joined}"
+        !texts.iter().any(|t| t == "fromsoft-apply-rigid-skinning"),
+        "{texts:?}"
     );
-    assert!(!joined.contains("fromsoft-apply-rigid-skinning"), "{joined}");
-    assert!(!joined.contains("select-lod"), "{joined}");
-    assert!(joined.contains("lower-fromsoft-materials{layers=preserve,water-colour=48,98,122,190}"));
+    assert!(!texts.iter().any(|t| t.starts_with("select-lod")), "{texts:?}");
+    assert!(texts.contains(&pass_text(&prep.lower_materials)), "{texts:?}");
     assert_eq!(texts.last().map(String::as_str), Some("place-assets"));
     // a part's own collision is lowered onto it; the area's collision and object collision are not this read's
     assert!(
-        !joined.contains("resolve-state")
-            && !joined.contains("lower-fromsoft-collision")
-            && !joined.contains("lower-fromsoft-object-collision"),
-        "{joined}"
+        !texts.iter().any(|t| t.starts_with("resolve-state")
+            || t.starts_with("lower-fromsoft-collision")
+            || t.starts_with("lower-fromsoft-object-collision")),
+        "{texts:?}"
     );
-    assert!(joined.contains(PART_COLLISION), "{joined}");
-    let pipeline = registry().parse(&joined).expect("character preparation parses");
-    pipeline.check().expect("character preparation order");
+    assert!(texts.contains(&pass_text(&prep.part_collision)), "{texts:?}");
+    parses_and_orders(&texts);
+    let baked = character_with(bake_layers()).texts().unwrap();
+    assert!(baked.iter().any(|text| text.starts_with("bake-fromsoft-layers")));
+    parses_and_orders(&baked);
+    let preview = character_with(Materials::Preview);
     assert!(
-        CharacterPreparation {
-            materials: Materials::Bake,
-            ..character()
-        }
-        .texts()
-        .iter()
-        .any(|text| text.starts_with("bake-fromsoft-layers"))
-    );
-    assert!(
-        CharacterPreparation {
-            materials: Materials::Preview,
-            ..character()
-        }
-        .texts()
-        .iter()
-        .any(|text| text == "lower-fromsoft-materials{layers=preview,water-colour=48,98,122,190}")
+        preview
+            .texts()
+            .unwrap()
+            .contains(&pass_text(&preview.lower_materials))
     );
 }
 
 /// A character of several parts is assembled before the asset is placed; a character of one part is not assembled.
 #[test]
 fn several_parts_are_assembled_before_they_are_placed() {
-    let texts = CharacterPreparation {
+    let prep = CharacterPreparation {
         parts: 2,
         ..character()
-    }
-    .texts();
+    };
+    let texts = prep.texts().unwrap();
     let assemble = texts
         .iter()
-        .position(|t| t == ASSEMBLE_PARTS)
+        .position(|t| *t == pass_text(&prep.assembly))
         .expect("the parts are assembled");
     let place = texts
         .iter()
@@ -115,55 +463,84 @@ fn several_parts_are_assembled_before_they_are_placed() {
     assert!(
         !character()
             .texts()
+            .unwrap()
             .iter()
             .any(|t| t.starts_with("assemble-character"))
     );
 }
 
-/// Held weapons leave the body's assembly and are held after the assets are placed, at the grip given.
+/// Held weapons are left out of the body's assembly (the program states that leave-out) and held after the assets are
+/// placed, as stated; an assembly whose leave-out is not the held weapons' sources is refused.
 #[test]
 fn held_weapons_are_left_out_of_the_assembly_and_held_after_placing() {
-    let mut texts = CharacterPreparation {
-        parts: 2,
-        ..character()
-    }
-    .texts();
-    held_weapon_passes(&mut texts, &[], "one-handed");
-    assert!(!texts.iter().any(|t| t.contains("hold-fromsoft-weapons")));
-    assert!(texts.iter().any(|t| t == ASSEMBLE_PARTS));
-    let held = [
+    let held = vec![
         "parts/wp_a_0300_l".to_owned(),
         "parts/wp_a_0300_l/wp_a_0300_1_l".to_owned(),
     ];
-    held_weapon_passes(&mut texts, &held, "one-handed");
+    let hold = |grip| HoldFromSoftWeapons { grip };
+    let stated = CharacterPreparation {
+        parts: 2,
+        held: Some(HeldWeapons {
+            held: held.clone(),
+            hold: hold(Grip::OneHanded),
+        }),
+        assembly: assembly(&held),
+        ..character()
+    };
+    let texts = stated.texts().unwrap();
     let assemble = texts
         .iter()
         .find(|t| t.starts_with("assemble-character"))
         .unwrap();
     assert!(
-        assemble.ends_with(",leave-out=parts/wp_a_0300_l+parts/wp_a_0300_l/wp_a_0300_1_l}"),
+        assemble.contains("leave-out=parts/wp_a_0300_l+parts/wp_a_0300_l/wp_a_0300_1_l"),
         "{assemble}"
     );
     let place = texts.iter().position(|t| t == "place-assets").unwrap();
     assert_eq!(texts[place + 1], "hold-fromsoft-weapons{grip=one-handed}");
-    let mut texts = character().texts();
-    held_weapon_passes(&mut texts, &held, "two-handed-right");
-    assert_eq!(
-        texts.last().unwrap(),
-        "hold-fromsoft-weapons{grip=two-handed-right}"
+    parses_and_orders(&texts);
+
+    // the assembly's leave-out is the program's to state: one that is not the held weapons' is refused, either way
+    let unstated = CharacterPreparation {
+        assembly: assembly(&[]),
+        ..stated.clone()
+    };
+    let refusal = unstated.texts().unwrap_err();
+    assert!(
+        refusal.contains("held weapons") && refusal.contains("assemble-character"),
+        "{refusal}"
     );
-    // the program states them as a field
-    let stated = CharacterPreparation {
+    let unheld = CharacterPreparation {
+        held: None,
+        ..stated.clone()
+    };
+    assert!(unheld.texts().is_err());
+
+    // one part is not assembled: the weapons are held after it is placed
+    let one = CharacterPreparation {
+        parts: 1,
         held: Some(HeldWeapons {
-            held: held.to_vec(),
-            grip: "one-handed".into(),
+            held: held.clone(),
+            hold: hold(Grip::TwoHandedRight),
         }),
         ..character()
     };
     assert_eq!(
-        stated.texts().last().unwrap(),
-        "hold-fromsoft-weapons{grip=one-handed}"
+        one.texts().unwrap().last().unwrap(),
+        "hold-fromsoft-weapons{grip=two-handed-right}"
     );
+    // no weapon, no hold
+    let none = CharacterPreparation {
+        held: Some(HeldWeapons {
+            held: Vec::new(),
+            hold: hold(Grip::OneHanded),
+        }),
+        assembly: assembly(&[]),
+        ..stated
+    };
+    let texts = none.texts().unwrap();
+    assert!(!texts.iter().any(|t| t.starts_with("hold-fromsoft-weapons")));
+    assert!(!texts.iter().any(|t| t.contains("leave-out=parts/")), "{texts:?}");
 }
 
 #[test]
@@ -172,8 +549,7 @@ fn no_row_is_the_hidden_masks_form_of_the_outfit_pass() {
     assert_eq!(hidden[1], "select-fromsoft-outfit{chr=c3000,npc=none}");
     // primase reads both forms
     for texts in [&hidden, &outfit_passes("c3000", Some(30000014))] {
-        let pipeline = registry().parse(&texts.join(", ")).expect("it parses");
-        pipeline.check().expect("its order");
+        parses_and_orders(texts);
     }
     assert_eq!(
         outfit_passes("c3000", Some(30000014))[1],
@@ -184,47 +560,35 @@ fn no_row_is_the_hidden_masks_form_of_the_outfit_pass() {
 /// The outfit passes sit right after the geometry lowering, and parse and order soundly with the rest.
 #[test]
 fn the_outfit_passes_follow_the_geometry_lowering() {
-    let mut texts = character().texts();
+    let mut texts = character().texts().unwrap();
     texts.splice(1..1, outfit_passes("c3000", Some(30000000)));
     assert!(texts[0].starts_with("lower-fromsoft-geometry"), "{texts:?}");
     assert_eq!(texts[1], "raise-fromsoft-display-masks");
     assert_eq!(texts[2], "select-fromsoft-outfit{chr=c3000,npc=30000000}");
     assert_eq!(texts[3], "resolve-state");
     assert_eq!(texts.last().map(String::as_str), Some("place-assets"));
-    let pipeline = registry().parse(&texts.join(", ")).expect("it parses");
-    pipeline.check().expect("its order");
+    parses_and_orders(&texts);
 }
 
 #[test]
 fn the_animation_passes_run_after_the_model_is_lowered_and_before_it_is_placed() {
-    let binding = ClipBinding {
-        of: "c1010".into(),
-        skeleton: "c1010 skeleton".into(),
-        tolerance: "0.0001".into(),
-        absent: "neutral".into(),
-        rate: 2,
-        clips: "all".into(),
-        root_motion: "translation".into(),
-        unmapped: "drop".into(),
-        parents: "same".into(),
-        rests: "target".into(),
-        reparented: "refuse".into(),
-    };
-    let texts = CharacterPreparation {
-        animations: Some(binding),
+    let prep = CharacterPreparation {
+        animations: Some(binding("c1010", "same", "target", "refuse")),
         ..character()
-    }
-    .texts();
-    let lower = texts
+    };
+    let texts = prep.texts().unwrap();
+    let bind = texts
         .iter()
-        .position(|t| {
-            t == "bind-fromsoft-animation{from=c1010 havok skeleton,to=c1010 skeleton,tolerance=0.0001,empty=model-space,absent=neutral,rate=2,root-motion=translation,clips=all,unmapped=drop,parents=same,rests=target,reparented=refuse}"
-        })
+        .position(|t| t.starts_with("bind-fromsoft-animation"))
         .expect("the binding pass lowers and maps clips");
-    assert_eq!(texts[lower + 1], CONFIGURE_SIMULATIONS);
+    assert!(
+        texts[..bind]
+            .iter()
+            .any(|t| t.starts_with("lower-fromsoft-geometry"))
+    );
+    assert_eq!(texts[bind + 1], pass_text(&prep.simulations));
     assert_eq!(texts.last().map(String::as_str), Some("place-assets"));
-    let pipeline = registry().parse(&texts.join(", ")).expect("it parses");
-    pipeline.check().expect("its order");
+    parses_and_orders(&texts);
 }
 
 /// A dressed character's preparation: the outfit resolved right after the geometry, and the display masks, material
@@ -238,7 +602,8 @@ fn a_dressed_character_states_its_outfit_after_the_geometry_and_its_events_befor
         select_assets: vec!["wp_a_0761_l".into(), "c0000 animations".into()],
         ..character()
     }
-    .texts();
+    .texts()
+    .unwrap();
     assert_eq!(texts[0], "select-assets{names=wp_a_0761_l;c0000 animations}");
     assert!(texts[1].starts_with("lower-fromsoft-geometry"), "{texts:?}");
     assert_eq!(texts[2], "lower-fromsoft-selected-outfit");
@@ -247,31 +612,27 @@ fn a_dressed_character_states_its_outfit_after_the_geometry_and_its_events_befor
     assert_eq!(texts[n - 3], "lower-fromsoft-material-events{game=elden}");
     assert_eq!(texts[n - 2], "name-fromsoft-entities{game=elden}");
     assert_eq!(texts[n - 1], "place-assets");
-    let pipeline = registry().parse(&texts.join(", ")).expect("it parses");
-    pipeline.check().expect("its order");
+    parses_and_orders(&texts);
 }
 
 #[test]
-fn the_default_area_preparation_preserves_layers_and_resolves_state_first() {
-    let native = area(Materials::Preserve, false, true, false).texts();
-    assert_eq!(native[0], "resolve-state");
+fn an_area_that_keeps_its_layers_does_not_bake_them_and_resolves_state_first_where_asked() {
+    let native = area(Materials::Preserve, true, false);
+    let texts = native.texts().unwrap();
+    assert_eq!(texts[0], "resolve-state");
     assert!(
-        !native.iter().any(|t| t.starts_with("bake-fromsoft-layers")),
-        "the default must not bake: {native:?}"
+        !texts.iter().any(|t| t.starts_with("bake-fromsoft-layers")),
+        "keeping the layers does not bake them: {texts:?}"
     );
+    assert!(texts.contains(&pass_text(&native.lower_materials)), "{texts:?}");
     assert!(
-        native
-            .iter()
-            .any(|t| t == "lower-fromsoft-materials{layers=preserve,water-colour=48,98,122,190}"),
-        "{native:?}"
-    );
-    assert!(
-        !area(Materials::Preserve, false, false, false)
+        !area(Materials::Preserve, false, false)
             .texts()
+            .unwrap()
             .iter()
             .any(|t| t == "resolve-state")
     );
-    let baked = area(Materials::Bake, false, false, false).texts();
+    let baked = area(bake_layers(), false, false).texts().unwrap();
     assert!(baked.iter().any(|t| t.starts_with("bake-fromsoft-layers")));
     assert!(
         baked
@@ -281,105 +642,60 @@ fn the_default_area_preparation_preserves_layers_and_resolves_state_first() {
 }
 
 #[test]
-fn both_area_recipes_select_the_registered_render_graph_lowering() {
-    for recipe in [AREA_PREP, ELDEN_AREA_PREP] {
+fn every_area_preparation_lowers_the_render_graph_once_and_parses_and_orders() {
+    for prep in [
+        area(Materials::Preserve, false, false),
+        area(Materials::Preview, true, true),
+        area(bake_layers(), false, false),
+        elden(false),
+        elden(true),
+    ] {
+        let texts = prep.texts().unwrap();
         assert_eq!(
-            recipe
-                .iter()
-                .filter(|text| **text == "lower-fromsoft-render-graph")
-                .count(),
-            1
+            texts.iter().filter(|t| *t == RENDER_GRAPH).count(),
+            1,
+            "{texts:?}"
         );
+        parses_and_orders(&texts);
     }
 }
 
+/// With the sky read in, the sky is lowered after the lights, so after the environment (Elden Ring's after its tone
+/// mapping too); a geometry lowering that would leave the sky's meshes out is refused, for either game.
 #[test]
-fn the_area_preparation_parses_and_checks() {
-    let registry = registry();
-    let texts: Vec<String> = AREA_PREP
-        .iter()
-        .map(|text| match *text {
-            MATERIALS_PASS => "lower-fromsoft-materials{water-colour=48,98,122,190}".to_owned(),
-            text => text.to_owned(),
-        })
-        .collect();
-    let pipeline = registry
-        .parse(&texts.join(", "))
-        .expect("the preparation lowering's text parses");
-    pipeline.check().expect("its passes are ordered soundly");
-    assert_eq!(pipeline.passes.len(), AREA_PREP.len());
-}
-
-#[test]
-fn an_area_read_with_its_sky_keeps_the_sky_geometry_and_lowers_it_after_the_environment() {
-    let geometry = |texts: &[String]| {
-        texts
-            .iter()
-            .find(|t| t.starts_with("lower-fromsoft-geometry"))
-            .cloned()
-            .unwrap()
-    };
-    let without = area(Materials::Preserve, true, true, false).texts();
-    assert!(
-        geometry(&without).contains("leave-out=sky+light-volume+shadow"),
-        "{without:?}"
-    );
-    assert!(!without.iter().any(|t| t == SKY_PASS));
-    let with = area(Materials::Preserve, true, true, true).texts();
-    assert!(
-        geometry(&with).contains("leave-out=light-volume+shadow,"),
-        "{with:?}"
-    );
-    let environment = with.iter().position(|t| t == ENVIRONMENT_PASS).unwrap();
-    let lights = with
-        .iter()
-        .position(|t| t.starts_with("lower-fromsoft-lights"))
-        .unwrap();
-    assert_eq!(with[lights + 1], SKY_PASS);
-    assert!(environment < lights, "{with:?}");
-    let pipeline = registry()
-        .parse(&with.join(", "))
-        .expect("the preparation parses");
-    pipeline.check().expect("the preparation's order");
-}
-
-/// Elden Ring's sky (its sky map's weather assets) is read as Sekiro's is: the sky's meshes kept, what else the
-/// geometry lowering leaves out still out, and the sky lowered after the environment.
-#[test]
-fn an_elden_ring_area_read_with_its_sky_keeps_the_sky_geometry_and_lowers_it_after_the_environment() {
-    let geometry = |texts: &[String]| {
-        texts
-            .iter()
-            .find(|t| t.starts_with("lower-fromsoft-geometry"))
-            .cloned()
-            .unwrap()
-    };
-    let without = elden(false).texts();
-    assert!(
-        geometry(&without).contains("leave-out=sky+light-volume+shadow+billboard"),
-        "{without:?}"
-    );
-    assert!(!without.iter().any(|t| t == SKY_PASS));
-    let with = elden(true).texts();
-    assert!(
-        geometry(&with).contains("leave-out=light-volume+shadow+billboard,"),
-        "{with:?}"
-    );
-    let environment = with.iter().position(|t| t == ENVIRONMENT_PASS).unwrap();
-    let tone = with
-        .iter()
-        .position(|t| t == "lower-elden-ring-reinhard")
-        .unwrap();
-    let lights = with
-        .iter()
-        .position(|t| t.starts_with("lower-fromsoft-lights"))
-        .unwrap();
-    assert_eq!(with[lights + 1], SKY_PASS);
-    assert!(environment < tone && tone < lights, "{with:?}");
-    let pipeline = registry()
-        .parse(&with.join(", "))
-        .expect("the preparation parses");
-    pipeline.check().expect("the preparation's order");
+fn an_area_read_with_its_sky_lowers_it_after_the_environment_and_keeps_its_meshes() {
+    for (with, without) in [
+        (
+            area(Materials::Preserve, true, true),
+            area(Materials::Preserve, true, false),
+        ),
+        (elden(true), elden(false)),
+    ] {
+        assert!(!without.texts().unwrap().iter().any(|t| t == SKY_PASS));
+        let texts = with.texts().unwrap();
+        let at = |pass: &str| texts.iter().position(|t| t.starts_with(pass)).unwrap();
+        let lights = at("lower-fromsoft-lights");
+        assert_eq!(texts[lights + 1], SKY_PASS);
+        assert!(at("lower-fromsoft-environment{") < lights, "{texts:?}");
+        if with.game == AreaGame::EldenRing {
+            let tone = at("lower-elden-ring-reinhard");
+            assert!(
+                at("lower-fromsoft-environment{") < tone && tone < lights,
+                "{texts:?}"
+            );
+        }
+        parses_and_orders(&texts);
+        // the sky's meshes left out while the sky is lowered: the program states one or the other
+        let refused = AreaPreparation {
+            geometry: without.geometry.clone(),
+            ..with.clone()
+        };
+        let refusal = refused.texts().unwrap_err();
+        assert!(
+            refusal.contains("sky") && refusal.contains("leave-out"),
+            "{refusal}"
+        );
+    }
 }
 
 #[test]
@@ -394,46 +710,43 @@ fn the_shader_binding_is_resolved_once_before_the_first_pass_that_consumes_the_m
         assert_eq!(at.len(), 1, "{text} in {texts:?}");
         at[0]
     };
-    let game = area(Materials::Preserve, true, true, false).texts();
-    assert!(position(&game, "resolve-fromsoft-shaders") < position(&game, "lower-fromsoft-materials"));
-    let baked = area(Materials::Bake, false, true, false).texts();
+    let kept = area(Materials::Preserve, true, false).texts().unwrap();
+    assert!(position(&kept, "resolve-fromsoft-shaders") < position(&kept, "lower-fromsoft-materials"));
+    let baked = area(bake_layers(), true, false).texts().unwrap();
     assert!(position(&baked, "resolve-fromsoft-shaders") < position(&baked, "bake-fromsoft-layers"));
-    let neither = area(Materials::Preserve, false, true, false).texts();
-    assert!(neither.iter().any(|t| t.starts_with("resolve-fromsoft-shaders")));
-    for texts in [&game, &baked] {
-        let pipeline = registry()
-            .parse(&texts.join(", "))
-            .expect("the preparation parses");
-        pipeline.check().expect("the preparation's order");
+    let character = character_with(bake_layers()).texts().unwrap();
+    assert!(position(&character, "resolve-fromsoft-shaders") < position(&character, "bake-fromsoft-layers"));
+    for texts in [&kept, &baked, &character] {
+        parses_and_orders(texts);
     }
 }
 
 /// An area's preparation states the hour of the day before the first pass that reads it: the environment's lowering
 /// (and the draw-param sample, where an hour is asked for) before the shader resolution and every bake, for either
-/// game, with or without the layer bake, the Game shader view and the sky. A bake refuses a program that reads the
-/// hour where none is stated, so a bake before the environment would refuse Elden Ring's sky.
+/// game, with or without the layer bake and the sky. A bake refuses a program that reads the hour where none is
+/// stated, so a bake before the environment would refuse Elden Ring's sky.
 #[test]
 fn an_area_preparation_states_the_hour_before_the_first_bake() {
     for sekiro in [true, false] {
-        for (bake_layers, game_shaders, sky, hour) in [
-            (false, false, false, None),
-            (true, false, true, None),
-            (false, true, true, Some(6.5)),
-            (true, true, false, Some(21.0)),
+        for (bake, sky, hour) in [
+            (false, false, None),
+            (true, true, None),
+            (false, true, Some(6.5)),
+            (true, false, Some(21.0)),
         ] {
             let base = if sekiro {
-                let materials = if bake_layers {
-                    Materials::Bake
-                } else {
-                    Materials::Preserve
-                };
-                area(materials, game_shaders, false, sky)
+                area(if bake { bake_layers() } else { Materials::Preserve }, false, sky)
             } else {
                 elden(sky)
             };
-            let texts = AreaPreparation { hour, ..base }.texts();
+            let texts = AreaPreparation {
+                draw_params: hour.map(|h| SampleFromSoftDrawParams::new(h).unwrap()),
+                ..base
+            }
+            .texts()
+            .unwrap();
             let at = |pass: &str| texts.iter().position(|t| t.starts_with(pass));
-            let environment = at("lower-fromsoft-environment").expect("the environment is lowered");
+            let environment = at("lower-fromsoft-environment{").expect("the environment is lowered");
             let readers: Vec<usize> = texts
                 .iter()
                 .enumerate()
@@ -448,10 +761,7 @@ fn an_area_preparation_states_the_hour_before_the_first_bake() {
                     "{texts:?}"
                 );
             }
-            let pipeline = registry()
-                .parse(&texts.join(", "))
-                .expect("the preparation parses");
-            pipeline.check().expect("the preparation's order");
+            parses_and_orders(&texts);
         }
     }
 }
@@ -460,66 +770,112 @@ fn an_area_preparation_states_the_hour_before_the_first_bake() {
 #[test]
 fn an_area_names_its_entities_for_its_game() {
     assert_eq!(
-        area(Materials::Preserve, false, false, false)
+        area(Materials::Preserve, false, false)
             .texts()
+            .unwrap()
             .last()
             .unwrap(),
         "name-fromsoft-entities{game=sekiro}"
     );
     assert_eq!(
-        elden(false).texts().last().unwrap(),
+        elden(false).texts().unwrap().last().unwrap(),
         "name-fromsoft-entities{game=elden}"
     );
 }
 
-/// The bake's memo store is a stated choice.
+/// The bake's memo store is the program's, stated in the bake it states.
 #[test]
 fn the_bake_cache_is_a_stated_choice() {
-    let on = elden(false).texts();
-    assert!(
-        on.iter()
-            .any(|t| t == "bake-fromsoft-materials{max-size=2048,sample-time=0,cache=on}")
-    );
+    let on = elden(false).texts().unwrap();
+    assert!(on.contains(&"bake-fromsoft-materials{cache=on,max-size=2048,sample-time=0}".to_owned()));
     let off = AreaPreparation {
-        bake_cache: Cache::Off,
+        material_bake: material_bake(false),
         ..elden(false)
     }
-    .texts();
+    .texts()
+    .unwrap();
+    assert!(off.contains(&"bake-fromsoft-materials{cache=off,max-size=2048,sample-time=0}".to_owned()));
+    parses_and_orders(&off);
+}
+
+/// Two choices that state one thing differently are refused, by name, for the program to state the consistent
+/// value: the materials' `layers` and the materials choice, and a geometry that applies the UV tiling the surface
+/// bake reads as authored.
+#[test]
+fn conflicting_choices_are_refused_by_name() {
+    for (materials, layers) in [
+        (Materials::Preserve, None),
+        (Materials::Preserve, Some(Layers::Preview)),
+        (Materials::Preview, Some(Layers::Preserve)),
+        (bake_layers(), Some(Layers::Preserve)),
+    ] {
+        let lower = LowerFromSoftMaterials::new(layers, WATER);
+        let refusal = AreaPreparation {
+            lower_materials: lower,
+            ..area(materials, false, false)
+        }
+        .texts()
+        .unwrap_err();
+        assert!(
+            refusal.contains("lower-fromsoft-materials") && refusal.starts_with("materials "),
+            "{refusal}"
+        );
+        let refusal = CharacterPreparation {
+            lower_materials: lower,
+            ..character_with(materials)
+        }
+        .texts()
+        .unwrap_err();
+        assert!(refusal.contains("lower-fromsoft-materials"), "{refusal}");
+    }
+    let tiled = |geometry: &LowerFromSoftGeometry| LowerFromSoftGeometry {
+        uv_tiling: Tiling::Apply,
+        ..geometry.clone()
+    };
+    let sekiro = area(Materials::Preserve, false, false);
+    let refusal = AreaPreparation {
+        geometry: tiled(&sekiro.geometry),
+        ..sekiro
+    }
+    .texts()
+    .unwrap_err();
     assert!(
-        off.iter()
-            .any(|t| t == "bake-fromsoft-materials{max-size=2048,sample-time=0,cache=off}")
+        refusal.contains("uv-tiling=apply") && refusal.contains("bake-fromsoft-materials"),
+        "{refusal}"
     );
-    let pipeline = registry().parse(&off.join(", ")).expect("the preparation parses");
-    pipeline.check().expect("the preparation's order");
+    let character = character();
+    assert!(
+        CharacterPreparation {
+            geometry: tiled(&character.geometry),
+            ..character
+        }
+        .texts()
+        .is_err()
+    );
+    // Elden Ring's materials' lowering states its own layers: no materials choice to agree with
+    let elden_preview = AreaPreparation {
+        lower_materials: lower_materials(Materials::Preview),
+        ..elden(false)
+    };
+    assert!(elden_preview.texts().is_ok());
 }
 
 #[test]
 fn a_clip_preparation_binds_the_animations_then_lowers_the_events() {
     let preparation = ClipPreparation {
         game: Game::EldenRing,
-        binding: ClipBinding {
-            of: "c0000".into(),
-            skeleton: "c0000 skeleton".into(),
-            tolerance: "0.0001".into(),
-            absent: "neutral".into(),
-            rate: 1,
-            clips: "a000_000000".into(),
-            root_motion: "leave".into(),
-            unmapped: "drop".into(),
-            parents: "any".into(),
-            rests: "source".into(),
-            reparented: "model-space".into(),
-        },
-        effects: true,
+        binding: binding("c0000", "any", "source", "model-space"),
+        effects: Some(effects()),
     };
     let texts = preparation.texts();
-    assert!(texts[0].starts_with("bind-fromsoft-animation{from=c0000 havok skeleton,to=c0000 skeleton"));
+    assert_eq!(texts[0], pass_text(&preparation.binding));
     assert_eq!(texts[1], "lower-fromsoft-clip-events{game=elden}");
     assert_eq!(texts[2], "lower-fromsoft-effects{candela-per-power=1}");
     assert_eq!(texts[texts.len() - 3], "lower-fromsoft-display-masks");
     assert_eq!(texts.last().unwrap(), "name-fromsoft-entities{game=elden}");
+    parses_and_orders(&texts);
     let without = ClipPreparation {
-        effects: false,
+        effects: None,
         ..preparation
     }
     .texts();
