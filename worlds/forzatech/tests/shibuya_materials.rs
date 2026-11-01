@@ -84,7 +84,7 @@ fn shibuya_materials() {
     println!("approximations: {:#?}", log.approximations);
     println!("omitted: {:#?}", log.omitted);
 
-    // every family with a rule is lowered whole, bar the foliage impostor
+    // every family with a rule is lowered whole
     let summary = |m: &BTreeMap<String, (u64, u64)>| -> Vec<(String, u64, u64)> {
         m.iter().map(|(f, (n, t))| (f.clone(), *n, *t)).collect()
     };
@@ -100,12 +100,12 @@ fn shibuya_materials() {
                 ("projection_lod".to_owned(), 59, 10_002),
                 ("pylon_cables".to_owned(), 2, 532),
                 ("uber_branch".to_owned(), 6, 8_213),
-                ("uber_foliage".to_owned(), 17, 13_672),
+                ("uber_foliage".to_owned(), 18, 13_674),
                 ("uber_roaddecal".to_owned(), 2, 146),
                 ("window_linecastroom".to_owned(), 51, 78),
             ]
         );
-        assert_eq!(unlowered["uber_foliage"], (1, 2));
+        assert!(!unlowered.contains_key("uber_foliage"));
     }
     // every window pane shows its room as a colour, and says so by name
     let room = "room drawn as its back wall's mean colour (no parallax, furniture and per-placement room extents left out)";

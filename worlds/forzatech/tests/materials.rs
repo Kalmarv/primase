@@ -7,7 +7,7 @@
 )]
 
 use primase_core::pass::{Pass, PassLog};
-use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform};
+use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform, Wrap};
 use primase_core::{
     ColorSpace, DrawLayer, DrawOrder, Entity, Mesh, Name, NormalGreen, NormalZ, Primitive, TexFormat,
     TexRole, Texture, Topology, World,
@@ -362,7 +362,7 @@ fn foliage_bush_roughness_normal_occlusion_and_alpha_step() {
 }
 
 #[test]
-fn foliage_tree_has_no_normal_and_an_impostor_is_left() {
+fn foliage_tree_has_no_normal_and_an_impostor_is_one_horizon_frame() {
     let mut world = World::new();
     let normal = texture(&mut world, "normal", ColorSpace::Linear, [128, 128, 255, 255]);
     let tree = world.spawn();
@@ -373,11 +373,19 @@ fn foliage_tree_has_no_normal_and_an_impostor_is_left() {
         billboard,
         foliage(vec![parameter("Billboard", 32, Value::Int(1))], 1),
     );
+    let atlas = texture(&mut world, "atlas", ColorSpace::Srgb, [90, 120, 60, 255]);
     let impostor = world.spawn();
     world.insert(
         impostor,
-        foliage(vec![parameter("Impostor", 33, Value::Int(1))], 1),
+        foliage(
+            vec![
+                parameter("Impostor", 33, Value::Int(1)),
+                parameter("FramesXY_Colour", 34, Value::Int(4)),
+            ],
+            1,
+        ),
     );
+    world.insert(impostor, MaterialTextures(vec![bound(1, Some(atlas))]));
     let mut log = PassLog::default();
     LowerForzaMaterials.run(&mut world, &mut log).unwrap();
 
@@ -399,12 +407,32 @@ fn foliage_tree_has_no_normal_and_an_impostor_is_left() {
         log.approximations["billboard writes no roughness or normal: rough, the vertex normal"],
         1
     );
-    // an impostor is an atlas of views chosen by the view direction: no static material
-    assert!(!world.has::<PbrMaterial>(impostor));
+    // an impostor is an atlas of views chosen by the view direction: drawn as the atlas's corner frame (`u` and `v`
+    // 1, a view from the horizon) of 4 x 4, alpha-tested, on a double-sided card, the other frames' maps left out
+    let card = world.get::<PbrMaterial>(impostor).unwrap();
+    let base = card.base_color_texture.unwrap();
     assert_eq!(
-        log.omitted["materials of shader family uber_foliage billboard or impostor left unlowered"],
+        base.transform,
+        Some(UvTransform {
+            offset: [0.75, 0.75],
+            scale: [0.25, 0.25],
+            rotation: 0.0
+        })
+    );
+    assert_eq!(base.wrap, [Wrap::Clamp; 2]);
+    assert!(card.double_sided);
+    assert!(matches!(card.alpha_mode, AlphaMode::Mask { .. }));
+    assert!(card.occlusion_texture.is_none() && card.normal_texture.is_none());
+    assert_eq!(
+        log.approximations["impostor drawn as one fixed horizon frame (no view selection, blend or depth march)"],
         1
     );
+    assert_eq!(
+        log.approximations["impostor normal and roughness frames left out: rough, the vertex normal"],
+        1
+    );
+    assert_eq!(log.approximations["impostor occlusion frames left out"], 1);
+    assert!(!log.omitted.keys().any(|k| k.contains("uber_foliage")));
 }
 
 #[test]

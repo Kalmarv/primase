@@ -21,10 +21,9 @@
 //!
 //! `tests/shibuya_materials.rs` runs the pass on every 20th prototype of the box (x -1550..-1100, z -5000..-4566.67,
 //! summer: 77 prototypes, 90,430 shaded triangles). Lowered (materials, triangles): `environment` 758, 55,464 (61.3%);
-//! `projection_lod` 59, 10,002; `uber_foliage` 17, 13,672; `uber_branch` 6, 8,213; `environmentdeferreddecal` 70, 1,549;
+//! `projection_lod` 59, 10,002; `uber_foliage` 18, 13,674; `uber_branch` 6, 8,213; `environmentdeferreddecal` 70, 1,549;
 //! `uber_roaddecal` 2, 146; `pylon_cables` 2, 532; `environment_signage` 88, 520; `glass` 8, 188;
-//! `window_linecastroom` 51, 78; `emissiveonly` 2, 64: 90,428 of the box's 90,430 triangles (99.998%; the two left are
-//! a foliage impostor). Each lowered material passes `pbr.material`'s own verification, and the decal families alone
+//! `window_linecastroom` 51, 78; `emissiveonly` 2, 64: every one of the box's 90,430 triangles. Each lowered material passes `pbr.material`'s own verification, and the decal families alone
 //! have a draw order (the decal layer, no depth write).
 //!
 //! The `environment` rule packs 85 distinct RoughMetAoPor maps and makes normal maps of 83 distinct textures (7 more,
@@ -55,8 +54,8 @@
 //!
 //! The surface families (`environment_signage`, `glass`, `window_linecastroom`, `pylon_cables`, `emissiveonly`, and in
 //! the whole box `anim_flag`, `anim_ledflipbookpanel` and `diff1`) each document their evidence and what they leave out in
-//! their own module. Left unlowered, with no rule yet: the `uber_foliage` impostor, 1 material and 2 triangles (a
-//! view-selected atlas of directions has no static material form). The normal maps are made in `NormalZ::Rebuild`:
+//! their own module. Every family the box holds has a rule (the `uber_foliage` impostor, 1 material and 2
+//! triangles, is drawn as one fixed horizon frame of its atlas of views, named). The normal maps are made in `NormalZ::Rebuild`:
 //! `normalize-normals` converts them to glTF's before a writer.
 //!
 //! The windows' room is drawn as one colour: the mean of the back wall of the atlas cells a material's placements use,
@@ -594,7 +593,7 @@ impl Pass for LowerForzaMaterials {
                 Some("window_linecastroom") => Some(lowering.window_linecastroom(world, *e, m, log)?),
                 Some("pylon_cables") => Some(lowering.pylon_cables(world, *e, m, log)?),
                 Some("environment_signage") => Some(lowering.environment_signage(world, *e, m, log)?),
-                Some("uber_foliage") => lowering.uber_foliage(world, *e, m, log)?,
+                Some("uber_foliage") => Some(lowering.uber_foliage(world, *e, m, log)?),
                 Some("uber_branch") => lowering.uber_branch(world, *e, m, log)?,
                 Some("projection_lod") => lowering.projection_lod(world, *e, m, log)?,
                 Some("uber_roaddecal") => lowering.uber_roaddecal(world, *e, m, log)?,
@@ -608,7 +607,6 @@ impl Pass for LowerForzaMaterials {
                     continue;
                 }
                 let name = match family {
-                    Some("uber_foliage") => "uber_foliage billboard or impostor",
                     Some("uber_branch") => "uber_branch with a second set of maps",
                     Some("environmentdeferreddecal") => "environmentdeferreddecal projected",
                     other => other.unwrap_or("no shader family"),
