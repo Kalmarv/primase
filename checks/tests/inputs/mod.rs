@@ -123,7 +123,7 @@ primase_testdata::inputs! {
         Query::Oracle(OracleSet::Baseline, Game::Sekiro, "scene") => {
             status: Live,
             gate: true,
-            about: r#"our earlier exporter's skate-scene folder of an area: scene.json (region, materials), its collision tables (a regression baseline, not an independent reference) and textures; checks/tests/web_texture_decode.rs, worlds/fromsoft/tests/material_assignments.rs, shadow_census.rs"#,
+            about: r#"our earlier exporter's skate-scene folder of an area: scene.json (region, materials), its collision tables (a regression baseline, not an independent reference) and textures; checks/tests/texture_decode.rs, worlds/fromsoft/tests/material_assignments.rs, shadow_census.rs"#,
             source: r#"regression baseline: our earlier C# exporter's scene of the area, not an independent reference; placements are checked against the SoulsFormats dump instead"#,
         },
         Query::Oracle(OracleSet::Uxm, Game::Sekiro, "dictionary.txt") => {

@@ -1,6 +1,8 @@
 //! Meshes as accessors: [`Buffers`], the vertex and index encoding every mesh writer shares, and [`encode_mesh`], one
 //! mesh as a GLB of its own.
 
+use std::collections::BTreeMap;
+
 use primase_core::json::{JsonError, f32s_value};
 use primase_core::{Mesh, Primitive, Semantic, Stream, Topology};
 use serde_json::{Map, Value, json};
@@ -39,7 +41,9 @@ pub struct PrimitiveAccessors {
     pub indices: Option<usize>,
     /// The primitive's `mode`, `None` for triangles (glTF's default).
     pub mode: Option<u32>,
-    /// Streams not written, by glTF attribute name: skin attributes (`JOINTS_n`, `WEIGHTS_n`), which need a skin.
+    /// Streams not written, by name: skin attributes (`JOINTS_n`, `WEIGHTS_n`), which need a skin, and the streams glTF
+    /// has no attribute for: a tangent set past the first (`tangent set n`; glTF has one `TANGENT`) and a shader's raw
+    /// per-vertex inputs (`shader input n`).
     pub skipped: Vec<String>,
 }
 
@@ -118,25 +122,23 @@ impl Buffers {
                     self.floats(bytemuck::cast_slice(v), count, ElementType::Vec3, None)
                         .map_err(number)?,
                 ),
-                (Semantic::Tangent(n), Stream::F32x4(v)) => (
-                    // Primase's own attribute for the further tangent sets: `_TANGENT<n>` belongs to whatever
-                    // application wrote it, and the reader would otherwise read a foreign one as our tangent set.
-                    if *n == 0 {
-                        "TANGENT".to_owned()
-                    } else {
-                        format!("_PRIMASE_TANGENT{n}")
-                    },
+                (Semantic::Tangent(0), Stream::F32x4(v)) => (
+                    "TANGENT".to_owned(),
                     self.floats(bytemuck::cast_slice(v), count, ElementType::Vec4, None)
                         .map_err(number)?,
                 ),
+                // glTF has one tangent set and no attribute for a shader's own inputs
+                (Semantic::Tangent(n), Stream::F32x4(_)) => {
+                    skipped.push(format!("tangent set {n}"));
+                    continue;
+                }
+                (Semantic::ShaderInput(n), Stream::F32x4(_)) => {
+                    skipped.push(format!("shader input {n}"));
+                    continue;
+                }
                 (Semantic::TexCoord(n), Stream::F32x2(v)) => (
                     format!("TEXCOORD_{n}"),
                     self.floats(bytemuck::cast_slice(v), count, ElementType::Vec2, None)
-                        .map_err(number)?,
-                ),
-                (Semantic::ShaderInput(n), Stream::F32x4(v)) => (
-                    format!("_SHADERINPUT{n}"),
-                    self.floats(bytemuck::cast_slice(v), count, ElementType::Vec4, None)
                         .map_err(number)?,
                 ),
                 (Semantic::Color(n), Stream::F32x3(v)) => (
@@ -284,11 +286,21 @@ impl Buffers {
     }
 }
 
-/// One mesh as a GLB of its own, named `name`: its primitives (materials ignored, every stream written, `COLOR_0`
-/// included) as mesh 0, drawn by a node at the origin under a group node named like it, as the glTF writer writes an
-/// unplaced prototype whose primitives have no material. Skin streams are left out (glTF needs a skin for them).
+/// One mesh encoded as a GLB of its own ([`encode_mesh`]), and what the GLB leaves out of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EncodedMesh {
+    pub glb: Vec<u8>,
+    /// The streams not written, by name ([`PrimitiveAccessors::skipped`]), each with the number of primitives it was
+    /// left out of.
+    pub skipped: BTreeMap<String, u64>,
+}
+
+/// One mesh as a GLB of its own, named `name`: its primitives (materials ignored, `COLOR_0` included) as mesh 0,
+/// drawn by a node at the origin under a group node named like it, as the glTF writer writes an unplaced prototype
+/// whose primitives have no material. Skin streams are left out (glTF needs a skin for them), and so are the streams
+/// glTF has no attribute for; [`EncodedMesh::skipped`] names each, for the caller to report.
 /// Refuses a mesh without primitives or with a primitive glTF can't hold ([`Buffers::primitive`]), naming it.
-pub fn encode_mesh(name: &str, mesh: &Mesh) -> Result<Vec<u8>> {
+pub fn encode_mesh(name: &str, mesh: &Mesh) -> Result<EncodedMesh> {
     if mesh.primitives().is_empty() {
         return Err(Error::Invalid {
             item: "meshes[0]".into(),
@@ -297,11 +309,15 @@ pub fn encode_mesh(name: &str, mesh: &Mesh) -> Result<Vec<u8>> {
     }
     let mut buffers = Buffers::default();
     let mut primitives = Vec::with_capacity(mesh.primitives().len());
+    let mut skipped = BTreeMap::new();
     for (i, prim) in mesh.primitives().iter().enumerate() {
         let a = buffers.primitive(prim, true).map_err(|detail| Error::Invalid {
             item: format!("meshes[0].primitives[{i}]"),
             detail,
         })?;
+        for name in a.skipped {
+            *skipped.entry(name).or_default() += 1;
+        }
         let mut p = Map::new();
         let attributes: Map<String, Value> = a.attributes.into_iter().map(|(n, i)| (n, json!(i))).collect();
         p.insert("attributes".into(), Value::Object(attributes));
@@ -334,7 +350,8 @@ pub fn encode_mesh(name: &str, mesh: &Mesh) -> Result<Vec<u8>> {
     root.insert("accessors".into(), Value::Array(buffers.accessors));
     root.insert("bufferViews".into(), Value::Array(buffers.views));
     root.insert("buffers".into(), json!([{"byteLength": buffers.bin.len()}]));
-    Document::new(Value::Object(root), buffers.bin).to_glb()
+    let glb = Document::new(Value::Object(root), buffers.bin).to_glb()?;
+    Ok(EncodedMesh { glb, skipped })
 }
 
 fn stream_kind(s: &Stream) -> &'static str {

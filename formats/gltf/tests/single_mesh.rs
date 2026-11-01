@@ -85,7 +85,7 @@ fn generator(doc: &mut Document) -> Value {
 }
 
 fn assert_same(name: &str, mesh: &Mesh) {
-    let mut ours = Document::parse(&encode_mesh(name, mesh).unwrap()).unwrap();
+    let mut ours = Document::parse(&encode_mesh(name, mesh).unwrap().glb).unwrap();
     let mut theirs = Document::parse(&written(name, mesh).unwrap()).unwrap();
     let version = env!("CARGO_PKG_VERSION");
     assert_eq!(generator(&mut ours), format!("primase-glb {version}"));

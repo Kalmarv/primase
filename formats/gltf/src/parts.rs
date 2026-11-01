@@ -10,11 +10,11 @@ use std::path::PathBuf;
 
 use primase_core::convert::{Finished, Notice, NoticeKind, Writer};
 use primase_core::pass::Target;
-use primase_core::state::{Condition, PrimitiveCondition, StateAxis, StateOverride};
+use primase_core::state::{Condition, PrimitiveCondition, StateOverride};
 use primase_core::{
-    Asset, Attachment, Clip, ClipBinding, Component, Entity, Instance, Light, Lods, MaterialVariants, Mesh,
-    MeshFile, MorphWeights, Morphs, Name, RigInstance, RigPose, Skeleton, Skin, SkinInstance, Sockets,
-    Source, Texture, TextureFile, Tile, Transform, TransformKind, World, pbr::PbrMaterial,
+    Asset, Clip, ClipBinding, Component, Entity, Instance, Light, Lods, MaterialVariants, Mesh, MeshFile,
+    MorphWeights, Morphs, Name, RigInstance, RigPose, Skeleton, Skin, SkinInstance, Source, Texture,
+    TextureFile, Tile, Transform, TransformKind, World, pbr::PbrMaterial,
 };
 
 use crate::{WriteOptions, WriteReport, write_file};
@@ -27,20 +27,7 @@ use crate::{WriteOptions, WriteReport, write_file};
 /// Havok cloth): a conversion reports it as not written, and the writer counts it (see [`crate::write`]). A layered
 /// material is drawn only as the `pbr.material` a pass before the writer states for it.
 pub fn target() -> Target {
-    target_for(false)
-}
-
-/// What the preview writer writes ([`crate::preview::PreviewParts`]): [`target`]'s rules, except that the state a
-/// preview leaves unresolved is legal, since the manifest carries it (axes, conditions on placements and on an
-/// asset's parts, per-primitive conditions and overrides), and so is what the manifest states beside the glTF: the
-/// assets (an asset root's source its id), attachments and sockets.
-pub fn preview_target() -> Target {
-    target_for(true)
-}
-
-fn target_for(preview: bool) -> Target {
-    let state = |t: Target, name: &str| if preview { t.legal(name) } else { t.illegal(name) };
-    let t = Target::new("gltf")
+    Target::new("gltf")
         .check::<Transform>("no transform sheared (bake-nonrigid first)", |t| {
             t.classify() != TransformKind::Sheared
         })
@@ -63,29 +50,10 @@ fn target_for(preview: bool) -> Target {
         .legal(Morphs::NAME)
         .legal(MorphWeights::NAME)
         .legal(Clip::NAME)
-        .legal(ClipBinding::NAME);
-    let t = state(t, Condition::NAME);
-    let t = state(t, PrimitiveCondition::NAME);
-    let t = state(t, StateOverride::NAME);
-    if preview {
-        t.legal(StateAxis::NAME)
-            .legal(Asset::NAME)
-            .legal(Attachment::NAME)
-            .legal(Sockets::NAME)
-            .covered(Source::NAME, "an asset root's id in the manifest", |w, e| {
-                w.has::<Asset>(e)
-            })
-    } else {
-        t
-    }
-}
-
-/// What a part's consumer carries beyond the glTF (the preview manifest), by component name and count: on entities the
-/// glTF does not write (`unwritten`) and on those it writes (`beside`), neither told as left out.
-#[derive(Debug, Default)]
-pub(crate) struct Carried {
-    pub(crate) unwritten: BTreeMap<&'static str, u64>,
-    pub(crate) beside: BTreeMap<&'static str, u64>,
+        .legal(ClipBinding::NAME)
+        .illegal(Condition::NAME)
+        .illegal(PrimitiveCondition::NAME)
+        .illegal(StateOverride::NAME)
 }
 
 /// One GLB per part, into a folder (see the module documentation), each written as [`crate::write_file`] writes a
@@ -99,25 +67,16 @@ pub struct GlbParts {
     files: Vec<(String, u64)>,
     /// What every part left out: (kind, reason) -> (count, files).
     omitted: BTreeMap<(NoticeKind, String), (u64, Vec<String>)>,
-    /// What a consumer of the files carries elsewhere (the preview manifest), per part, not told as left out.
-    carried: Option<fn(&World) -> Carried>,
 }
 
 impl GlbParts {
-    /// Parts written into `folder` (made if it is not there) with `options`, which may not hold a selection (a tiled
-    /// writer's: a part is written whole).
+    /// Parts written into `folder` (made if it is not there) with `options`.
     #[allow(
         clippy::disallowed_methods,
         reason = "writer I/O: makes the folder the files are written into"
     )]
     pub fn new(folder: impl Into<PathBuf>, options: WriteOptions) -> crate::Result<GlbParts> {
         let folder = folder.into();
-        if options.selection.is_some() {
-            return Err(crate::Error::Invalid {
-                item: "glb parts".into(),
-                detail: "a selection is a tiled writer's; each part is written whole".into(),
-            });
-        }
         std::fs::create_dir_all(&folder).map_err(|source| crate::Error::Io {
             path: folder.clone(),
             source,
@@ -127,23 +86,11 @@ impl GlbParts {
             options,
             files: Vec::new(),
             omitted: BTreeMap::new(),
-            carried: None,
         })
     }
 
-    /// Components carried elsewhere than in the glTF (`carried` counts them per part, by name), so not told as left
-    /// out.
-    pub(crate) fn carrying(mut self, carried: fn(&World) -> Carried) -> GlbParts {
-        self.carried = Some(carried);
-        self
-    }
-
-    /// Write one part (named as the module documentation says) and take what it left out into the totals: its file
-    /// name and the writer's report, which says where each thing is in the file.
-    pub(crate) fn write_part(
-        &mut self,
-        part: &World,
-    ) -> primase_core::convert::Result<(String, WriteReport)> {
+    /// Write one part (named as the module documentation says) and take what it left out into the totals.
+    fn write_part(&mut self, part: &World) -> primase_core::convert::Result<()> {
         let name = file_name(part, self.files.len());
         if self.files.iter().any(|(f, _)| *f == name) {
             return Err(format!(
@@ -151,21 +98,7 @@ impl GlbParts {
             )
             .into());
         }
-        let mut report = write_file(part, &self.options, &self.folder.join(&name))?;
-        let carried = self.carried.map(|c| c(part)).unwrap_or_default();
-        for (told, carried) in [
-            (&mut report.components_unwritten, &carried.unwritten),
-            (&mut report.components_without_form, &carried.beside),
-        ] {
-            for (&name, &n) in carried {
-                if let Some(left) = told.get_mut(name) {
-                    *left = left.saturating_sub(n);
-                    if *left == 0 {
-                        told.remove(name);
-                    }
-                }
-            }
-        }
+        let report = write_file(part, &self.options, &self.folder.join(&name))?;
         for (kind, reason, n) in omissions(&report, self.options.include_unplaced) {
             let (count, files) = self.omitted.entry((kind, reason)).or_default();
             *count += n;
@@ -173,13 +106,8 @@ impl GlbParts {
                 files.push(name.clone());
             }
         }
-        self.files.push((name.clone(), report.glb_bytes));
-        Ok((name, report))
-    }
-
-    /// Each file written so far, its bytes, in order.
-    pub(crate) fn files(&self) -> &[(String, u64)] {
-        &self.files
+        self.files.push((name, report.glb_bytes));
+        Ok(())
     }
 }
 
@@ -218,7 +146,7 @@ fn file_name(part: &World, ordinal: usize) -> String {
 /// What `report` says the writer left out, chose or drew approximately, by reason (none with a count of 0):
 /// `include_unplaced` tells whether unplaced prototypes were written.
 fn omissions(report: &WriteReport, include_unplaced: bool) -> Vec<(NoticeKind, String, u64)> {
-    use NoticeKind::{Approximation, Selection, Unsupported};
+    use NoticeKind::{Selection, Unsupported};
     let mut out: Vec<(NoticeKind, String, u64)> = vec![
         (
             Unsupported,
@@ -260,11 +188,6 @@ fn omissions(report: &WriteReport, include_unplaced: bool) -> Vec<(NoticeKind, S
             Unsupported,
             "primitives with no material: glTF's default material".into(),
             report.primitives_without_material,
-        ),
-        (
-            Approximation,
-            "primitives lacking the vertex attribute their material reads: they render as its host".into(),
-            report.primitives_without_material_attribute,
         ),
         (
             Unsupported,
@@ -346,7 +269,10 @@ fn omissions(report: &WriteReport, include_unplaced: bool) -> Vec<(NoticeKind, S
         )
     });
     by(&mut out, &report.streams_skipped, &|k| {
-        format!("{k} vertex streams not written: skin attributes of a mesh drawn without its skin")
+        format!(
+            "{k} vertex streams not written (a skin attribute of a mesh drawn without its skin, or a stream glTF has \
+             no attribute for)"
+        )
     });
     by(&mut out, &report.components_without_form, &|k| {
         format!("{k} components without a glTF form, not written")
@@ -367,7 +293,7 @@ impl Writer for GlbParts {
     }
 
     fn write(&mut self, part: &World) -> primase_core::convert::Result<()> {
-        self.write_part(part).map(|_| ())
+        self.write_part(part)
     }
 
     fn finish(self: Box<Self>) -> primase_core::convert::Result<Finished> {

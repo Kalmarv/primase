@@ -15,8 +15,7 @@ program states. After setting those paths, run:
 cargo run --release -p primase-examples --example sekiro_to_reskate
 ```
 
-[sekiro_ktx2_tiles](examples/sekiro_ktx2_tiles.rs) additionally needs `--features ktx2` for the web writer's texture
-encoder. The example sources document their inputs and output paths.
+The example sources document their inputs and output paths.
 
 [elden_outfit_gltf](examples/elden_outfit_gltf.rs) and [elden_stormveil_gltf](examples/elden_stormveil_gltf.rs) write
 glTF binaries from an Elden Ring install: the player's starting outfit (initializer row 3002, the female

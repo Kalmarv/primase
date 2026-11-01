@@ -445,7 +445,7 @@ pub enum Semantic {
     Weights(u8),
     /// Opaque per-vertex shader data, bound by the game's input index and passed through untransformed.
     /// Geometry passes must copy it through; a pass that cannot preserve it must refuse ShaderInput by name.
-    /// glTF carries these application attributes as `_SHADERINPUTn`.
+    /// glTF has no attribute for them: a GLB primase writes leaves them out, and its writer counts them.
     ShaderInput(u8),
 }
 

@@ -229,7 +229,9 @@ fn single_mesh_agrees(name: &str, mesh: &Mesh) -> Result<(), String> {
         ..WriteOptions::default()
     };
     let theirs = write(&w, &options).map_err(|e| format!("writer: {e}"))?.0;
-    let ours = primase_glb::encode_mesh(name, mesh).map_err(|e| format!("encoder: {e}"))?;
+    let ours = primase_glb::encode_mesh(name, mesh)
+        .map_err(|e| format!("encoder: {e}"))?
+        .glb;
     let mut docs = [ours, theirs].map(|b| primase_glb::Document::parse(&b).unwrap());
     let generators = docs
         .each_mut()

@@ -30,7 +30,11 @@ fn a_mesh_files_box_is_read_from_its_json() {
         triangle([[0., 0., 0.], [1., 0., 0.], [0., 2., 0.]]),
         triangle([[-3., 0., 0.], [0., 0., 5.], [0., 0., -1.]]),
     ]);
-    std::fs::write(dir.join("a.glb"), primase_glb::encode_mesh("a", &mesh).unwrap()).unwrap();
+    std::fs::write(
+        dir.join("a.glb"),
+        primase_glb::encode_mesh("a", &mesh).unwrap().glb,
+    )
+    .unwrap();
     let file = |path: &str| MeshFile {
         path: path.into(),
         mesh: 0,

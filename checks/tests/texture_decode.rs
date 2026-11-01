@@ -1,5 +1,5 @@
-//! `prepare-web-textures` decodes a texture's stored level directly (`primase_image::texture_level_rgba8`) where the
-//! web writer used to decode the PNG the glTF writer made of it: on every texture of a real scene
+//! A texture's stored level decoded directly (`primase_image::texture_level_rgba8`) is the PNG the glTF writer embeds
+//! of it (`primase_image::texture_level_png`) read back: on every texture of a real scene
 //! (`oracles.baseline.sekiro/scene`, slice A's skate scene), the two give the same RGBA bytes.
 mod inputs;
 

@@ -187,7 +187,7 @@ toolkit/<name>/       primase-<name>: shared mechanisms (texcodec, dds, glb, ima
 worlds/<name>/        primase-<name>: one crate per game (or game family), engine family or destination (fromsoft,
                       gta, unity, frostbite, monogame, reskate, ...): its reader, its passes, and for a destination its
                       preparation passes and writer
-formats/<name>/       primase-<name>: file formats that are not one game's or destination's (gltf, web, ...)
+formats/<name>/       primase-<name>: file formats that are not one game's or destination's (gltf, ...)
 checks/               the architecture rules' tests and tests spanning crates (no library)
 examples/             programs using the library, quoted by the README (no library)
 ```

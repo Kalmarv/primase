@@ -41,6 +41,9 @@ pub struct WriteReport {
     /// Files written as the bytes the loader read them from (relative paths), and their bytes.
     pub copied: Vec<String>,
     pub copied_bytes: u64,
+    /// The streams of the meshes encoded here (an edited or new mesh, as its GLB) that the GLB leaves out, by name
+    /// ([`primase_glb::EncodedMesh::skipped`]), each with the number of primitives it was left out of.
+    pub streams_skipped: BTreeMap<String, u64>,
 }
 
 fn bad(msg: impl Into<String>) -> Error {
@@ -143,9 +146,13 @@ pub fn write(w: &World, out: &Path) -> Result<WriteReport> {
         plan: Plan {
             files: BTreeMap::new(),
         },
+        streams_skipped: BTreeMap::new(),
     };
     let manifest = wr.manifest()?;
-    let mut report = WriteReport::default();
+    let mut report = WriteReport {
+        streams_skipped: std::mem::take(&mut wr.streams_skipped),
+        ..WriteReport::default()
+    };
     for (rel, content) in wr.plan.files.values() {
         let mut path = out.to_path_buf();
         for p in parts_of(rel)? {
@@ -185,6 +192,8 @@ struct Writer<'a> {
     w: &'a World,
     scene: &'a SkateScene,
     plan: Plan,
+    /// [`WriteReport::streams_skipped`], as the meshes are encoded.
+    streams_skipped: BTreeMap<String, u64>,
 }
 
 /// Builds a JSON object in order. A number JSON cannot hold is kept as the object's first error, naming its key, and
@@ -812,9 +821,12 @@ impl Writer<'_> {
                                 sha256: g.sha256.clone(),
                             };
                             let g = &own;
-                            let bytes = primase_glb::encode_mesh(&p.id, mesh)
+                            let encoded = primase_glb::encode_mesh(&p.id, mesh)
                                 .map_err(|err| bad(format!("{what}: {err}")))?;
-                            (self.encoded(g, bytes)?, 0)
+                            for (name, n) in encoded.skipped {
+                                *self.streams_skipped.entry(name).or_default() += n;
+                            }
+                            (self.encoded(g, encoded.glb)?, 0)
                         }
                     };
                     o.put(

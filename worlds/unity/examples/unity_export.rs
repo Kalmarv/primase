@@ -1,13 +1,13 @@
-//! A Unity level end to end: read, lowered, written as one GLB and as web tiles.
+//! A Unity level end to end: read, lowered, written as one GLB.
 //!
-//! Usage: `unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2] [--quality <level>]
+//! Usage: `unity_export <Game>_Data <type tree package> <level> <output folder> [--quality <level>]
 //! [--bundle <file>]...`.
 //! `--quality` names the quality level whose skin weights limit the skinned meshes' influences and whose URP asset and shadows the level is read with, needed where the game's levels differ.
 //! `--bundle` adds a UnityFS bundle's serialized files to the player: a level of an AssetBundle (PEAK's
 //! `levels0-31.assetbundle`: the level is the node's name, `BuildPlayer-Level_5`) is read with the files its pointers
 //! name (its shared assets, other levels' shared assets in the bundle) and not the bundle's other levels; a bundle
 //! that has no node of the level's name (Big Walk's `data.unity3d`, the player's own files) is read whole.
-//! Writes `<output>/<level>.glb`; with `--web`, the web tile set in `<output>/web` (`--ktx2`: textures as KTX2).
+//! Writes `<output>/<level>.glb`.
 //! Prints every pass's counts and approximations. A ReSkate map of a Unity level is a program's recipe (raising,
 //! surfaces, spawn and travel points are its choices), composed with `primase-reskate` in the consumer program.
 
@@ -20,7 +20,7 @@ use unity_formats::TypeTreePackage;
 use unity_formats::bundle::Bundle;
 use unity_formats::player::{BundleSpec, NodeSelection, Player};
 
-const USAGE: &str = "usage: unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2]                      [--quality <level>] [--bundle <file>]...";
+const USAGE: &str = "usage: unity_export <Game>_Data <type tree package> <level> <output folder> [--quality <level>] [--bundle <file>]...";
 
 fn show(pass: &str, log: &PassLog) {
     println!("{pass}: {:?}", log.counts);
@@ -30,13 +30,10 @@ fn show(pass: &str, log: &PassLog) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (mut paths, mut web, mut ktx2, mut quality, mut bundle_files) =
-        (Vec::new(), false, false, None, Vec::<PathBuf>::new());
+    let (mut paths, mut quality, mut bundle_files) = (Vec::new(), None, Vec::<PathBuf>::new());
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--web" => web = true,
-            "--ktx2" => ktx2 = true,
             "--quality" => {
                 quality = Some(
                     args.next()
@@ -55,9 +52,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let [data, tpk, level, out] = &paths[..] else {
         return Err(USAGE.into());
     };
-    if ktx2 && !web {
-        return Err(format!("--ktx2 needs --web; {USAGE}").into());
-    }
     let out = Path::new(out);
     // the files of a player are named in lower case
     let file = level.to_lowercase();
@@ -194,63 +188,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &glb,
     )?;
     println!("glTF {}: {r:?}", glb.display());
-    if web {
-        // this program's choices: 200 m cells, files of at most 96 MiB, with KTX2 textures of at most 512 (colour,
-        // normal) and 256 (mask) pixels, encodings of at most 360448 (colour) and 98304 (mask) bytes
-        let options = primase_web::Options {
-            ktx2,
-            tile_byte_budget: Some(96 << 20),
-            ..primase_web::Options::new(primase_web::TileSize::new(200.)?)
-        };
-        if ktx2 {
-            use primase_web::prepare::{ByteBudget, PrepareWebTextures, RoleCaps, WebCap};
-            let mut pass = PrepareWebTextures::new(RoleCaps {
-                color: WebCap::new(512)?,
-                normal: WebCap::new(512)?,
-                mask: WebCap::new(256)?,
-            });
-            pass.color_bytes = Some(ByteBudget::new(360_448)?);
-            pass.mask_bytes = Some(ByteBudget::new(98_304)?);
-            let mut report = RunReport::default();
-            PassManager::new(PassRegistry::new()).run(
-                &mut w,
-                &Pipeline {
-                    passes: vec![Box::new(pass)],
-                },
-                &mut report,
-            )?;
-            for step in &report.steps {
-                show(&step.pass, &step.log);
-            }
-        }
-        let set = primase_web::write(&w, &options)?;
-        let folder = out.join("web");
-        set.write_to(&folder)?;
-        for o in &set.over_budget {
-            println!("over the budget: {} ({} bytes): {}", o.file, o.bytes, o.reason);
-        }
-        let tiles = &set.index.tiles;
-        println!(
-            "web {} (format {}): tiles={} triangles={} placements={} instanced={} lights={} collision records={} \
-             images={} sun={}",
-            folder.display(),
-            set.index.format_version,
-            tiles.len(),
-            tiles.iter().map(|t| t.triangles).sum::<u64>(),
-            tiles.iter().map(|t| t.placements).sum::<u64>(),
-            tiles.iter().map(|t| t.instanced_placements).sum::<u64>(),
-            tiles.iter().map(|t| t.lights).sum::<u64>(),
-            tiles
-                .iter()
-                .filter_map(|t| t.collision.as_ref())
-                .map(|c| c.records)
-                .sum::<usize>(),
-            set.index.images.len(),
-            set.index
-                .environment
-                .as_ref()
-                .map_or("none", |e| e.sun.name.as_str())
-        );
-    }
     Ok(())
 }

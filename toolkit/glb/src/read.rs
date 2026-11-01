@@ -383,8 +383,7 @@ impl Gltf {
                 .as_u64()
                 .and_then(|a| usize::try_from(a).ok())
                 .ok_or_else(|| invalid(&apath, &format!("{name} is not an accessor index")))?;
-            // A semantic first: primase's further tangent sets are custom-named (`_PRIMASE_TANGENT<n>`) but read as
-            // streams. Every other `_`-prefixed name, a foreign `_TANGENT<n>` included, stays a custom attribute.
+            // A semantic first; an application's own `_`-prefixed attribute stays a custom attribute.
             let Some(semantic) = semantic(name) else {
                 if !name.starts_with('_') {
                     return Err(invalid(&apath, &format!("unsupported attribute {name}")));
@@ -637,7 +636,6 @@ impl Gltf {
         let stream = match (semantic, acc.kind) {
             (Semantic::Position | Semantic::Normal, "VEC3") if float => Stream::F32x3(acc.floats()?),
             (Semantic::Tangent(_), "VEC4") if float => Stream::F32x4(acc.floats()?),
-            (Semantic::ShaderInput(_), "VEC4") if float => Stream::F32x4(acc.floats()?),
             (Semantic::TexCoord(_), "VEC2") if float => Stream::F32x2(acc.floats()?),
             (Semantic::TexCoord(_), "VEC2") if unorm => Stream::F32x2(acc.unorm_as_f32()?),
             (Semantic::Color(_), "VEC3") if float => Stream::F32x3(acc.floats()?),
@@ -936,9 +934,7 @@ fn document_buffers(json: &Value) -> Result<&[Value]> {
     }
 }
 
-/// glTF attribute name -> semantic, for the attributes the reader takes. The further tangent sets carry primase's own
-/// `_PRIMASE_TANGENT<n>` name (the writer's, `encode.rs`): `_TANGENT<n>` is another application's to define, and a
-/// document that has one keeps it as a custom attribute rather than being read as our tangent set.
+/// glTF attribute name -> semantic, for the attributes glTF defines that the reader takes.
 fn semantic(name: &str) -> Option<Semantic> {
     // Only the canonical spelling: `TEXCOORD_01` would alias `TEXCOORD_1`.
     let set = |prefix: &str| {
@@ -952,9 +948,7 @@ fn semantic(name: &str) -> Option<Semantic> {
         "TANGENT" => Some(Semantic::Tangent(0)),
         _ => set("TEXCOORD_")
             .map(Semantic::TexCoord)
-            .or_else(|| set("_PRIMASE_TANGENT").and_then(|n| (n > 0).then_some(Semantic::Tangent(n))))
             .or_else(|| set("COLOR_").map(Semantic::Color))
-            .or_else(|| set("_SHADERINPUT").map(Semantic::ShaderInput))
             .or_else(|| set("JOINTS_").map(Semantic::Joints))
             .or_else(|| set("WEIGHTS_").map(Semantic::Weights)),
     }

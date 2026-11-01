@@ -15,9 +15,9 @@ glTF's (metres, right-handed, +Y up); nothing is converted.
 - `Buffers`: a primitive's streams and indices as accessors in one buffer, each view 4-byte aligned, in the order
   they are added. Colours are float or normalized unsigned; indices are unsigned short while the vertex count
   allows, else unsigned int. Skin streams are left out and named.
-- `encode_mesh`: one mesh, without materials, as a GLB of its own. Its node sits at the origin under a group node,
-  and the node's extras show the mesh's `core.mesh` view. That is what the glTF writer (`formats/gltf`) writes for
-  an unplaced, material-less prototype. A test there checks
+- `encode_mesh`: one mesh, without materials, as a GLB of its own, and the streams it left out by name, counted by
+  primitive, for the caller to report. Its node sits at the origin under a group node. That is what the glTF writer
+  (`formats/gltf`) writes for an unplaced, material-less prototype. A test there checks
   that the two agree apart from the generator.
 
 ## Example

@@ -1779,11 +1779,7 @@ fn variable_literals_see_built_names() {
 }
 
 /// The `PRIMASE_*` variables a test hands its own child process (set on the child, read by it): not configuration.
-const CHILD_HANDOFFS: &[&str] = &[
-    "PRIMASE_KTX2_TEST_OUTPUT",
-    "PRIMASE_PRINT_CHILD_FILE",
-    "PRIMASE_CACHE_CHILD_DIR",
-];
+const CHILD_HANDOFFS: &[&str] = &["PRIMASE_PRINT_CHILD_FILE", "PRIMASE_CACHE_CHILD_DIR"];
 
 #[test]
 fn real_data_variables_are_declared() {

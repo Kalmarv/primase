@@ -225,7 +225,6 @@ fn the_glb_holds_standard_gltf_alone_and_counts_the_rest() {
         report.components_unwritten,
         BTreeMap::from([("core.name".to_owned(), 2), ("pbr.material".to_owned(), 2)])
     );
-    assert_eq!(report.primitives_without_material_attribute, 0);
     let text = report.to_string();
     assert!(
         text.contains("components without a glTF form (not written)"),
@@ -263,4 +262,53 @@ fn a_layered_material_with_its_pbr_material_is_written_from_it() {
     );
     assert_eq!(report.layered_materials_unwritten, 0);
     assert_eq!(report.components_without_form.get("core.layered"), Some(&1));
+}
+
+/// glTF has one tangent set and no attribute for a shader's own per-vertex inputs: a second tangent set and the
+/// inputs are not written, each counted per primitive by name; the first tangent set is `TANGENT`.
+#[test]
+fn streams_gltf_has_no_attribute_for_are_counted_not_written() {
+    use primase_core::Stream;
+    let mut w = World::new();
+    let mut p = common::rich_primitive(None, 0.0);
+    p.streams.insert(
+        Semantic::Tangent(1),
+        Stream::F32x4(vec![[0.0, 1.0, 0.0, -1.0]; 4]),
+    );
+    p.streams
+        .insert(Semantic::ShaderInput(4), Stream::F32x4(vec![[0.5; 4]; 4]));
+    let proto = w.spawn();
+    w.insert(proto, Mesh::new(vec![p]));
+    w.insert(proto, Transform::IDENTITY);
+    let (doc, report) = written(&w);
+    let attributes = doc["meshes"][0]["primitives"][0]["attributes"]
+        .as_object()
+        .unwrap();
+    assert!(attributes.contains_key("TANGENT"));
+    assert!(attributes.keys().all(|n| !n.starts_with('_')), "{attributes:?}");
+    assert_eq!(
+        report.streams_skipped,
+        BTreeMap::from([("shader input 4".to_owned(), 1), ("tangent set 1".to_owned(), 1)])
+    );
+}
+
+/// The environment's ambient has no glTF light: it is counted as not lit, and the environment as a resource without a
+/// glTF form.
+#[test]
+fn an_ambient_is_counted_unlit_and_not_written() {
+    use primase_core::Resource;
+    let mut w = World::new();
+    assert_eq!(written(&w).1.ambient_unlit, 0);
+    w.insert_resource(Environment {
+        sun: None,
+        ambient: Some(Ambient {
+            intensity: 1.0,
+            light: AmbientLight::Flat([0.25, 0.5, 0.75]),
+        }),
+    });
+    let (doc, report) = written(&w);
+    assert_eq!(report.ambient_unlit, 1);
+    assert!(report.to_string().contains("ambient not lit (no glTF form) 1"));
+    assert_eq!(report.resources_without_form.get(Environment::NAME), Some(&1));
+    assert!(doc["scenes"][0].get("extras").is_none());
 }

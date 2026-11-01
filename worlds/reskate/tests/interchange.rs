@@ -1751,7 +1751,9 @@ fn loaded_payloads_are_the_authority() {
         "{:?}",
         report.copied
     );
-    // edited: a texture's pixel, a mesh's vertex, the picture's pixel
+    assert!(report.streams_skipped.is_empty(), "{:?}", report.streams_skipped);
+    // edited: a texture's pixel, a mesh's vertex, the picture's pixel; the mesh also gains a second tangent set and a
+    // shader input, which its GLB has no attribute for
     let (te, _) = w
         .iter::<primase_core::TextureFile>()
         .find(|(_, f)| f.path.ends_with("wall_d.png"))
@@ -1762,17 +1764,28 @@ fn loaded_payloads_are_the_authority() {
         .find(|(_, f)| f.mesh == 1)
         .unwrap();
     {
+        use primase_core::{Semantic, Stream};
         let mesh = w.get_mut::<primase_core::Mesh>(me).unwrap();
         let mut first = mesh.primitive_mut(0).unwrap();
-        if let Some(primase_core::Stream::F32x3(p)) =
-            first.streams_mut().get_mut(&primase_core::Semantic::Position)
-        {
-            p[0][0] += 1.0;
-        }
+        let streams = first.streams_mut();
+        let Some(Stream::F32x3(p)) = streams.get_mut(&Semantic::Position) else {
+            panic!("the fixture's mesh has positions")
+        };
+        p[0][0] += 1.0;
+        let vertices = p.len();
+        streams.insert(
+            Semantic::Tangent(1),
+            Stream::F32x4(vec![[1., 0., 0., 1.]; vertices]),
+        );
+        streams.insert(Semantic::ShaderInput(2), Stream::F32x4(vec![[0.5; 4]; vertices]));
     }
     w.resource_mut::<components::SkatePauseImage>().unwrap().rgba[0] = 99;
     let out = tmp("authority_edit");
-    write::interchange::write(&w, &out).unwrap();
+    let report = write::interchange::write(&w, &out).unwrap();
+    assert_eq!(
+        report.streams_skipped,
+        std::collections::BTreeMap::from([("shader input 2".to_owned(), 1), ("tangent set 1".to_owned(), 1)])
+    );
     let (mut back, _) = read(&out);
     read::interchange::load(&out, &mut back).unwrap();
     let texture = back

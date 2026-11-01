@@ -79,7 +79,7 @@ pub fn t(cols: [[f32; 3]; 4]) -> Transform {
     Transform { cols }
 }
 
-/// A box-ish prototype primitive with every stream kind the writer takes (Joints optional).
+/// A box-ish prototype primitive with every stream kind glTF holds that the writer takes (Joints optional).
 pub fn rich_primitive(material: Option<Entity>, offset: f32) -> Primitive {
     let pos = vec![
         [0.0 + offset, 0.0, 0.0],
@@ -110,10 +110,6 @@ pub fn rich_primitive(material: Option<Entity>, offset: f32) -> Primitive {
     streams.insert(
         Semantic::TexCoord(0),
         Stream::F32x2(vec![[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.1, 0.0]]),
-    );
-    streams.insert(
-        Semantic::Tangent(1),
-        Stream::F32x4(vec![[0.0, 1.0, 0.0, -1.0]; 4]),
     );
     streams.insert(
         Semantic::TexCoord(1),

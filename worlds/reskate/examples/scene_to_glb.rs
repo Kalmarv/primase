@@ -75,13 +75,9 @@ fn main() -> Result<(), BoxError> {
         group_by,
         include_unplaced: false,
         scene_name: Some(scene_name),
-        selection: None,
         all_variants: false,
         threads: primase_foundations::parallel::Threads::ONE,
-        images: None,
         verified: false,
-        // standard glTF alone: no format's extension
-        extensions: primase_gltf::extend::Extensions::default(),
     };
     let written = write_file(&world, &options, &out)?;
     println!(

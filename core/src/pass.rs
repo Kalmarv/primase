@@ -195,7 +195,7 @@ pub trait Pass: Send + Sync {
         Options::new()
     }
     /// Whether a run may skip it in a world (or a part) that holds none of its required names: a lowering whose input
-    /// the world may simply not have (a web tile of only a light has no materials, a read region no lights) opts in;
+    /// the world may simply not have (a part of only a light has no materials, a read region no lights) opts in;
     /// the step is recorded as skipped ([`StepReport::skipped`]). Required names are prerequisites, so this is false
     /// unless the pass says otherwise: an absent name may be a failed load or a wrong order, and a pass that
     /// summarizes, decides or plans never opts in.

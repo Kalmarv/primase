@@ -1,5 +1,5 @@
 //! A texture with more than one image: an array of 2D images, a cube map (or an array of them) or a volume. Beside
-//! [`Texture`](crate::Texture), which stays one 2D image and is what the image tools, glTF and the web writers know: a
+//! [`Texture`](crate::Texture), which stays one 2D image and is what the image tools and the glTF writer know: a
 //! tool that handles only [`Texture`](crate::Texture) never meets a layered one. A shader binding may name either
 //! ([`crate::shader::TextureSource`]), and the slot's dimension has to agree with the shape
 //! ([`TextureShape::dimension`]).

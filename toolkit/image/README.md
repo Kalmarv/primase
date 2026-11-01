@@ -35,7 +35,7 @@ PNG fixtures. No external assets are included.
 
 Real PNGs are checked where they are read: `formats/gltf/tests/textures.rs`
 compares the Khronos sample assets' PNGs with Pillow 11's RGBA8 (and their JPEGs within 3 levels), and
-`checks/tests/web_texture_decode.rs` round-trips every texture of a real scene
+`checks/tests/texture_decode.rs` round-trips every texture of a real scene
 through the PNG writer. PNG compressed-byte identity with other encoders is not
 promised: the contract is exact pixel roundtrip and deterministic output.
 

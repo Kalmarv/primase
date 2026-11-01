@@ -93,9 +93,6 @@ fn round_trip_geometry_and_transforms() {
     let attributes =
         &doc["meshes"][regular["mesh"].as_u64().unwrap() as usize]["primitives"][0]["attributes"];
     assert!(attributes.get("TANGENT").is_some());
-    assert!(attributes.get("_PRIMASE_TANGENT1").is_some());
-    assert!(attributes.get("TANGENT1").is_none());
-    assert!(attributes.get("_TANGENT1").is_none());
     let mirrored = node_by_source(&b, &report, doc, "plac:1").unwrap();
     assert_eq!(bits(&f32s(&regular["matrix"])), bits(&matrix_of(&b, b.regular)));
     assert_eq!(bits(&f32s(&mirrored["matrix"])), bits(&matrix_of(&b, b.mirrored)));
@@ -791,30 +788,6 @@ fn memory_textures_embed_exact_pixels_and_require_normal_conversion() {
         .0;
         assert!(many == one, "{n} threads");
     }
-    // with a memo shared between writes: the same document, the second write from the memo; a texture changed since
-    // encoded again; a memo too small to hold anything drops its encodings and writes the same
-    let memo = primase_gltf::ImageMemo::new(1 << 20);
-    let with = |w: &primase_core::World, memo: &primase_gltf::ImageMemo| {
-        write(
-            w,
-            &WriteOptions {
-                images: Some(memo.clone()),
-                ..options()
-            },
-        )
-        .unwrap()
-        .0
-    };
-    assert!(with(&distinct, &memo) == one);
-    assert!(with(&distinct, &memo) == one);
-    let first = distinct.iter::<TextureFile>().map(|(e, _)| e).next().unwrap();
-    distinct.get_mut::<primase_core::Texture>(first).unwrap().levels = vec![vec![7, 7, 7, 255]];
-    let changed = write(&distinct, &options()).unwrap().0;
-    assert!(changed != one);
-    assert!(with(&distinct, &memo) == changed);
-    let tiny = primase_gltf::ImageMemo::new(1);
-    assert!(with(&distinct, &tiny) == changed);
-    assert!(tiny.dropped() > 0);
     let n = b.world.get_mut::<Texture>(b.tex_normal).unwrap();
     n.role = TexRole::Normal;
     n.normal = Some(NormalConvention {

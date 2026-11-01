@@ -96,7 +96,7 @@ fn a_data_texture_is_sampled_nearest_and_its_image_states_nothing_else() {
         (sampler["magFilter"].as_u64(), sampler["minFilter"].as_u64()),
         (Some(9728), Some(9728))
     );
-    // glTF has no texture role: the image is a standard one, with no extras (the web format marks its role)
+    // glTF has no texture role: the image is a standard one, with no extras
     assert!(
         doc["images"][t["source"].as_u64().unwrap() as usize]
             .get("extras")

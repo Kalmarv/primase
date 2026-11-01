@@ -1,6 +1,6 @@
 //! What the writer cannot represent it leaves out and reports, without failing on it: placements of a prototype with
 //! levels of detail (the writer chooses no form), and entities it neither writes nor counts otherwise (a marker, a
-//! standalone collision soup). A selection is the caller's choice: what it leaves out is not reported.
+//! standalone collision soup).
 
 #![allow(clippy::unwrap_used)]
 
@@ -11,7 +11,7 @@ use primase_core::{
     Collision, Component, Entity, Instance, LodForm, Lods, Marker, Mesh, Name, Primitive, Semantic, Stream,
     Surfaces, Topology, Transform, World,
 };
-use primase_gltf::{GroupBy, Selected, Selection, WriteOptions, WriteReport};
+use primase_gltf::{GroupBy, WriteOptions, WriteReport};
 use serde_json::Value;
 
 fn quad(material: Option<Entity>) -> Mesh {
@@ -42,12 +42,11 @@ fn place(w: &mut World, prototype: Entity, name: &str, x: f32) -> Entity {
     e
 }
 
-fn written(w: &World, selection: Option<Selection>) -> (Value, WriteReport) {
+fn written(w: &World) -> (Value, WriteReport) {
     let (bytes, report) = primase_gltf::write(
         w,
         &WriteOptions {
             group_by: GroupBy::None,
-            selection,
             ..WriteOptions::default()
         },
     )
@@ -63,15 +62,8 @@ fn node_names(doc: &Value) -> Vec<&str> {
         .unwrap_or_default()
 }
 
-fn select(placements: &[Entity]) -> Selection {
-    Selection {
-        placements: placements.iter().map(|&e| (e, Selected::default())).collect(),
-        ..Selection::default()
-    }
-}
-
 /// Plain prototype A placed once, prototype B with two other forms placed once.
-fn plain_and_lods() -> (World, Entity, Entity) {
+fn plain_and_lods() -> World {
     let mut w = World::new();
     let m = w.spawn();
     w.insert(m, PbrMaterial::default());
@@ -96,38 +88,16 @@ fn plain_and_lods() -> (World, Entity, Entity) {
             default: None,
         },
     );
-    let a = place(&mut w, plain, "a", 0.);
-    let b = place(&mut w, lod, "b", 10.);
+    place(&mut w, plain, "a", 0.);
+    place(&mut w, lod, "b", 10.);
     assert!(w.verify_components().is_empty());
-    (w, a, b)
+    w
 }
 
 #[test]
-fn a_selection_beside_an_unselected_prototype_with_levels_of_detail_is_written() {
-    let (w, a, _) = plain_and_lods();
-    let (doc, report) = written(&w, Some(select(&[a])));
-    assert_eq!(node_names(&doc), ["a"]);
-    assert_eq!(report.placements, 1);
-    assert_eq!(report.placements_with_lods, 0);
-    assert_eq!(doc["meshes"].as_array().unwrap().len(), 1);
-}
-
-#[test]
-fn a_selected_placement_with_levels_of_detail_is_left_out_and_reported() {
-    let (w, a, b) = plain_and_lods();
-    let (doc, report) = written(&w, Some(select(&[a, b])));
-    assert_eq!(node_names(&doc), ["a"]);
-    assert_eq!(report.placements, 1);
-    assert_eq!(report.placements_with_lods, 1, "{report}");
-    assert_eq!(doc["meshes"].as_array().unwrap().len(), 1);
-    // a selection's choice: nothing else is counted
-    assert_eq!(report.entities_unwritten, 0);
-}
-
-#[test]
-fn without_a_selection_levels_of_detail_are_reported_and_their_forms_are_not_prototypes() {
-    let (w, _, _) = plain_and_lods();
-    let (doc, report) = written(&w, None);
+fn levels_of_detail_are_reported_and_their_forms_are_not_prototypes() {
+    let w = plain_and_lods();
+    let (doc, report) = written(&w);
     assert_eq!(node_names(&doc), ["a"]);
     assert_eq!(report.placements_with_lods, 1);
     assert_eq!(report.prototypes_unplaced, 0, "{report}");
@@ -150,7 +120,7 @@ fn a_lods_without_other_forms_has_nothing_to_choose() {
         },
     );
     place(&mut w, proto, "only", 0.);
-    let (doc, report) = written(&w, None);
+    let (doc, report) = written(&w);
     assert_eq!(node_names(&doc), ["only"]);
     assert_eq!(report.placements_with_lods, 0);
     // the forms the levels of detail state have no glTF form: counted, not written
@@ -179,7 +149,7 @@ fn marker(w: &mut World) -> Entity {
 fn a_world_of_only_a_marker_reports_it() {
     let mut w = World::new();
     marker(&mut w);
-    let (doc, report) = written(&w, None);
+    let (doc, report) = written(&w);
     assert!(node_names(&doc).is_empty());
     assert_eq!(report.entities_unwritten, 1, "{report}");
     assert_eq!(
@@ -199,7 +169,7 @@ fn a_mesh_beside_a_marker_and_a_collision_soup_reports_them() {
     w.insert(m, PbrMaterial::default());
     let proto = w.spawn();
     w.insert(proto, quad(Some(m)));
-    let a = place(&mut w, proto, "a", 0.);
+    place(&mut w, proto, "a", 0.);
     marker(&mut w);
     // the soup's surface is one of the world's
     let mut surfaces = Surfaces::default();
@@ -214,7 +184,7 @@ fn a_mesh_beside_a_marker_and_a_collision_soup_reports_them() {
             surfaces: vec![ground],
         },
     );
-    let (doc, report) = written(&w, None);
+    let (doc, report) = written(&w);
     assert_eq!(node_names(&doc), ["a"]);
     assert_eq!(report.placements, 1);
     assert_eq!(report.materials, 1);
@@ -225,12 +195,6 @@ fn a_mesh_beside_a_marker_and_a_collision_soup_reports_them() {
     assert_eq!(report.components_unwritten[Transform::NAME], 1);
     assert!(!report.components_unwritten.contains_key(Mesh::NAME));
     assert!(!report.components_unwritten.contains_key(PbrMaterial::NAME));
-
-    // a selection writes what it names; the rest is its caller's
-    let (doc, report) = written(&w, Some(select(&[a])));
-    assert_eq!(node_names(&doc), ["a"]);
-    assert_eq!(report.entities_unwritten, 0);
-    assert!(report.components_unwritten.is_empty());
 }
 
 /// A texture whose format an 8-bit PNG cannot hold exactly (half floats: 2.0 is beyond 0-1) is left out and reported
@@ -277,7 +241,7 @@ fn a_texture_an_8_bit_png_cannot_hold_is_left_out_until_converted() {
     let prototype = w.spawn();
     w.insert(prototype, mesh);
     place(&mut w, prototype, "lit", 0.);
-    let (doc, report) = written(&w, None);
+    let (doc, report) = written(&w);
     assert_eq!(
         report.textures_unrepresentable,
         BTreeMap::from([("Rgba16Float".to_owned(), 1)])
@@ -287,7 +251,7 @@ fn a_texture_an_8_bit_png_cannot_hold_is_left_out_until_converted() {
     primase_image::LowerTexturesRgba8::default()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
-    let (_, report) = written(&w, None);
+    let (_, report) = written(&w);
     assert!(report.textures_unrepresentable.is_empty());
     assert_eq!((report.texture_slots_dropped, report.images), (0, 1));
 }

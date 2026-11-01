@@ -54,7 +54,7 @@ impl std::fmt::Debug for Key {
     }
 }
 
-/// Builds a [`Key`]: a domain (`"web.ktx2-uastc"`), then fields, each a tag and a value, in a fixed order.
+/// Builds a [`Key`]: a domain (`"fromsoft.material-bake"`), then fields, each a tag and a value, in a fixed order.
 #[derive(Clone)]
 pub struct KeyBuilder(Sha256);
 

@@ -74,8 +74,7 @@ pub enum DetailMix {
     DetailLerp(DetailLerp),
 }
 
-/// The model's revision: the version of the component and the revision the glTF extension states
-/// (`PRIMASE_materials_detail_blend`). 4 adds the base colour's desaturation, the `max`, `affine` and `saturate` weight
+/// The model's revision: the version of the component. 4 adds the base colour's desaturation, the `max`, `affine` and `saturate` weight
 /// steps and the `metallic_gloss` lowering, and moves the dielectric reflectance into the `gloss_reflectance` lowering;
 /// 3, the earlier shape, is read as a subset.
 pub const REVISION: u32 = 4;

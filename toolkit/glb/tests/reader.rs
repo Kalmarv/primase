@@ -8,39 +8,41 @@ use primase_core::{Semantic, Stream, Topology};
 use primase_glb::{AccessorData, ComponentType, ElementType, Gltf};
 use serde_json::{Value, json};
 
+/// glTF has no attribute for a shader's own per-vertex inputs: the encoder leaves them out, naming them, and an
+/// application attribute a document states (`_SHADERINPUT7`) is read as a custom attribute, never as a stream.
 #[test]
-fn opaque_shader_inputs_round_trip_as_application_attributes() {
+fn shader_inputs_are_left_out_and_an_application_attribute_stays_custom() {
     use primase_core::{Mesh, Primitive};
     use std::collections::BTreeMap;
-    let values = vec![
-        [-3.5, 0.0, 255.0, -0.0],
-        [0.25, 2.0, 9.0, 0.75],
-        [7.0, 8.0, -1.0, 0.5],
-    ];
     let mesh = Mesh::new(vec![Primitive {
         topology: Topology::Triangles,
         streams: BTreeMap::from([
             (Semantic::Position, Stream::F32x3(vec![[0.0; 3]; 3])),
-            (Semantic::ShaderInput(7), Stream::F32x4(values.clone())),
+            (Semantic::ShaderInput(7), Stream::F32x4(vec![[0.5; 4]; 3])),
         ]),
         indices: None,
         material: None,
     }]);
-    let bytes = primase_glb::encode_mesh("opaque input", &mesh).unwrap();
-    let gltf = Gltf::from_glb(&bytes).unwrap();
-    let read = gltf.read_mesh(0).unwrap();
-    let Stream::F32x4(actual) = &read.primitives[0].primitive.streams[&Semantic::ShaderInput(7)] else {
-        panic!("opaque input lost its four float lanes")
-    };
+    let mut buffers = primase_glb::Buffers::default();
+    let encoded = buffers.primitive(&mesh.primitives()[0], true).unwrap();
+    assert_eq!(encoded.skipped, ["shader input 7"]);
+    let names: Vec<&str> = encoded.attributes.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["POSITION"]);
+    let mesh_glb = primase_glb::encode_mesh("shader input", &mesh).unwrap();
     assert_eq!(
-        actual.iter().map(|v| v.map(f32::to_bits)).collect::<Vec<_>>(),
-        values.iter().map(|v| v.map(f32::to_bits)).collect::<Vec<_>>()
+        mesh_glb.skipped,
+        BTreeMap::from([("shader input 7".to_owned(), 1)])
     );
     assert!(
-        std::str::from_utf8(primase_glb::parse(&bytes).unwrap().json)
+        !std::str::from_utf8(primase_glb::parse(&mesh_glb.glb).unwrap().json)
             .unwrap()
-            .contains("_SHADERINPUT7")
+            .contains("SHADERINPUT")
     );
+    let mut d = doc();
+    d["meshes"][0]["primitives"][0]["attributes"]["_SHADERINPUT7"] = json!(2);
+    let p = read(&d).unwrap().primitives.into_iter().next().unwrap();
+    assert!(p.custom.contains_key("_SHADERINPUT7"));
+    assert!(!p.primitive.streams.contains_key(&Semantic::ShaderInput(7)));
 }
 
 /// Positions of one triangle, then unsigned-byte indices, then a unorm8 VEC2 texcoord with a 4-byte stride.
@@ -128,8 +130,9 @@ fn reads_the_base_document() {
     );
 }
 
+/// glTF has one tangent set: set 0 is `TANGENT` and round-trips, a further set is left out, named.
 #[test]
-fn indexed_tangents_round_trip_through_standard_and_custom_attributes() {
+fn the_first_tangent_set_round_trips_and_the_others_are_left_out() {
     use primase_core::{Mesh, Primitive};
     use std::collections::BTreeMap;
     let streams = BTreeMap::from([
@@ -150,23 +153,27 @@ fn indexed_tangents_round_trip_through_standard_and_custom_attributes() {
         indices: Some(vec![0, 1, 2]),
         material: None,
     }]);
-    let bytes = primase_glb::encode_mesh("indexed tangents", &mesh).unwrap();
-    let gltf = Gltf::from_glb(&bytes).unwrap();
-    let attributes = &gltf.json()["meshes"][0]["primitives"][0]["attributes"];
-    for name in ["TANGENT", "_PRIMASE_TANGENT1", "_PRIMASE_TANGENT4"] {
-        assert!(attributes.get(name).is_some(), "{name}");
-    }
-    assert!(attributes.get("TANGENT1").is_none());
-    // `_TANGENT<n>` is a foreign application's name: we never write it, and a document that has one keeps it custom.
-    assert!(attributes.get("_TANGENT1").is_none());
+    let mut buffers = primase_glb::Buffers::default();
+    let encoded = buffers.primitive(&mesh.primitives()[0], true).unwrap();
+    assert_eq!(encoded.skipped, ["tangent set 1", "tangent set 4"]);
+    let mesh_glb = primase_glb::encode_mesh("indexed tangents", &mesh).unwrap();
     assert_eq!(
-        gltf.read_mesh(0).unwrap().primitives[0].primitive.streams,
-        streams
+        mesh_glb.skipped,
+        BTreeMap::from([("tangent set 1".to_owned(), 1), ("tangent set 4".to_owned(), 1)])
     );
+    let gltf = Gltf::from_glb(&mesh_glb.glb).unwrap();
+    let attributes = gltf.json()["meshes"][0]["primitives"][0]["attributes"]
+        .as_object()
+        .unwrap();
+    let names: Vec<&str> = attributes.keys().map(String::as_str).collect();
+    assert_eq!(names, ["POSITION", "TANGENT"]);
+    let mut first = streams.clone();
+    first.retain(|s, _| !matches!(s, Semantic::Tangent(n) if *n > 0));
+    assert_eq!(gltf.read_mesh(0).unwrap().primitives[0].primitive.streams, first);
 }
 
-/// `_TANGENT<n>` is another application's attribute: a document that has one keeps it in `custom`, and it is not read
-/// as our tangent set.
+/// `_TANGENT<n>` is an application's own attribute: a document that has one keeps it in `custom`, and it is not read
+/// as a tangent set.
 #[test]
 fn a_foreign_tangent_attribute_stays_custom() {
     let mut d = doc();

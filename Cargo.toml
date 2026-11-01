@@ -13,7 +13,6 @@ members = [
     "toolkit/havok",
     "toolkit/cache",
     "formats/gltf",
-    "formats/web",
     "checks",
     "examples",
     "worlds/fromsoft",
@@ -45,10 +44,7 @@ publish = false
 [workspace.dependencies]
 primase-foundations = "0.3.1"
 toml = { version = "=1.1.8", default-features = false, features = ["parse", "serde", "std"] }
-basisu_c_sys = { version = "=0.9.1", default-features = false, features = ["std", "encoder", "extra", "transcode_default"] }
-basisu = { version = "=0.1.0", default-features = false, features = ["std", "zstd"] }
 encoding_rs = { version = "=0.8.42", default-features = false, features = ["alloc"] }
-meshopt = { version = "=0.6.2", default-features = false }
 aes = { version = "=0.9.3", default-features = false }
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
 fromsoft-formats = { git = "https://github.com/Kalmarv/fromsoft-formats", rev = "d5968c8a4286e5f8b0d87dc2dd3b2c8e0b6a7bfc", version = "0.14.0" }
@@ -91,7 +87,6 @@ iridia-dxil = { git = "https://github.com/Kalmarv/iridia", rev = "cdd9698c2c76b2
 iridia-mojo = { git = "https://github.com/Kalmarv/iridia", rev = "cdd9698c2c76b21397b5e4119f962bd9e6766d58" }
 primase-frostbite = { path = "worlds/frostbite" }
 primase-gltf = { path = "formats/gltf" }
-primase-web = { path = "formats/web" }
 primase-reskate = { path = "worlds/reskate" }
 primase-unity = { path = "worlds/unity" }
 primase-skatebird = { path = "worlds/skatebird" }

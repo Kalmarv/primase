@@ -1,14 +1,19 @@
-//! GTA's lookup-blended terrain (Vespucci Beach, which has a `*_cm*` and a `*_2tex_blend*` one) as layered materials with per-pixel weight channels: the web
-//! format's tiles write them (`PRIMASE_layered_material` version 2, the lookup a mask at TEXCOORD_1, through the web
-//! format's writer extension), and after `bake-layer-channels` they are vertex-weighted (version 1, a colour
-//! attribute) for a destination that blends by vertex weights.
+//! GTA's lookup-blended terrain (Vespucci Beach, which has a `*_cm*` and a `*_2tex_blend*` one) as layered materials
+//! with per-pixel weight channels, written by the generic glTF writer. glTF blends no materials and the writer chooses
+//! no layer: `gta-terrain-layers` gives a terrain material no `pbr.material` of its own, so each layered terrain
+//! material the written placements draw is left out, counted (`layered_materials_unwritten`), its primitives drawn
+//! with no material; its layers' materials, which no primitive draws, are reported as not written. Blended terrain
+//! reaches glTF through a bake pass before the writer that makes the blend a `pbr.material` with baked textures.
 //!
 //! Needs `installs.gta` and `keys.gta`.
 mod inputs;
 
+use std::collections::BTreeSet;
+
 use inputs::{Game, install, keys};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
-use primase_core::{LayeredMaterial, World};
+use primase_core::pbr::PbrMaterial;
+use primase_core::{Component, Entity, LayeredMaterial, Mesh, World};
 use primase_gta::read::source::GtaSource;
 use serde_json::Value;
 
@@ -33,26 +38,29 @@ fn vespucci(m: &PassManager, source: &GtaSource) -> Result<World> {
     Ok(w)
 }
 
-/// The layered materials' `PRIMASE_layered_material` objects, as the web format's writer extension writes them.
-fn layered(w: &World) -> Result<Vec<Value>> {
-    let extension = std::sync::Arc::new(primase_web::gltf_extension::TileExtension::default());
-    let options = primase_gltf::WriteOptions {
-        extensions: primase_gltf::extend::Extensions(vec![extension]),
-        ..primase_gltf::WriteOptions::default()
-    };
-    let (doc, _) = primase_gltf::write_document(w, &options)?;
-    Ok(doc
-        .json
-        .get("materials")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|m| m.pointer("/extensions/PRIMASE_layered_material").cloned())
-        .collect())
+/// Every key of `v`'s objects named `name`, anywhere in it.
+fn keys_of(v: &Value, name: &str, out: &mut BTreeSet<String>) {
+    match v {
+        Value::Object(o) => {
+            for (k, x) in o {
+                if k == name {
+                    if let Some(inner) = x.as_object() {
+                        out.extend(inner.keys().cloned());
+                    }
+                    if let Some(list) = x.as_array() {
+                        out.extend(list.iter().filter_map(Value::as_str).map(str::to_owned));
+                    }
+                }
+                keys_of(x, name, out);
+            }
+        }
+        Value::Array(a) => a.iter().for_each(|x| keys_of(x, name, out)),
+        _ => {}
+    }
 }
 
 #[test]
-fn lookup_terrain_is_written_per_pixel_and_bakes_to_vertex_weights() -> Result<()> {
+fn layered_terrain_is_left_out_of_the_generic_gltf_and_counted() -> Result<()> {
     let (Some(install), Some(keys)) = (install(Game::Gta), keys(Game::Gta)) else {
         return Ok(());
     };
@@ -63,59 +71,60 @@ fn lookup_terrain_is_written_per_pixel_and_bakes_to_vertex_weights() -> Result<(
     primase_gta::register(&mut registry);
     primase_gltf::register(&mut registry);
     let m = PassManager::new(registry);
-    let mut w = vespucci(&m, &source)?;
-    let per_pixel = w
-        .iter::<LayeredMaterial>()
+    let w = vespucci(&m, &source)?;
+    let layered: Vec<(Entity, &LayeredMaterial)> = w.iter::<LayeredMaterial>().collect();
+    let per_pixel = layered
+        .iter()
         .filter(|(_, l)| l.weights.channels.is_some())
         .count();
     assert_eq!(per_pixel, 2, "Vespucci's lookup-blended terrain materials");
-    // written per pixel: rgb_product_4 of COLOR_1's red and the lookup's green and blue at TEXCOORD_1
-    let written: Vec<Value> = layered(&w)?
-        .into_iter()
-        .filter(|l| l["weights"].get("channels").is_some())
+    // the terrain blend is the layered material alone: no pbr.material of its own to be its host
+    assert!(layered.iter().all(|&(e, _)| !w.has::<PbrMaterial>(e)));
+    let drawn: BTreeSet<Entity> = w
+        .iter::<Mesh>()
+        .flat_map(|(_, mesh)| {
+            mesh.primitives()
+                .iter()
+                .filter_map(|p| p.material)
+                .collect::<Vec<_>>()
+        })
         .collect();
-    assert_eq!(written.len(), per_pixel);
-    for l in &written {
-        assert_eq!(l["version"], 2, "{l}");
-        assert_eq!(l["weights"]["mapping"], "rgb_product_4", "{l}");
-        let channels = l["weights"]["channels"].as_array().ok_or("channels")?;
-        assert_eq!(channels.len(), 3, "{l}");
-        assert_eq!(
-            channels[0]["source"]["vertex"],
-            serde_json::json!({"attribute": "COLOR_1", "channel": 0})
-        );
-        for (c, k) in [(&channels[1], 1), (&channels[2], 2)] {
-            let mask = c
-                .pointer("/source/mask")
-                .or_else(|| c.pointer("/lerp/a/mask"))
-                .ok_or("a lookup mask")?;
-            assert_eq!(mask["texture"]["texCoord"], 1, "{c}");
-            let mut want = [0.0; 4];
-            want[k] = 1.0;
-            assert_eq!(mask["channels"], serde_json::json!(want), "{c}");
-            if let Some(lerp) = c.get("lerp") {
-                assert_eq!(
-                    lerp["b"]["vertex"],
-                    serde_json::json!({"attribute": "COLOR_1", "channel": k})
-                );
-                assert_eq!(
-                    lerp["t"]["vertex"],
-                    serde_json::json!({"attribute": "COLOR_0", "channel": 3})
-                );
-            }
-        }
-    }
-    println!(
-        "Vespucci: {per_pixel} lookup-blended terrain materials, {} mixed by vertex alpha",
-        written.iter().filter(|l| l.to_string().contains("lerp")).count()
+    let layers: BTreeSet<Entity> = layered
+        .iter()
+        .flat_map(|(_, l)| l.layers.iter().flatten().map(|layer| layer.material))
+        .filter(|e| !drawn.contains(e))
+        .collect();
+
+    let (bytes, report) = primase_gltf::write(&w, &primase_gltf::WriteOptions::default())?;
+    let doc: Value = serde_json::from_slice(primase_glb::parse(&bytes)?.json)?;
+    // standard glTF alone: Khronos extensions, and no extras but a mesh's targetNames
+    let (mut extensions, mut extras) = (BTreeSet::new(), BTreeSet::new());
+    keys_of(&doc, "extensionsUsed", &mut extensions);
+    keys_of(&doc, "extras", &mut extras);
+    assert!(extensions.iter().all(|n| n.starts_with("KHR_")), "{extensions:?}");
+    assert!(extras.iter().all(|k| k == "targetNames"), "{extras:?}");
+    // the layered terrain the placements draw: left out, counted, its primitives drawn with no material
+    let unwritten = report.layered_materials_unwritten;
+    assert!(unwritten > 0 && unwritten <= layered.len() as u64, "{report}");
+    assert!(report.primitives_without_material > 0, "{report}");
+    assert!(!report.components_without_form.contains_key(LayeredMaterial::NAME));
+    // the layers' own materials, which nothing else draws, are reported as not written
+    let left = report
+        .components_unwritten
+        .get(PbrMaterial::NAME)
+        .copied()
+        .unwrap_or(0);
+    assert!(
+        left >= layers.len() as u64,
+        "{left} of {} layer materials",
+        layers.len()
     );
-    // baked to vertex weights: no channels left, every layered material a colour attribute
-    let bake = m.registry.parse("bake-layer-channels")?;
-    m.run(&mut w, &bake, &mut RunReport::default())?;
-    assert!(w.iter::<LayeredMaterial>().all(|(_, l)| !l.weights.per_pixel()));
-    for l in layered(&w)? {
-        assert!(l["weights"].get("channels").is_none(), "{l}");
-        assert!(l.get("version").is_none(), "{l}");
-    }
+    println!(
+        "Vespucci: {} layered terrain materials ({per_pixel} lookup-blended), {unwritten} drawn and left out; {} \
+         primitives drawn with no material; {} layer materials not written",
+        layered.len(),
+        report.primitives_without_material,
+        layers.len()
+    );
     Ok(())
 }
