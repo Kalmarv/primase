@@ -193,10 +193,10 @@ fn triangles(p: &Primitive) -> Option<Vec<[u32; 3]>> {
         Some(i) => i.clone(),
         None => (0..u32::try_from(n).ok()?).collect(),
     };
-    if all.len() % 3 != 0 || all.iter().any(|&i| i as usize >= n) {
+    if !all.len().is_multiple_of(3) || all.iter().any(|&i| i as usize >= n) {
         return None;
     }
-    Some(all.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect())
+    Some(all.as_chunks::<3>().0.to_vec())
 }
 
 fn uv_stream(p: &Primitive, set: u8) -> Option<&Vec<[f32; 2]>> {
