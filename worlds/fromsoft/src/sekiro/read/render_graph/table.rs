@@ -113,6 +113,11 @@ pub(crate) enum Presence {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Trigger {
     LocalShadowCasters,
+    /// The step runs only where the scene has water. Elden Ring's table has it on eight steps (the water interaction maps,
+    /// the SSR convert and trace passes, the forward pass after them and the SSR-lit AO). The trigger was derived from a
+    /// recorded frame that lacked those steps; that frame was lost and none of the frames now recorded lacks water, so the
+    /// trigger is kept as the game's behaviour with no recorded frame showing it. A frame without water re-establishes it.
+    /// (A step cannot carry a note of its own: `Step` denies unknown fields.)
     Water,
 }
 

@@ -1204,7 +1204,7 @@ fn elden_rings_render_graph_is_its_recorded_frames() -> Result<(), Box<dyn std::
     lighting_boundary(graph, FsGame::EldenRing);
     assert_eq!(
         (report.render_graph.frames, report.render_graph.view),
-        (7, [2560, 1440])
+        (5, [2560, 1440])
     );
     let picture = graph.picture.unwrap() as usize;
     assert_eq!(
@@ -1234,7 +1234,7 @@ fn elden_rings_render_graph_is_its_recorded_frames() -> Result<(), Box<dyn std::
             &frames,
             &table_frames,
         )?;
-        assert_eq!(checked, 7);
+        assert_eq!(checked, 5);
         let states = check_sampler_states(
             FsGame::EldenRing,
             graph,
