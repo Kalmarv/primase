@@ -26,6 +26,7 @@ use primase_core::Entity;
 
 pub use container::{Chunks, Document, assemble, parse};
 pub use encode::{Buffers, PrimitiveAccessors, encode_mesh};
+pub use json::Extensions;
 pub use load::{LoadReport, load_mesh_files, mesh_file_box};
 pub use material::{material_shading, sampler_filters};
 pub use read::{

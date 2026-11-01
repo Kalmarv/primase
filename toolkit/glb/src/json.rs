@@ -1,5 +1,7 @@
 //! JSON helpers: checked field access for the strict reader.
 
+use std::collections::BTreeMap;
+
 use serde_json::{Map, Value};
 
 use crate::{Error, Result};
@@ -20,8 +22,9 @@ impl<'a> Obj<'a> {
     }
 
     /// Error on any key outside `allowed` (strict reader: what we don't understand is not skipped silently), and on
-    /// a non-empty `extensions` object (an extension can change what the other fields mean). `extras` is a key like any
-    /// other: an object that has somewhere to keep it lists it, one that has not refuses it.
+    /// a non-empty `extensions` object: this object has nowhere to keep one. `extras` is a key like any other: an
+    /// object that has somewhere to keep it lists it, one that has not refuses it. An object that keeps its extensions
+    /// is read with [`Obj::only_keeping_extensions`].
     pub fn only(&self, allowed: &[&str]) -> Result<()> {
         for (k, v) in self.map {
             if k == "extensions" {
@@ -35,6 +38,33 @@ impl<'a> Obj<'a> {
             }
         }
         Ok(())
+    }
+
+    /// As [`Obj::only`], for an object that has somewhere to keep its extensions: each one, by name, as stored, for
+    /// the caller to read or count. Every extension that gets here is optional: one that could change what the other
+    /// fields mean is listed in `extensionsRequired`, which the document's header check refuses (glTF 2.0 3.12), so
+    /// what the reader reads of the object holds without it. An `extensions` that is not an object of objects is an
+    /// error.
+    pub fn only_keeping_extensions(&self, allowed: &[&str]) -> Result<Extensions> {
+        let mut out = Extensions::new();
+        for (k, v) in self.map {
+            if k == "extensions" {
+                let Value::Object(m) = v else {
+                    return Err(invalid(self.path, "extensions is not an object"));
+                };
+                for (name, e) in m {
+                    if !e.is_object() {
+                        return Err(invalid(self.path, &format!("extension {name} is not an object")));
+                    }
+                    out.insert(name.clone(), e.clone());
+                }
+                continue;
+            }
+            if !allowed.contains(&k.as_str()) {
+                return Err(invalid(self.path, &format!("unsupported property {k:?}")));
+            }
+        }
+        Ok(out)
     }
 
     pub fn get(&self, key: &str) -> Option<&'a Value> {
@@ -99,6 +129,9 @@ impl<'a> Obj<'a> {
         }
     }
 }
+
+/// An object's optional extensions, by name, as stored (empty: it has none).
+pub type Extensions = BTreeMap<String, Value>;
 
 pub fn invalid(item: &str, detail: &str) -> Error {
     Error::Invalid {

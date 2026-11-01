@@ -141,8 +141,8 @@ fn a_texture_reference_that_leads_nowhere_is_refused() {
     assert!(e.contains("texture 4 does not exist"), "{e}");
 }
 
-/// Extras are not dropped silently: the reader counts those it keeps nowhere, and a mesh's `targetNames` are read, not
-/// counted. An object with no home for them (an accessor) refuses them.
+/// Extras are not dropped silently: the reader counts the keys it reads nowhere, by name, and a mesh's `targetNames`
+/// are read, not counted. An object with no home for them (an accessor) refuses them.
 #[test]
 fn extras_are_counted_or_refused() {
     let (mut doc, bin) = skinned([0, 0, 0, 0], [1.0, 0.0, 0.0, 0.0]);
@@ -151,9 +151,26 @@ fn extras_are_counted_or_refused() {
     doc["skins"][0]["extras"] = json!({"c": 3});
     doc["meshes"][0]["primitives"][0]["extras"] = json!({"d": 4});
     doc["meshes"][0]["extras"] = json!({"targetNames": []});
-    assert_eq!(read(&doc, &bin).unwrap().extras_not_read, 4);
+    let counted = |doc: &Value| -> Vec<(String, usize)> {
+        read(doc, &bin).unwrap().extras_not_read.into_iter().collect()
+    };
+    let named = |pairs: &[(&str, usize)]| -> Vec<(String, usize)> {
+        pairs.iter().map(|&(k, n)| (k.to_owned(), n)).collect()
+    };
+    assert_eq!(counted(&doc), named(&[("a", 1), ("b", 1), ("c", 1), ("d", 1)]));
     doc["meshes"][0]["extras"] = json!({"targetNames": [], "other": true});
-    assert_eq!(read(&doc, &bin).unwrap().extras_not_read, 5);
+    doc["nodes"][1]["extras"] = json!({"b": 0, "primase": {"core.source": {"version": 1, "value": "x"}}});
+    assert_eq!(
+        counted(&doc),
+        named(&[
+            ("a", 1),
+            ("b", 2),
+            ("c", 1),
+            ("d", 1),
+            ("other", 1),
+            ("primase/core.source", 1)
+        ])
+    );
     doc["accessors"][0]["extras"] = json!({"e": 5});
     let e = read(&doc, &bin).unwrap_err();
     assert!(

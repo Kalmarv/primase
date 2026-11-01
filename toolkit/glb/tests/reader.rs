@@ -86,6 +86,33 @@ fn read(doc: &Value) -> Result<primase_glb::ReadMesh, String> {
         .map_err(|e| e.to_string())
 }
 
+/// An extension the document does not require is optional (glTF 2.0 3.12: one that changes what the other fields mean
+/// is listed in `extensionsRequired`, which is refused): the mesh and its primitive keep theirs, by name, for the
+/// caller to read or count, and read as without them.
+#[test]
+fn optional_extensions_are_kept_for_the_caller() {
+    let mut d = doc();
+    d["meshes"][0]["extensions"] = json!({"EXT_mesh_gpu_instancing": {"attributes": {}}});
+    d["meshes"][0]["primitives"][0]["extensions"] = json!({"KHR_draco_mesh_compression": {"bufferView": 0}});
+    let m = read(&d).unwrap();
+    assert_eq!(
+        m.extensions.keys().collect::<Vec<_>>(),
+        ["EXT_mesh_gpu_instancing"]
+    );
+    assert_eq!(
+        m.primitives[0].extensions["KHR_draco_mesh_compression"],
+        json!({"bufferView": 0})
+    );
+    let mut plain = read(&doc()).unwrap();
+    assert!(plain.extensions.is_empty() && plain.primitives[0].extensions.is_empty());
+    plain.extensions = m.extensions.clone();
+    plain.primitives[0].extensions = m.primitives[0].extensions.clone();
+    assert_eq!(plain, m, "the geometry reads as without them");
+    // required: refused
+    d["extensionsRequired"] = json!(["KHR_draco_mesh_compression"]);
+    assert!(read(&d).unwrap_err().contains("extensionsRequired"));
+}
+
 #[test]
 fn reads_the_base_document() {
     let m = read(&doc()).unwrap();
@@ -180,9 +207,14 @@ fn rejects_what_it_does_not_read() {
             "mode 5",
         ),
         (
-            "draco",
-            |d| d["meshes"][0]["primitives"][0]["extensions"] = json!({"KHR_draco_mesh_compression": {}}),
-            "extensions",
+            "extension that is not an object",
+            |d| d["meshes"][0]["primitives"][0]["extensions"] = json!({"KHR_draco_mesh_compression": 1}),
+            "extension KHR_draco_mesh_compression is not an object",
+        ),
+        (
+            "extension on an object with no home for it",
+            |d| d["accessors"][0]["extensions"] = json!({"EXT_any": {}}),
+            "unsupported extensions",
         ),
         (
             "required extension",

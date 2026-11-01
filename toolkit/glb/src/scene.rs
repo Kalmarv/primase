@@ -16,7 +16,7 @@
 //!   and `weights` normalized integers dequantised as glTF 3.11 states). The values' width per key is checked for
 //!   the paths whose width the document fixes (3, 4, 3); for `weights` it is the target mesh's morph target count,
 //!   which the caller checks. A channel without a target node (only an extension gives one) is refused.
-use crate::json::{Obj, invalid};
+use crate::json::{Extensions, Obj, invalid};
 use crate::read::{ComponentType, ElementType, Gltf};
 use crate::{Error, Result};
 use serde_json::Value;
@@ -46,6 +46,8 @@ pub struct ReadNode {
     pub weights: Option<Vec<f32>>,
     pub camera: Option<usize>,
     pub extras: Option<Value>,
+    /// The node's optional extensions, by name, as stored (`KHR_lights_punctual`'s light, ...).
+    pub extensions: Extensions,
 }
 
 /// One skin as stored.
@@ -59,6 +61,8 @@ pub struct ReadSkin {
     pub skeleton: Option<usize>,
     /// The skin's `extras`, as stored.
     pub extras: Option<Value>,
+    /// The skin's optional extensions, by name, as stored.
+    pub extensions: Extensions,
 }
 
 /// What an animation channel drives.
@@ -109,6 +113,8 @@ pub struct ReadAnimation {
     pub channels: Vec<ReadChannel>,
     /// The animation's `extras`, as stored.
     pub extras: Option<Value>,
+    /// The animation's optional extensions, by name, as stored.
+    pub extensions: Extensions,
 }
 
 /// The `key` array of the document, empty when absent.
@@ -181,7 +187,7 @@ impl Gltf {
         for (i, n) in nodes.iter().enumerate() {
             let path = format!("nodes[{i}]");
             let o = Obj::new(n, &path)?;
-            o.only(&[
+            let extensions = o.only_keeping_extensions(&[
                 "name",
                 "children",
                 "matrix",
@@ -243,6 +249,7 @@ impl Gltf {
                 weights: o.f32s_opt("weights")?,
                 camera: bounded("camera", cameras)?,
                 extras: o.get("extras").cloned(),
+                extensions,
             });
         }
         // a forest: following parents from any node ends at a root. Each node is walked once: a walk stops at a node an
@@ -295,6 +302,16 @@ impl Gltf {
         Ok(self.default_scene()?.and_then(|(_, s)| s.get("extras").cloned()))
     }
 
+    /// The default scene's optional extensions, by name, as stored; empty when it has none or the document has no
+    /// scene.
+    pub fn scene_extensions(&self) -> Result<Extensions> {
+        let Some((chosen, s)) = self.default_scene()? else {
+            return Ok(Extensions::new());
+        };
+        let path = format!("scenes[{chosen}]");
+        Obj::new(s, &path)?.only_keeping_extensions(&["nodes", "name", "extras"])
+    }
+
     /// The default scene's root nodes (`scene`, else the first scene); `None` when the document has no scene.
     pub fn scene_roots(&self) -> Result<Option<Vec<usize>>> {
         let nodes = array(self.json(), "nodes")?.len();
@@ -303,7 +320,7 @@ impl Gltf {
         };
         let path = format!("scenes[{chosen}]");
         let o = Obj::new(s, &path)?;
-        o.only(&["nodes", "name", "extras"])?;
+        o.only_keeping_extensions(&["nodes", "name", "extras"])?;
         let roots = indices(&o, "nodes", nodes, "node")?.unwrap_or_default();
         let mut listed = std::collections::BTreeSet::new();
         if let Some(r) = roots.iter().find(|r| !listed.insert(**r)) {
@@ -330,7 +347,13 @@ impl Gltf {
             .map(|(i, s)| {
                 let path = format!("skins[{i}]");
                 let o = Obj::new(s, &path)?;
-                o.only(&["name", "joints", "inverseBindMatrices", "skeleton", "extras"])?;
+                let extensions = o.only_keeping_extensions(&[
+                    "name",
+                    "joints",
+                    "inverseBindMatrices",
+                    "skeleton",
+                    "extras",
+                ])?;
                 let joints = indices(&o, "joints", nodes, "node")?
                     .filter(|j| !j.is_empty())
                     .ok_or_else(|| invalid(&path, "no joints"))?;
@@ -366,6 +389,7 @@ impl Gltf {
                 Ok(ReadSkin {
                     name: o.str_opt("name")?.map(str::to_owned),
                     extras: o.get("extras").cloned(),
+                    extensions,
                     joints,
                     inverse_binds,
                     skeleton: o
@@ -393,7 +417,7 @@ impl Gltf {
             .map(|(i, a)| {
                 let path = format!("animations[{i}]");
                 let o = Obj::new(a, &path)?;
-                o.only(&["name", "channels", "samplers", "extras"])?;
+                let extensions = o.only_keeping_extensions(&["name", "channels", "samplers", "extras"])?;
                 let samplers = match o.get("samplers") {
                     Some(Value::Array(s)) if !s.is_empty() => s,
                     _ => return Err(invalid(&path, "samplers missing or empty")),
@@ -483,6 +507,7 @@ impl Gltf {
                     name: o.str_opt("name")?.map(str::to_owned),
                     channels,
                     extras: o.get("extras").cloned(),
+                    extensions,
                 })
             })
             .collect()

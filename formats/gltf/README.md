@@ -1,8 +1,9 @@
 # primase-gltf
 
 Reads glTF 2.0 / GLB into a world and writes prepared worlds as GLB: shared prototypes, placements, PBR
-materials, embedded images, rigs and clips. `prepare` supplies material and missing-texcoord passes;
-`GlbParts` writes conversions incrementally and `preview` retains choices in a manifest and recipe.
+materials, embedded images, lights (`KHR_lights_punctual`), rigs and clips. `prepare` supplies material and
+missing-texcoord passes; `GlbParts` writes conversions incrementally and `preview` retains choices in a manifest and
+recipe.
 The container codec is `primase-glb`. The shared frame is glTF's: metres, right-handed, +Y up.
 Writers report omissions and approximations; they do not load files or run preparation passes.
 

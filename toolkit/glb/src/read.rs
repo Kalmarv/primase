@@ -17,11 +17,13 @@
 //! packed elements as any other; any accessor's elements as f32 for animation samplers ([`Gltf::floats`]);
 //! application-specific attributes (named `_...`, glTF 3.7.2.1) as stored ([`AccessorData`]), for the caller to
 //! state. Everything else that could change the geometry is an error naming the item: strips, fans and loops, a
-//! GLB's external or extra buffers, required extensions, any extension on what is read, unknown properties,
-//! application-specific, texture-coordinate or color morph target attributes. `extras` are kept where the reader has a
-//! home for them (a mesh, primitive, node, skin or animation, and the default scene, [`Gltf::scene_extras`]) and an
-//! error anywhere else (an accessor, buffer view, sampler...): never dropped without a word. Extensions a document only uses
-//! (`extensionsUsed`, on materials or textures) are the caller's to read from [`Gltf::json`].
+//! GLB's external or extra buffers, required extensions (`extensionsRequired`: only those may change what the other
+//! fields mean), unknown properties, application-specific, texture-coordinate or color morph target attributes.
+//! `extras` and optional extensions are kept where the reader has a home for them (a mesh, primitive, node, skin or
+//! animation, and the default scene, [`Gltf::scene_extras`] and [`Gltf::scene_extensions`]; extensions by name,
+//! [`Extensions`], for the caller to read or count) and an error anywhere else (an accessor, buffer view, sampler...):
+//! never dropped without a word. Extensions on materials, textures and the document itself are the caller's to read
+//! from [`Gltf::json`].
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -34,7 +36,7 @@ use std::collections::BTreeMap;
 use primase_core::{Mesh, Primitive, Semantic, Stream, Topology};
 use serde_json::Value;
 
-use crate::json::{Obj, invalid};
+use crate::json::{Extensions, Obj, invalid};
 use crate::{Error, Result};
 
 const BYTE: u64 = 5120;
@@ -71,6 +73,8 @@ pub struct ReadPrimitive {
     pub targets: Vec<ReadTarget>,
     /// The primitive's `extras`, as stored.
     pub extras: Option<Value>,
+    /// The primitive's optional extensions, by name, as stored.
+    pub extensions: Extensions,
 }
 
 /// One morph target: deltas added to the primitive's attributes, one element per vertex like POSITION. FLOAT as
@@ -157,6 +161,8 @@ pub struct AccessorData {
 pub struct ReadMesh {
     pub name: Option<String>,
     pub extras: Option<Value>,
+    /// The mesh's optional extensions, by name, as stored.
+    pub extensions: Extensions,
     pub primitives: Vec<ReadPrimitive>,
     /// The mesh's default morph target weights; as many as the targets of each primitive.
     pub weights: Option<Vec<f32>>,
@@ -307,7 +313,7 @@ impl Gltf {
             .get(index)
             .ok_or_else(|| invalid(&path, "does not exist"))?;
         let m = Obj::new(m, &path)?;
-        m.only(&["primitives", "weights", "name", "extras"])?;
+        let extensions = m.only_keeping_extensions(&["primitives", "weights", "name", "extras"])?;
         let prims = match m.get("primitives") {
             Some(Value::Array(a)) if !a.is_empty() => a,
             _ => return Err(invalid(&path, "primitives missing or empty")),
@@ -343,6 +349,7 @@ impl Gltf {
         Ok(ReadMesh {
             name: m.str_opt("name")?.map(str::to_owned),
             extras: m.get("extras").cloned(),
+            extensions,
             primitives,
             weights,
         })
@@ -350,7 +357,8 @@ impl Gltf {
 
     fn read_primitive(&self, p: &Value, path: &str) -> Result<ReadPrimitive> {
         let p = Obj::new(p, path)?;
-        p.only(&["attributes", "indices", "material", "mode", "targets", "extras"])?;
+        let extensions =
+            p.only_keeping_extensions(&["attributes", "indices", "material", "mode", "targets", "extras"])?;
         let topology = match p.u64_opt("mode")?.unwrap_or(4) {
             0 => Topology::Points,
             1 => Topology::Lines,
@@ -459,6 +467,7 @@ impl Gltf {
             custom,
             targets,
             extras: p.get("extras").cloned(),
+            extensions,
         })
     }
 

@@ -37,22 +37,37 @@
 //!   `CUBICSPLINE` are core's `Step`, `Linear` and `Hermite` (glTF's layout and rules). An animation driving joints
 //!   of several skeletons is one clip a skeleton, its morph channels with the first. Channels on nodes that are not
 //!   joints have no core target: not read, counted.
+//! - **Lights** (`KHR_lights_punctual`): each scene node naming one of the document's lights is a `core.light` entity
+//!   (the node's name, `core.transform` its world transform at the stored pose, as a placement's): the light's type,
+//!   colour, intensity, range and a spot's cones as stored, every default the extension's (white, intensity 1, no
+//!   range, cones 0 and pi / 4). Its `cast_shadows` is the node's `extras["primase.shadows"].cast` (`"on"`, `"off"`),
+//!   unknown where the node states none. A light on or under a skeleton's joint stays where the stored pose puts it
+//!   (core's lights follow no rig), counted; a light no scene node places is counted.
+//! - **Shadows**: a mesh node's `extras["primase.shadows"]` (version 1: `cast` `"off"`, `"on"` or `"only"`, `receive`
+//!   a boolean) becomes its placement's `core.shadows`.
 //! - **The asset**: a root with `core.asset` (each skeleton a rig, each placement a part, each clip a clip),
 //!   `core.source` the caller's key and `core.name`.
 //!
-//! Not read, counted: cameras, the `extras` of the objects read (but a mesh's `targetNames`), the skins' `skeleton` hints (no effect on deformation), images no core material slot
-//! samples, and the images refused by name.
+//! Not read, counted: cameras, the skins' `skeleton` hints (no effect on deformation), images no core material slot
+//! samples, the images refused by name, every `extras` key of the objects read that is not read above (a mesh's
+//! `targetNames`, a node's `primase.shadows`), by name (each component of primase's own `extras.primase` by its name,
+//! `primase/<component>`), and every optional extension of the document, scene, nodes, meshes, primitives, skins,
+//! animations and lights other than `KHR_lights_punctual`, by name. A material's extensions are its lowering's
+//! (`lower-gltf-materials`), its `extras` are counted here.
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_animation::pose::{Affine, affine, compose, transform};
 use primase_core::convert::{Notice, NoticeKind};
 use primase_core::{
     Asset, Attachment, Binding, BindingId, Clip, ClipBinding, ClipTarget, Deformation, Deltas, Entity,
-    Extrapolation, Influences, Instance, Interpolation, Joint, JointId, MorphFrame, MorphId, MorphTarget,
-    MorphWeights, Morphs, Name, Opaque, OpaqueData, Property, Rest, RigInstance, Role, Semantic, Skeleton,
-    Skin, SkinInstance, Slot, Socket, SocketId, Sockets, Source, Stream, Transform, WeightRule, World,
+    Extrapolation, Influences, Instance, Interpolation, Joint, JointId, Light, LightKind, MorphFrame,
+    MorphId, MorphTarget, MorphWeights, Morphs, Name, Opaque, OpaqueData, Property, Rest, RigInstance, Role,
+    Semantic, ShadowCast, Shadows, Skeleton, Skin, SkinInstance, Slot, Socket, SocketId, Sockets, Source,
+    Stream, Transform, WeightRule, World,
 };
-use primase_glb::{AnimationInterpolation, AnimationPath, Gltf, Local, ReadMesh, ReadNode, ReadSkin};
+use primase_glb::{
+    AnimationInterpolation, AnimationPath, Extensions, Gltf, Local, ReadMesh, ReadNode, ReadSkin,
+};
 use serde_json::Value;
 
 use crate::textures::{ImageResolver, read_textures};
@@ -60,6 +75,12 @@ use crate::{Error, Result};
 
 /// The component a material's glTF JSON is read into.
 pub const MATERIAL: &str = "gltf.material";
+
+/// The lights extension, read into `core.light`.
+const LIGHTS: &str = "KHR_lights_punctual";
+
+/// The `extras` key a node states its shadows under (the writer's, `crate::write`).
+const SHADOWS: &str = "primase.shadows";
 
 /// What [`read`] read, and what it did not.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -82,9 +103,15 @@ pub struct ReadReport {
     pub nodes_outside_scene: usize,
     pub cameras: usize,
     pub skeleton_hints: usize,
-    /// Objects the reader read whose `extras` it keeps nowhere (a mesh's `targetNames` is read; other keys, and the extras
-    /// of primitives, nodes, skins, animations and the scene, are not).
-    pub extras_not_read: usize,
+    /// The `extras` keys the reader read nowhere, by name, each with the number of objects stating it: every key of
+    /// the scene's, the scene nodes', drawn skins', drawn meshes', their primitives', the animations', the materials'
+    /// and the lights' extras but a mesh's `targetNames` and a light or mesh node's `primase.shadows`; each component
+    /// in primase's own `primase` key as `primase/<component name>`.
+    pub extras_not_read: BTreeMap<String, usize>,
+    /// The optional extensions the reader read nowhere, by name, each with the number of objects stating it: the
+    /// document's, the scene's, the scene nodes', drawn meshes', their primitives', drawn skins', the animations' and
+    /// the lights' (`KHR_lights_punctual` on the document and the nodes is read).
+    pub extensions_not_read: BTreeMap<String, usize>,
     pub channels_off_joints: usize,
     pub unskinned_joint_streams: usize,
     /// The document's textures and images, and what became of its images: those a core material slot samples were
@@ -95,6 +122,12 @@ pub struct ReadReport {
     pub images_read: usize,
     pub images_refused: BTreeMap<String, usize>,
     pub images_unused: usize,
+    /// Lights read (`core.light`): one a scene node naming a `KHR_lights_punctual` light.
+    pub lights: usize,
+    /// The document's lights no scene node places, not read.
+    pub lights_unplaced: usize,
+    /// Lights on or under a skeleton's joint, placed where the stored pose puts them: a core light follows no rig.
+    pub lights_at_stored_pose: usize,
 }
 
 impl ReadReport {
@@ -109,8 +142,8 @@ impl ReadReport {
             ),
             n("cameras, not read", self.cameras),
             n(
-                "extras of meshes, primitives, nodes, skins, animations and the scene (other than a mesh's targetNames), not read",
-                self.extras_not_read,
+                "lights no scene node places (KHR_lights_punctual), not read",
+                self.lights_unplaced,
             ),
             n(
                 "skins' skeleton hints, not read (no effect on deformation)",
@@ -135,7 +168,25 @@ impl ReadReport {
                 .iter()
                 .map(|(reason, count)| n(&format!("images refused: {reason}"), *count)),
         )
+        .chain(
+            self.extras_not_read
+                .iter()
+                .map(|(key, count)| n(&format!("extras {key}, not read"), *count)),
+        )
+        .chain(
+            self.extensions_not_read
+                .iter()
+                .map(|(name, count)| n(&format!("extension {name}, not read"), *count)),
+        )
         .filter(|x| x.count > 0)
+        .chain((self.lights_at_stored_pose > 0).then(|| {
+            Notice::new(
+                "gltf",
+                NoticeKind::Approximation,
+                "lights on or under a skeleton's joint, placed where the stored pose puts them (a core light follows no rig)",
+                self.lights_at_stored_pose as u64,
+            )
+        }))
         .collect()
     }
 }
@@ -164,6 +215,205 @@ fn rest(l: &Local) -> Rest {
 /// A node's name, else `node <i>`.
 fn node_name(n: &ReadNode, i: usize) -> String {
     n.name.clone().unwrap_or_else(|| format!("node {i}"))
+}
+
+/// Counts the `extras` keys of one object that are not in `read`, by name: each component in primase's own `primase`
+/// object as `primase/<name>`; extras that are not an object as `(not an object)`.
+fn tally_extras(report: &mut ReadReport, extras: Option<&Value>, read: &[&str]) {
+    let Some(extras) = extras else { return };
+    let mut count = |key: String| *report.extras_not_read.entry(key).or_default() += 1;
+    let Some(keys) = extras.as_object() else {
+        count("(not an object)".to_owned());
+        return;
+    };
+    for (key, value) in keys {
+        if read.contains(&key.as_str()) {
+            continue;
+        }
+        match (key.as_str(), value.as_object()) {
+            ("primase", Some(components)) => components.keys().for_each(|c| count(format!("primase/{c}"))),
+            _ => count(key.clone()),
+        }
+    }
+}
+
+/// Counts the extensions of one object that are not in `read`, by name.
+fn tally_extensions(report: &mut ReadReport, extensions: &Extensions, read: &[&str]) {
+    for name in extensions.keys().filter(|n| !read.contains(&n.as_str())) {
+        *report.extensions_not_read.entry(name.clone()).or_default() += 1;
+    }
+}
+
+/// A node's `extras["primase.shadows"]` (version 1), as the writer states it: `cast` and `receive`, each where stated.
+/// `None` where the node states none, or states another version (counted as not read by the caller). A malformed
+/// statement is an error naming the node.
+fn node_shadows(node: &ReadNode, n: usize) -> Result<Option<(Option<ShadowCast>, Option<bool>)>> {
+    let Some(v) = node.extras.as_ref().and_then(|x| x.get(SHADOWS)) else {
+        return Ok(None);
+    };
+    let item = || format!("nodes[{n}].extras.{SHADOWS}");
+    let o = v.as_object().ok_or_else(|| invalid(item(), "not an object"))?;
+    if o.get("version").and_then(Value::as_u64) != Some(1) {
+        return Ok(None);
+    }
+    if let Some(k) = o
+        .keys()
+        .find(|k| !["version", "cast", "receive"].contains(&k.as_str()))
+    {
+        return Err(invalid(item(), format!("unknown key {k:?}")));
+    }
+    let cast = match o.get("cast") {
+        None => None,
+        Some(c) => Some(match c.as_str() {
+            Some("off") => ShadowCast::Off,
+            Some("on") => ShadowCast::On,
+            Some("only") => ShadowCast::Only,
+            _ => {
+                return Err(invalid(
+                    item(),
+                    format!("cast {c} is not \"off\", \"on\" or \"only\""),
+                ));
+            }
+        }),
+    };
+    let receive = match o.get("receive") {
+        None => None,
+        Some(r) => Some(
+            r.as_bool()
+                .ok_or_else(|| invalid(item(), format!("receive {r} is not a boolean")))?,
+        ),
+    };
+    Ok(Some((cast, receive)))
+}
+
+/// A number of a light object, finite and at least 0 (`min`), else an error naming it.
+fn light_number(o: &serde_json::Map<String, Value>, key: &str, path: &str) -> Result<Option<f32>> {
+    match o.get(key) {
+        None => Ok(None),
+        Some(v) => v
+            .as_f64()
+            .map(|x| x as f32)
+            .filter(|x| x.is_finite() && *x >= 0.0)
+            .map(Some)
+            .ok_or_else(|| invalid(path, format!("{key} {v} is not a number of at least 0"))),
+    }
+}
+
+/// Light `i` of the document's `KHR_lights_punctual` list as a core light (its shadows the node's), strictly: an
+/// unknown property, type or value out of the extension's ranges is an error naming it. Its extras and extensions are
+/// counted the `first` time a node names it.
+fn punctual_light(
+    report: &mut ReadReport,
+    lights: &[Value],
+    i: usize,
+    cast_shadows: Option<bool>,
+    first: bool,
+) -> Result<Light> {
+    let path = format!("extensions.{LIGHTS}.lights[{i}]");
+    let o = lights
+        .get(i)
+        .ok_or_else(|| invalid(&path, format!("does not exist ({} lights)", lights.len())))?
+        .as_object()
+        .ok_or_else(|| invalid(&path, "not an object"))?;
+    let allowed = [
+        "name",
+        "type",
+        "color",
+        "intensity",
+        "range",
+        "spot",
+        "extras",
+        "extensions",
+    ];
+    if let Some(k) = o.keys().find(|k| !allowed.contains(&k.as_str())) {
+        return Err(invalid(&path, format!("unsupported property {k:?}")));
+    }
+    if let Some(e) = o.get("extensions") {
+        let e = e
+            .as_object()
+            .ok_or_else(|| invalid(&path, "extensions is not an object"))?;
+        for name in e.keys().filter(|_| first) {
+            *report.extensions_not_read.entry(name.clone()).or_default() += 1;
+        }
+    }
+    if first {
+        tally_extras(report, o.get("extras"), &[]);
+    }
+    let kind = match o.get("type").and_then(Value::as_str) {
+        Some("directional") => LightKind::Directional,
+        Some("point") => LightKind::Point,
+        Some("spot") => {
+            let spot = o
+                .get("spot")
+                .and_then(Value::as_object)
+                .ok_or_else(|| invalid(&path, "a spot light without its spot object"))?;
+            let spot_path = format!("{path}.spot");
+            if let Some(k) = spot
+                .keys()
+                .find(|k| !["innerConeAngle", "outerConeAngle", "extras", "extensions"].contains(&k.as_str()))
+            {
+                return Err(invalid(&spot_path, format!("unsupported property {k:?}")));
+            }
+            if first {
+                tally_extras(report, spot.get("extras"), &[]);
+            }
+            let inner_cone = light_number(spot, "innerConeAngle", &spot_path)?.unwrap_or(0.0);
+            let outer_cone =
+                light_number(spot, "outerConeAngle", &spot_path)?.unwrap_or(std::f32::consts::FRAC_PI_4);
+            if !(inner_cone <= outer_cone && outer_cone > 0.0 && outer_cone <= std::f32::consts::FRAC_PI_2) {
+                return Err(invalid(
+                    &spot_path,
+                    format!(
+                        "cones {inner_cone} and {outer_cone}: glTF needs 0 <= inner <= outer <= pi / 2, outer above 0"
+                    ),
+                ));
+            }
+            LightKind::Spot {
+                inner_cone,
+                outer_cone,
+            }
+        }
+        other => {
+            return Err(invalid(
+                &path,
+                format!("type {other:?} is not directional, point or spot"),
+            ));
+        }
+    };
+    if !matches!(kind, LightKind::Spot { .. }) && o.contains_key("spot") {
+        return Err(invalid(&path, "a spot object on a light that is not a spot"));
+    }
+    let color = match o.get("color") {
+        None => [1.0; 3],
+        Some(c) => {
+            let a = c
+                .as_array()
+                .filter(|a| a.len() == 3)
+                .ok_or_else(|| invalid(&path, "color is not three numbers"))?;
+            let mut out = [0.0f32; 3];
+            for (k, (x, v)) in out.iter_mut().zip(a).enumerate() {
+                *x = v
+                    .as_f64()
+                    .map(|x| x as f32)
+                    .filter(|x| x.is_finite() && *x >= 0.0)
+                    .ok_or_else(|| invalid(&path, format!("color[{k}] {v} is not a number of at least 0")))?;
+            }
+            out
+        }
+    };
+    let range = light_number(o, "range", &path)?;
+    if range == Some(0.0) {
+        return Err(invalid(&path, "range 0: glTF's range is above 0"));
+    }
+    Ok(Light {
+        kind,
+        color,
+        intensity: light_number(o, "intensity", &path)?.unwrap_or(1.0),
+        range,
+        cast_shadows,
+        radius: None,
+        specular: None,
+    })
 }
 
 fn invalid(item: impl Into<String>, detail: impl Into<String>) -> Error {
@@ -239,7 +489,40 @@ pub fn read_with_images(
     let skins = gltf.skins()?;
     let animations = gltf.animations()?;
     let roots = gltf.scene_roots()?.unwrap_or_default();
-    report.extras_not_read += usize::from(gltf.scene_extras()?.is_some());
+    tally_extras(&mut report, gltf.scene_extras()?.as_ref(), &[]);
+    tally_extensions(&mut report, &gltf.scene_extensions()?, &[]);
+    // the document's own extensions: the lights are read below
+    let document_extensions = match json.get("extensions") {
+        None => serde_json::Map::new(),
+        Some(Value::Object(m)) => m.clone(),
+        Some(_) => return Err(invalid("extensions", "not an object")),
+    };
+    for name in document_extensions.keys().filter(|n| n.as_str() != LIGHTS) {
+        *report.extensions_not_read.entry(name.clone()).or_default() += 1;
+    }
+    let lights: Vec<Value> = match document_extensions.get(LIGHTS) {
+        None => Vec::new(),
+        Some(l) => {
+            let o = l
+                .as_object()
+                .ok_or_else(|| invalid(format!("extensions.{LIGHTS}"), "not an object"))?;
+            if let Some(k) = o
+                .keys()
+                .find(|k| !["lights", "extras", "extensions"].contains(&k.as_str()))
+            {
+                return Err(invalid(
+                    format!("extensions.{LIGHTS}"),
+                    format!("unsupported property {k:?}"),
+                ));
+            }
+            tally_extras(&mut report, o.get("extras"), &[]);
+            match o.get("lights") {
+                None => Vec::new(),
+                Some(Value::Array(a)) => a.clone(),
+                Some(_) => return Err(invalid(format!("extensions.{LIGHTS}.lights"), "not an array")),
+            }
+        }
+    };
 
     // the scene's nodes, their parents and world transforms (composed in f64 from the roots down)
     let mut parent: BTreeMap<usize, usize> = BTreeMap::new();
@@ -264,7 +547,18 @@ pub fn read_with_images(
     let in_scene: BTreeSet<usize> = order.iter().copied().collect();
     report.nodes_outside_scene = nodes.len() - in_scene.len();
     report.cameras = order.iter().filter(|&&n| nodes[n].camera.is_some()).count();
-    report.extras_not_read += order.iter().filter(|&&n| nodes[n].extras.is_some()).count();
+    for &n in &order {
+        let node = &nodes[n];
+        // a light or mesh node's shadows are read (a version this reader does not know is counted with the rest)
+        let shadows_read =
+            (node.mesh.is_some() || node.extensions.contains_key(LIGHTS)) && node_shadows(node, n)?.is_some();
+        tally_extras(
+            &mut report,
+            node.extras.as_ref(),
+            if shadows_read { &[SHADOWS] } else { &[] },
+        );
+        tally_extensions(&mut report, &node.extensions, &[LIGHTS]);
+    }
 
     // the skins drawn in the scene, and their joints with every node above them: the skeletons' nodes
     let drawn_skins: BTreeSet<usize> = order.iter().filter_map(|&n| nodes[n].skin).collect();
@@ -274,7 +568,8 @@ pub fn read_with_images(
         if skin.skeleton.is_some() {
             report.skeleton_hints += 1;
         }
-        report.extras_not_read += usize::from(skin.extras.is_some());
+        tally_extras(&mut report, skin.extras.as_ref(), &[]);
+        tally_extensions(&mut report, &skin.extensions, &[]);
         for &j in &skin.joints {
             if !in_scene.contains(&j) {
                 return Err(invalid(
@@ -386,14 +681,15 @@ pub fn read_with_images(
             primitives,
             weights,
             extras,
+            extensions,
         } = read;
         // a mesh's `targetNames` are read below; any other key of its extras is not
-        report.extras_not_read += usize::from(
-            extras
-                .as_ref()
-                .is_some_and(|x| x.as_object().is_none_or(|o| o.keys().any(|k| k != "targetNames"))),
-        );
-        report.extras_not_read += primitives.iter().filter(|p| p.extras.is_some()).count();
+        tally_extras(&mut report, extras.as_ref(), &["targetNames"]);
+        tally_extensions(&mut report, &extensions, &[]);
+        for p in &primitives {
+            tally_extras(&mut report, p.extras.as_ref(), &[]);
+            tally_extensions(&mut report, &p.extensions, &[]);
+        }
         w.insert(e, Name(name.unwrap_or_else(|| format!("mesh {m}"))));
         let mut prims = Vec::with_capacity(primitives.len());
         for p in &primitives {
@@ -532,6 +828,9 @@ pub fn read_with_images(
         );
         w.insert(p, transform(&world_of[&n]));
         w.insert(p, Name(node_name(node, n)));
+        if let Some((cast, receive)) = node_shadows(node, n)? {
+            w.insert(p, Shadows { cast, receive });
+        }
         if let Some(s) = node.skin {
             let (_, rig) = skin_skeleton(s)?;
             w.insert(
@@ -601,10 +900,63 @@ pub fn read_with_images(
     }
     report.placements = placements.len();
 
+    // lights: each scene node naming one of the document's lights
+    let mut placed_lights = BTreeSet::new();
+    for &n in &order {
+        let node = &nodes[n];
+        let Some(l) = node.extensions.get(LIGHTS) else {
+            continue;
+        };
+        let path = format!("nodes[{n}].extensions.{LIGHTS}");
+        let o = l.as_object().ok_or_else(|| invalid(&path, "not an object"))?;
+        if let Some(k) = o
+            .keys()
+            .find(|k| !["light", "extras", "extensions"].contains(&k.as_str()))
+        {
+            return Err(invalid(&path, format!("unsupported property {k:?}")));
+        }
+        tally_extras(&mut report, o.get("extras"), &[]);
+        let i = o
+            .get("light")
+            .and_then(Value::as_u64)
+            .and_then(|i| usize::try_from(i).ok())
+            .ok_or_else(|| invalid(&path, "light is not an index"))?;
+        let cast_shadows = match node_shadows(node, n)? {
+            None => None,
+            Some((None, None)) => None,
+            Some((Some(ShadowCast::On), None)) => Some(true),
+            Some((Some(ShadowCast::Off), None)) => Some(false),
+            Some(_) => {
+                return Err(invalid(
+                    format!("nodes[{n}].extras.{SHADOWS}"),
+                    "a light's shadows are cast \"on\" or \"off\" alone",
+                ));
+            }
+        };
+        let first = placed_lights.insert(i);
+        let light = punctual_light(&mut report, &lights, i, cast_shadows, first)?;
+        let e = w.spawn();
+        w.insert(e, light);
+        w.insert(e, transform(&world_of[&n]));
+        w.insert(e, Name(node_name(node, n)));
+        // on or under a joint: the stored pose's place, which the rig does not move
+        let mut at = Some(n);
+        while let Some(a) = at {
+            if skeletons.of.contains_key(&a) {
+                report.lights_at_stored_pose += 1;
+                break;
+            }
+            at = parent.get(&a).copied();
+        }
+        report.lights += 1;
+    }
+    report.lights_unplaced = (0..lights.len()).filter(|i| !placed_lights.contains(i)).count();
+
     // animations
     let mut clips = Vec::new();
     for (i, a) in animations.iter().enumerate() {
-        report.extras_not_read += usize::from(a.extras.is_some());
+        tally_extras(&mut report, a.extras.as_ref(), &[]);
+        tally_extensions(&mut report, &a.extensions, &[]);
         let name = a.name.clone().unwrap_or_else(|| format!("animation {i}"));
         // channels by skeleton (None: morph channels on no joint), morph-driven placements by skeleton
         let mut groups: BTreeMap<Option<Entity>, (Vec<primase_core::clip::Channel>, BTreeSet<Entity>)> =
@@ -731,6 +1083,11 @@ pub fn read_with_images(
         }
     }
     report.clips = clips.len();
+
+    // the materials' extras: kept with their glTF JSON, read by nothing
+    for &i in material_entities.keys() {
+        tally_extras(&mut report, materials_json[i].get("extras"), &[]);
+    }
 
     // the images the materials' slots sample
     let images = read_textures(gltf, source, w, &material_entities, resolve)?;
