@@ -1,7 +1,7 @@
 //! A source's local-light shadow atlas, as a mechanism: the layout the source states ([`LocalShadowAtlas`]) and the
 //! placement of the lights a consumer chose to shadow in it ([`LocalShadowAtlas::place`]). Which lights get a shadow
-//! is the consumer's choice, never the atlas's: it places exactly the lights it is given, in the order given, and
-//! refuses, with the reason, what does not fit.
+//! is chosen apart from the atlas, by the options the consumer states ([`super::LocalShadowChoice`]): the atlas places
+//! exactly the lights it is given, in the order given, and refuses, with the reason, what does not fit.
 use serde::Serialize;
 
 use super::{LocalShadow, LocalShadows};

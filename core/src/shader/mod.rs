@@ -13,6 +13,7 @@ mod program;
 pub mod roles;
 mod select_variant;
 mod shadow_atlas;
+mod shadow_choice;
 pub mod surface;
 
 pub(crate) use binding::BindingPlace;
@@ -40,6 +41,7 @@ pub use shadow_atlas::{
     LocalShadowAtlas, ShadowDepth, ShadowDepthTerm, ShadowFace, ShadowFaceView, ShadowPlacement,
     ShadowedLight,
 };
+pub use shadow_choice::{ChosenShadows, LocalShadowChoice, ShadowView};
 pub use surface::Surface;
 
 mod specialise;
