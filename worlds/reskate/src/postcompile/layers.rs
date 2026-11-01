@@ -25,7 +25,9 @@
 //! Positions are measured as stored (half floats as their values), so what storing moved is already in them. The
 //! checks look at pairs of same-facing triangles ([`primase_meshops::layers`]) whose projections overlap, in the
 //! level's frame, tile by tile (a triangle belongs to the tile of its centroid; its neighbours are gathered from the
-//! tile padded by the reach). Areas are square metres of the overlap.
+//! tile padded by the reach). A triangle is paired with those whose boxes come within the distance its checks measure
+//! out to: a depth-writing one's clearance, a decal-class one's cover or reach (a pair any band finds lies that close).
+//! Areas are square metres of the overlap.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -38,7 +40,7 @@ use frostbite_formats::permutation::FixedState;
 use frostbite_formats::scope::Scope;
 use primase_frostbite::read::program::program_states;
 use primase_meshops::layers::{
-    Frame, Index, Over, Poly, Tri, area, clip_all, disjoint, dot, edges, subtract,
+    Boxes, Frame, Index, Over, Poly, Tri, area, bounds, clip_all, disjoint, dot, edges, subtract,
 };
 
 use crate::postcompile::level::{Level, Placement, ROOT_TOC};
@@ -372,7 +374,7 @@ pub fn check(level: &Level, classes: &BTreeMap<u64, Class>, limits: &Limits) -> 
     check_threads(level, classes, limits, threads)
 }
 
-/// The most threads [`check`] runs tiles on: each holds one tile's triangles and their index (a dense city tile's
+/// The most threads [`check`] runs tiles on: each holds one tile's triangles and their boxes (a dense city tile's
 /// million triangles take a few hundred megabytes).
 pub const MAX_THREADS: usize = 16;
 
@@ -430,7 +432,7 @@ pub fn check_threads(
                 continue;
             }
             *out.triangles.entry(here.items[i].class).or_default() += 1;
-            if !here.index.listed(i) {
+            if !here.listed[i] {
                 out.unindexed += 1;
             }
             here.check_one(i, &mut near, &mut out.tally, &mut deferred);
@@ -536,13 +538,21 @@ impl Tally {
     }
 }
 
-/// One tile's triangles (every one reaching the padded tile) and their index.
+/// How much nearer than a check's distance two boxes must come to be paired: past the rounding of the distances the
+/// checks measure.
+const SLACK: f64 = 1.0e-6;
+
+/// The cell of the index whose limit says which triangles are too big to pair ([`Index::lists`]): a far terrain's.
+const CELL: f64 = 1.0;
+
+/// One tile's triangles (every one reaching the padded tile) and their boxes.
 struct Tile<'a> {
     level: &'a Level,
     placements: &'a [Placed],
     items: Vec<Item>,
-    tris: Vec<Tri>,
-    index: Index,
+    /// Whether an item is paired at all: not too big ([`Index::lists`], cells of [`CELL`] padded by the tile's pad).
+    listed: Vec<bool>,
+    boxes: Boxes,
     limits: &'a Limits,
     /// The tile's own square, horizontally: `x0 <= x < x1`, `z0 <= z < z1`.
     x: (f64, f64),
@@ -609,13 +619,14 @@ impl<'a> Tile<'a> {
             return None;
         }
         let tris: Vec<Tri> = items.iter().map(|i| i.tri).collect();
-        let index = Index::new(&tris, 1.0, pad);
+        let listed: Vec<bool> = tris.iter().map(|t| Index::lists(t, CELL, pad)).collect();
+        let boxes = Boxes::new(&tris, |i| listed[i]);
         Some(Tile {
             level,
             placements,
             items,
-            tris,
-            index,
+            listed,
+            boxes,
             limits,
             x: (x0, x1),
             z: (z0, z1),
@@ -747,7 +758,17 @@ impl<'a> Tile<'a> {
         // the surface of the largest piece in front, with the piece's area and its distance in front: what a finding
         // names
         let mut front: [Option<(f64, f64, usize)>; 2] = [None, None];
-        self.index.near(&self.tris, i, near);
+        // every band below lies within these of the triangle: a depth-writing pair within the clearance (a copy within
+        // the duplicate tolerance), a decal-class one's within its cover (in front) or the reach (behind)
+        let pad = match t.class {
+            Class::DepthWriting => limits.clearance.max(limits.duplicate),
+            _ => cover.max(limits.reach),
+        };
+        near.clear();
+        if self.listed[i] {
+            let (lo, hi) = bounds(&t.tri);
+            self.boxes.within(lo, hi, pad + SLACK, near);
+        }
         for &j in near.iter() {
             let u = &self.items[j as usize];
             if !self.drawn_together(t, u) {

@@ -6,7 +6,9 @@
 //! refused when made. **The index** ([`Index`]) lists every triangle in the cells of a cubic hash its bounding box,
 //! padded by a reach, touches; [`Index::near`] gives the triangles sharing a cell with one, sorted and without
 //! repeats, so a caller's walk is in a fixed order. A triangle whose padded box would span more than [`MAX_CELLS`]
-//! cells (a far terrain's) is not listed and finds nothing ([`Index::unlisted`] counts them).
+//! cells (a far terrain's) is not listed and finds nothing ([`Index::unlisted`] counts them). **The box tree**
+//! ([`Boxes`]) answers exactly what a cell answers loosely: [`Boxes::within`] gives the triangles whose bounding boxes
+//! come within a distance of a box, so a walk over a dense mesh visits a triangle's neighbours, not all of its cells.
 //!
 //! **Over** ([`Over::of`]): for a triangle `t` and another `u` facing the same way (unit normals' dot at least
 //! `facing`), the part of `t` that `u` covers when projected along `t`'s normal, as a convex polygon in `t`'s own
@@ -283,10 +285,10 @@ impl Index {
             listed: vec![false; tris.len()],
         };
         for (i, t) in tris.iter().enumerate() {
-            let (lo, hi) = ix.cells(t);
-            if (hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1) > MAX_CELLS {
+            if !Index::lists(t, cell, reach) {
                 continue;
             }
+            let (lo, hi) = ix.cells(t);
             ix.listed[i] = true;
             for x in lo[0]..=hi[0] {
                 for y in lo[1]..=hi[1] {
@@ -299,15 +301,15 @@ impl Index {
         ix
     }
 
+    /// Whether an index of cells of side `cell` metres, boxes padded by `reach` metres, lists `t`: its padded box
+    /// spans at most [`MAX_CELLS`] cells.
+    pub fn lists(t: &Tri, cell: f64, reach: f64) -> bool {
+        let (lo, hi) = cells_of(t, cell, reach);
+        (hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1) <= MAX_CELLS
+    }
+
     fn cells(&self, t: &Tri) -> ([i64; 3], [i64; 3]) {
-        let cell = |x: f64| (x / self.cell).floor() as i64;
-        let lo = std::array::from_fn(|a| {
-            cell(t.c.iter().map(|c| c[a]).fold(f64::INFINITY, f64::min) - self.reach)
-        });
-        let hi = std::array::from_fn(|a| {
-            cell(t.c.iter().map(|c| c[a]).fold(f64::NEG_INFINITY, f64::max) + self.reach)
-        });
-        (lo, hi)
+        cells_of(t, self.cell, self.reach)
     }
 
     /// The triangles sharing a cell with triangle `i` of `tris` (itself included), sorted, each once, into `out`
@@ -338,6 +340,135 @@ impl Index {
     pub fn unlisted(&self) -> u64 {
         self.listed.iter().filter(|l| !**l).count() as u64
     }
+}
+
+/// The cells (of side `cell` metres) `t`'s box padded by `reach` metres touches: least and greatest.
+fn cells_of(t: &Tri, cell: f64, reach: f64) -> ([i64; 3], [i64; 3]) {
+    let at = |x: f64| (x / cell).floor() as i64;
+    let (lo, hi) = bounds(t);
+    (lo.map(|x| at(x - reach)), hi.map(|x| at(x + reach)))
+}
+
+/// A triangle's bounding box: its least and greatest corner.
+pub fn bounds(t: &Tri) -> ([f64; 3], [f64; 3]) {
+    (
+        std::array::from_fn(|a| t.c.iter().map(|c| c[a]).fold(f64::INFINITY, f64::min)),
+        std::array::from_fn(|a| t.c.iter().map(|c| c[a]).fold(f64::NEG_INFINITY, f64::max)),
+    )
+}
+
+/// The most triangles a leaf of [`Boxes`] holds.
+const LEAF: usize = 8;
+
+/// Some triangles of a set by their bounding boxes, in a tree of boxes: each node's box holds its triangles' boxes,
+/// and a node splits its triangles at the median of their boxes' centres along the axis those centres spread widest.
+#[derive(Clone, Debug)]
+pub struct Boxes {
+    nodes: Vec<Node>,
+    /// The triangles in leaf order, each with its box.
+    items: Vec<(u32, [f64; 3], [f64; 3])>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Node {
+    lo: [f64; 3],
+    hi: [f64; 3],
+    /// A leaf (`count` above 0): its triangles, `items[first..first + count]`. Otherwise its children: the node after
+    /// it and node `first`.
+    first: u32,
+    count: u32,
+}
+
+impl Boxes {
+    /// The triangles of `tris` that `listed` keeps.
+    pub fn new(tris: &[Tri], listed: impl Fn(usize) -> bool) -> Boxes {
+        let mut items: Vec<(u32, [f64; 3], [f64; 3])> = (0..tris.len())
+            .filter(|&i| listed(i))
+            .map(|i| {
+                let (lo, hi) = bounds(&tris[i]);
+                (i as u32, lo, hi)
+            })
+            .collect();
+        let mut nodes = Vec::with_capacity(2 * items.len() / LEAF + 1);
+        if !items.is_empty() {
+            build(&mut nodes, &mut items);
+        }
+        Boxes { nodes, items }
+    }
+
+    /// The triangles whose boxes come within `pad` metres of the box `lo..hi` on every axis, sorted, into `out`
+    /// (cleared first).
+    pub fn within(&self, lo: [f64; 3], hi: [f64; 3], pad: f64, out: &mut Vec<u32>) {
+        out.clear();
+        if self.nodes.is_empty() {
+            return;
+        }
+        let (lo, hi) = (lo.map(|x| x - pad), hi.map(|x| x + pad));
+        let meets = |a: &[f64; 3], b: &[f64; 3]| (0..3).all(|k| a[k] <= hi[k] && b[k] >= lo[k]);
+        let mut stack = vec![0usize];
+        while let Some(n) = stack.pop() {
+            let node = &self.nodes[n];
+            if !meets(&node.lo, &node.hi) {
+                continue;
+            }
+            if node.count == 0 {
+                stack.push(node.first as usize);
+                stack.push(n + 1);
+                continue;
+            }
+            let first = node.first as usize;
+            for (i, a, b) in &self.items[first..first + node.count as usize] {
+                if meets(a, b) {
+                    out.push(*i);
+                }
+            }
+        }
+        out.sort_unstable();
+    }
+}
+
+/// The node of `items` (`items` reordered into leaf order) and its subtree, pushed to `nodes`; its index.
+fn build(nodes: &mut Vec<Node>, items: &mut [(u32, [f64; 3], [f64; 3])]) -> usize {
+    build_at(nodes, items, 0)
+}
+
+fn build_at(nodes: &mut Vec<Node>, items: &mut [(u32, [f64; 3], [f64; 3])], start: usize) -> usize {
+    let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    // twice the centres, which order the same
+    let (mut clo, mut chi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for (_, a, b) in items.iter() {
+        for k in 0..3 {
+            lo[k] = lo[k].min(a[k]);
+            hi[k] = hi[k].max(b[k]);
+            clo[k] = clo[k].min(a[k] + b[k]);
+            chi[k] = chi[k].max(a[k] + b[k]);
+        }
+    }
+    let at = nodes.len();
+    nodes.push(Node {
+        lo,
+        hi,
+        first: start as u32,
+        count: items.len() as u32,
+    });
+    if items.len() <= LEAF {
+        return at;
+    }
+    let axis = (0..3)
+        .max_by(|&a, &b| (chi[a] - clo[a]).total_cmp(&(chi[b] - clo[b])))
+        .unwrap_or(0);
+    let mid = items.len() / 2;
+    items.select_nth_unstable_by(mid, |x, y| {
+        (x.1[axis] + x.2[axis])
+            .total_cmp(&(y.1[axis] + y.2[axis]))
+            .then(x.0.cmp(&y.0))
+    });
+    let (left, right) = items.split_at_mut(mid);
+    build_at(nodes, left, start);
+    let second = build_at(nodes, right, start + mid);
+    nodes[at].first = second as u32;
+    nodes[at].count = 0;
+    at
 }
 
 #[cfg(test)]
@@ -397,5 +528,41 @@ mod tests {
         ix.near(&tris, 3, &mut near);
         assert!(near.is_empty());
         assert_eq!(ix.unlisted(), 1);
+    }
+
+    #[test]
+    fn the_box_tree_finds_exactly_the_boxes_within_the_pad() {
+        // a grid of small triangles, some tilted, at several heights, and one long one across them; against every
+        // pair by hand
+        let mut tris = Vec::new();
+        for i in 0..40 {
+            for j in 0..40 {
+                let (x, z) = (f64::from(i) * 0.37, f64::from(j) * 0.29);
+                let y = f64::from((i * 7 + j * 3) % 11) * 0.013;
+                let rise = 0.02 * f64::from(i % 3);
+                tris.push(Tri::new([[x, y, z], [x, y + rise, z + 0.2], [x + 0.25, y, z]]).unwrap());
+            }
+        }
+        tris.push(Tri::new([[0.0, 0.05, 0.0], [0.0, 0.05, 0.1], [14.0, 0.06, 11.0]]).unwrap());
+        let skip = |i: usize| i % 13 == 5;
+        let boxes = Boxes::new(&tris, |i| !skip(i));
+        let mut out = Vec::new();
+        for pad in [0.0, 0.000_45, 0.05, 0.15] {
+            for (i, t) in tris.iter().enumerate() {
+                let (lo, hi) = bounds(t);
+                boxes.within(lo, hi, pad, &mut out);
+                let want: Vec<u32> = (0..tris.len())
+                    .filter(|&j| !skip(j))
+                    .filter(|&j| {
+                        let (a, b) = bounds(&tris[j]);
+                        (0..3).all(|k| a[k] <= hi[k] + pad && b[k] >= lo[k] - pad)
+                    })
+                    .map(|j| j as u32)
+                    .collect();
+                assert_eq!(out, want, "triangle {i}, pad {pad}");
+            }
+        }
+        Boxes::new(&tris, |_| false).within([0.0; 3], [1.0; 3], 1.0, &mut out);
+        assert!(out.is_empty());
     }
 }
