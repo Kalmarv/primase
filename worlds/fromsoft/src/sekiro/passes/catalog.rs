@@ -81,7 +81,7 @@ impl Pass for MaterializeFromSoftCatalog {
                 name:format!("{init} · {} / {}",outfit.map,outfit.placement),
                 path:format!("{model} NPC {} outfit {init}",outfit.npc),
                 refusal:outfit.parts.is_empty().then(||outfit.unresolved.join("; ")),
-                open:if outfit.parts.is_empty() {Value::Null} else {json!({"reader":"character","id":model,"npc":outfit.npc.to_string(),"init":outfit.init.map(|value|value.to_string())})},
+                open:if outfit.parts.is_empty() {Value::Null} else {json!({"reader":"character","id":model,"role":"npc","npc":outfit.npc.to_string(),"init":outfit.init.map(|value|value.to_string())})},
                 details,
             });
         }

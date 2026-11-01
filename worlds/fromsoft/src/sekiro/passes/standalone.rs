@@ -136,15 +136,15 @@ fn dress(
             Some(format!(
                 "NPC row {row} turns off every display mask {id}'s meshes are marked with ({}) and the model has no \
                  unmarked mesh: the row hides every mesh, so the game probably does not draw this NPC from this model \
-                 as it stands; the lab draws every mask group instead",
+                 as it stands; every mask group is drawn instead",
                 list(&marked)
             )),
         );
     }
     let note = chosen.then(|| {
         format!(
-            "the lab chose NPC row {row}: the first row of a map's part that names {id}; state npc to dress it \
-             otherwise (masks on: {})",
+            "npc=first-map chose NPC row {row}: the first row of a map's part that names {id}; state npc=<row> to \
+             dress it otherwise (masks on: {})",
             if shown.is_empty() {
                 "none".to_owned()
             } else {
@@ -197,7 +197,7 @@ mod tests {
         let (dressing, note) = selected("c1100", &all_marked, &rows, None, &[11000000]);
         assert_eq!(dressing, Dressing::Row(11000000));
         let note = note.unwrap();
-        assert!(note.contains("the lab chose NPC row 11000000"), "{note}");
+        assert!(note.contains("npc=first-map chose NPC row 11000000"), "{note}");
         assert!(note.contains("masks on: 10"), "{note}");
         // a row the caller asked for is theirs: no choice notice
         let (dressing, note) = selected("c1100", &all_marked, &rows, Some(11000000), &[5]);
@@ -559,18 +559,30 @@ impl Pass for SelectFromSoftCharacterRead {
             report: json!({}),
             notices: vec![],
         };
-        if kind.player
-            && matches!(self.initializer.as_str(), "none" | "first-readable")
-            && self.outfit != "none"
-        {
+        // a stated initializer row dresses a placed NPC whose model has no mesh of its own, and nothing else
+        if !matches!(self.initializer.as_str(), "none" | "first-readable") {
+            if kind.player {
+                return Err(format!(
+                    "initializer {} dresses a placed NPC, and {} is read as the player: state initializer=none, or                      read {} as an NPC",
+                    self.initializer, kind.id, kind.id
+                ));
+            }
+            if !kind.npc_parts {
+                return Err(format!(
+                    "initializer {}: an initializer dresses a Sekiro NPC with no drawable mesh of its own, and {} is                      not one: state initializer=none",
+                    self.initializer, kind.id
+                ));
+            }
+        }
+        if kind.player && self.outfit != "none" {
             SelectFromSoftPlayerOutfit(self.outfit.clone()).run(w, log)?;
             let selected = w
                 .resource::<SelectedPlayerOutfit>()
                 .ok_or("player selector made no choice")?;
             let outfit = &selected.chosen;
-            choice.report["player_outfit"] = json!({"chosen":outfit,"key":outfit.key(),"selection":if selected.automatic{"viewer choice: first readable listed variant; not the game's default"}else{"explicit listed variant"}});
+            choice.report["player_outfit"] = json!({"chosen":outfit,"key":outfit.key(),"selection":if selected.automatic{"outfit=first-readable: the first readable listed variant; not the game's default"}else{"explicit listed variant"}});
             if selected.automatic {
-                choice.report["lab_choices"] = json!([{"source":"fromsoft-character","option":"outfit","value":outfit.key(),"why":"viewer choice: first readable installed initializer variant, not the game's default"}]);
+                choice.report["selection_choices"] = json!([{"source":"fromsoft-character","option":"outfit","value":outfit.key(),"why":"outfit=first-readable: the first readable installed initializer variant, not the game's default"}]);
             }
             choice.notices.push(Notice::new(
                 "fromsoft",
@@ -578,7 +590,7 @@ impl Pass for SelectFromSoftCharacterRead {
                 format!(
                     "{} outfit {}: {} ({})",
                     if selected.automatic {
-                        "Viewer choice"
+                        "First readable"
                     } else {
                         "Selected"
                     },
@@ -597,6 +609,24 @@ impl Pass for SelectFromSoftCharacterRead {
             return Err(format!(
                 "outfit selects a listed player presentation; it cannot replace {}'s own model or NPC initializer",
                 kind.id
+            ));
+        }
+        if kind.player && choice.player.is_none() {
+            // outfit=none: the player's model read alone
+            let id = &kind.id;
+            choice.report["player_model"] = json!({"skeleton_only": kind.meshless, "outfit_selected": false,
+                "reason": "outfit=none: no player outfit is read"});
+            choice.notices.push(Notice::new(
+                "fromsoft",
+                NoticeKind::Selection,
+                if kind.meshless {
+                    format!(
+                        "{id} is the player's rig: its skeleton and dummy sockets are read and, with outfit=none, no                          wearable mesh; state outfit (a listed player outfit, or first-readable) to dress it"
+                    )
+                } else {
+                    format!("{id} is read as the player's own model with outfit=none; state outfit to dress it")
+                },
+                1,
             ));
         }
         if kind.npc_parts && choice.player.is_none() && self.initializer != "none" {
@@ -698,6 +728,67 @@ mod binding_contract {
                 .to_string();
             assert!(err.contains(option), "{err}");
         }
+    }
+}
+
+#[cfg(test)]
+mod character_read_contract {
+    use super::*;
+    use crate::sekiro::components::standalone::{CharacterOutfitKind, CharacterReadChoice};
+
+    fn read(
+        kind: CharacterOutfitKind,
+        outfit: &str,
+        initializer: &str,
+    ) -> Result<CharacterReadChoice, String> {
+        let mut w = World::new();
+        w.insert_resource(kind);
+        let pass = SelectFromSoftCharacterRead {
+            outfit: outfit.into(),
+            initializer: initializer.into(),
+        };
+        pass.run(&mut w, &mut PassLog::default())?;
+        Ok(w.resource::<CharacterReadChoice>().ok_or("no choice")?.clone())
+    }
+    fn kind(player: bool, npc_parts: bool, meshless: bool) -> CharacterOutfitKind {
+        CharacterOutfitKind {
+            id: "c0000".into(),
+            player,
+            npc_parts,
+            meshless,
+        }
+    }
+
+    /// The player read with `outfit=none` is its skeleton alone, and the read says so; an initializer row is refused
+    /// where the stated kind has no use for it.
+    #[test]
+    fn the_player_read_alone_is_recorded_and_an_initializer_it_cannot_use_is_refused() {
+        let choice = read(kind(true, false, true), "none", "none").unwrap();
+        assert_eq!(choice.report["player_model"]["skeleton_only"], true);
+        assert_eq!(choice.report["player_model"]["outfit_selected"], false);
+        let notice = choice
+            .notices
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
+        assert!(notice.contains("state outfit"), "{notice}");
+        let err = read(kind(true, false, true), "none", "4500").unwrap_err();
+        assert!(
+            err.contains("initializer 4500") && err.contains("read as the player"),
+            "{err}"
+        );
+        let err = read(kind(false, false, false), "none", "4500").unwrap_err();
+        assert!(
+            err.contains("initializer 4500") && err.contains("state initializer=none"),
+            "{err}"
+        );
+        // an NPC read with no initializer has no player model to report
+        let choice = read(kind(false, false, false), "none", "none").unwrap();
+        assert!(choice.report.get("player_model").is_none());
     }
 }
 

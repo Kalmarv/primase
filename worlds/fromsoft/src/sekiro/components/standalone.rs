@@ -56,6 +56,8 @@ pub struct CharacterOutfitKind {
     pub id: String,
     pub player: bool,
     pub npc_parts: bool,
+    /// The model has no drawable mesh of its own: read alone, it is its skeleton and dummies.
+    pub meshless: bool,
 }
 impl Resource for CharacterOutfitKind {
     const NAME: &'static str = "fromsoft.character_outfit_kind";

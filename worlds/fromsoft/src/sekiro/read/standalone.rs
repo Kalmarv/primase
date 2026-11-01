@@ -64,13 +64,31 @@ pub struct AnimationTarget {
 }
 #[derive(Clone, Debug)]
 pub enum StandaloneAsset {
-    Character(String),
+    /// A character model by id, read as the program states it is placed ([`CharacterRole`]).
+    Character {
+        id: String,
+        role: CharacterRole,
+    },
     Parts(Vec<String>),
-    Form { part: String, form: String },
+    Form {
+        part: String,
+        form: String,
+    },
+}
+/// What a character model is read as. The id does not decide it: the player's model (`c0000`) is also the model of
+/// the human NPCs the maps place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CharacterRole {
+    /// The player: its outfits are the player initializer rows (`select-fromsoft-character-read`'s `outfit`). Only
+    /// the player's model ([`fromsoft_formats::equipment::PLAYER_CHARACTER`]) is the player, and it has no NPC row.
+    Player,
+    /// An NPC a map places: dressed by a placement's NPC row (its display masks) and, where the model has no drawable
+    /// mesh of its own (Sekiro's human NPCs), by the placement's initializer parts (`initializer`).
+    Npc,
 }
 pub fn animation_target(asset: &StandaloneAsset) -> AnimationTarget {
     let (skeleton, tolerance) = match asset {
-        StandaloneAsset::Character(id) => (format!("{id} skeleton"), "0.0001"),
+        StandaloneAsset::Character { id, .. } => (format!("{id} skeleton"), "0.0001"),
         StandaloneAsset::Parts(parts) if parts.len() > 1 => ("assembled skeleton".into(), "0.001"),
         StandaloneAsset::Parts(parts) => (
             format!("{} skeleton", parts.first().map_or("", String::as_str)),
@@ -256,7 +274,7 @@ pub fn read_models<'a>(
             let names: Vec<_> = weapon_parts.iter().map(String::as_str).collect();
             CharacterReader::parts(install.clone(), &names, decoder)
         }
-        StandaloneAsset::Character(id) => {
+        StandaloneAsset::Character { id, .. } => {
             if let Some(outfit) = &player_outfit
                 && animations.is_some()
             {
@@ -372,16 +390,31 @@ pub fn read_selected_npc_stats(
 }
 
 /// Read candidate metadata only. Empty families remain explicit resources so a program can state one pipeline.
+/// Refuses the player `role` for a model that is not the player's, and an NPC row (`npc`) for the player.
 pub fn read_outfit_inventory(
     install: &Install,
     archive: &Archive,
     decoder: &Decoder<'_>,
     names: Option<&std::path::Path>,
     id: &str,
+    role: CharacterRole,
     npc: Option<i32>,
 ) -> Result<World> {
     use crate::sekiro::outfit_data::{InitializerOutfits, NpcOutfitRows};
-    let player = id == fromsoft_formats::equipment::PLAYER_CHARACTER && npc.is_none();
+    let player = role == CharacterRole::Player;
+    if player && id != fromsoft_formats::equipment::PLAYER_CHARACTER {
+        return Err(format!(
+            "{id} is stated as the player, and the player's model is {}",
+            fromsoft_formats::equipment::PLAYER_CHARACTER
+        )
+        .into());
+    }
+    if let (true, Some(row)) = (player, npc) {
+        return Err(format!(
+            "npc {row} is a placement's NPC row, and {id} is stated as the player, which has none"
+        )
+        .into());
+    }
     let (meshless, marks) = read_model_observations(archive, decoder, id)?;
     let npc_parts = !player && install.game == fromsoft_formats::Game::Sekiro && meshless;
     let initializers = if player {
@@ -411,6 +444,7 @@ pub fn read_outfit_inventory(
         id: id.into(),
         player,
         npc_parts,
+        meshless,
     });
     world.insert_resource(initializers);
     world.insert_resource(npcs);
@@ -442,8 +476,8 @@ pub fn read_inventory(
     use crate::sekiro::outfit_data::InitializerOutfits;
     let archive = install.open()?;
     let mut world = match request.asset {
-        StandaloneAsset::Character(id) => {
-            read_outfit_inventory(install, &archive, &decoder, request.names, id, request.npc)?
+        StandaloneAsset::Character { id, role } => {
+            read_outfit_inventory(install, &archive, &decoder, request.names, id, *role, request.npc)?
         }
         _ => {
             let mut w = World::new();
@@ -558,7 +592,7 @@ pub fn read_selected_models<'a>(
                     details["npc_row"] = serde_json::json!({"row":row,"param":"NPC_PARAM_ST","fields":stats.fields().iter().map(|(name,value,unit)|serde_json::json!({"name":name,"value":value,"unit":unit})).collect::<Vec<_>>()});
                 }
                 if let Some(why) = &result.note {
-                    details["lab_choices"] = serde_json::json!([{"source":"fromsoft-character","option":"npc","value":row.to_string(),"why":why}]);
+                    details["selection_choices"] = serde_json::json!([{"source":"fromsoft-character","option":"npc","value":row.to_string(),"why":why}]);
                 }
             }
             if let Some(note) = &result.note {
@@ -742,7 +776,7 @@ fn loading_scope(
     use primase_core::pass::Options;
     let mut options = Options::from([("effects".into(), effects.to_string())]);
     let spec = match asset {
-        StandaloneAsset::Character(_) => {
+        StandaloneAsset::Character { .. } => {
             options.insert("animations".into(), animations.is_some().to_string());
             &CHARACTER_SCOPE
         }

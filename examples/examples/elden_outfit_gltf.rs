@@ -28,7 +28,7 @@ use primase_fromsoft::sekiro::passes::{
 };
 use primase_fromsoft::sekiro::program::{CharacterPreparation, Materials};
 use primase_fromsoft::sekiro::standalone::{
-    InventoryRequest, SelectedModelRequest, StandaloneAsset, read_inventory, read_selected_models,
+    CharacterRole, InventoryRequest, SelectedModelRequest, StandaloneAsset, read_inventory, read_selected_models,
 };
 use primase_image::Srgba8;
 
@@ -176,7 +176,7 @@ fn outfit(root: &Path, keys: &Path) -> Result<primase_core::World, Error> {
     let manager = manager();
 
     // The candidates: every variant the install lists for the stated initializer, with no choice made by the reader.
-    let asset = StandaloneAsset::Character(CHARACTER.to_owned());
+    let asset = StandaloneAsset::Character { id: CHARACTER.to_owned(), role: CharacterRole::Player };
     let mut candidates = read_inventory(
         &install,
         decoder(),

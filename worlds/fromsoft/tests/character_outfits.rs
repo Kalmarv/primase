@@ -293,7 +293,8 @@ fn an_outfit_read_without_animations_assembles_against_the_players_skeleton() ->
     use primase_core::pass::{MissingInputs, PassManager, PassRegistry, RunReport};
     use primase_core::{AssemblyReference, Asset, Name, Role, Source};
     use primase_fromsoft::sekiro::standalone::{
-        InventoryRequest, SelectedModelRequest, StandaloneAsset, read_inventory, read_selected_models,
+        CharacterRole, InventoryRequest, SelectedModelRequest, StandaloneAsset, read_inventory,
+        read_selected_models,
     };
 
     let (Some(root), Some(folder), Some(library)) =
@@ -318,7 +319,10 @@ fn an_outfit_read_without_animations_assembles_against_the_players_skeleton() ->
     let manager = PassManager::new(registry).with_missing_inputs(MissingInputs::Skip);
 
     // the candidates, and the registered selection of initializer 3002, presentation f
-    let asset = StandaloneAsset::Character("c0000".to_owned());
+    let asset = StandaloneAsset::Character {
+        id: "c0000".to_owned(),
+        role: CharacterRole::Player,
+    };
     let mut candidates = read_inventory(
         &installed,
         decoder(),
@@ -435,7 +439,8 @@ fn an_installed_npc_outfit_of_several_parts_assembles_without_a_reference() -> R
     use primase_core::{AssemblyReference, Asset, Role};
     use primase_fromsoft::sekiro::outfit_data::NpcOutfitVariants;
     use primase_fromsoft::sekiro::standalone::{
-        InventoryRequest, SelectedModelRequest, StandaloneAsset, read_inventory, read_selected_models,
+        CharacterRole, InventoryRequest, SelectedModelRequest, StandaloneAsset, read_inventory,
+        read_selected_models,
     };
     let game = Game::Sekiro;
     let (Some(library), Some(root), Some(folder), Some(names)) = (
@@ -457,7 +462,10 @@ fn an_installed_npc_outfit_of_several_parts_assembles_without_a_reference() -> R
     primase_animation::register(&mut registry);
     primase_fromsoft::sekiro::passes::register(&mut registry);
     let manager = PassManager::new(registry).with_missing_inputs(MissingInputs::Skip);
-    let asset = StandaloneAsset::Character("c0000".to_owned());
+    let asset = StandaloneAsset::Character {
+        id: "c0000".to_owned(),
+        role: CharacterRole::Npc,
+    };
     let mut candidates = read_inventory(
         &installed,
         decoder(),

@@ -27,6 +27,17 @@ pub struct DescriptiveReport {
     pub notices: Vec<primase_core::convert::Notice>,
 }
 
+/// The role a row that opens `model` by itself states ([`crate::sekiro::standalone::CharacterRole`]): the player's
+/// model is listed as the player; every other model is only ever an NPC. A row of a placed NPC or its outfit states
+/// `npc` itself.
+fn listed_role(model: &str) -> &'static str {
+    if model == fromsoft_formats::equipment::PLAYER_CHARACTER {
+        "player"
+    } else {
+        "npc"
+    }
+}
+
 /// The selected row's descriptive data and display-only card; selecting the row is a separate operation.
 pub fn npc_description(
     install: &Install,
@@ -129,7 +140,7 @@ pub fn read(
                 listing::AssetKind::Character => (
                     "character",
                     Subject::Character,
-                    json!({ "reader": "character", "id": entry.name }),
+                    json!({ "reader": "character", "id": entry.name, "role": listed_role(&entry.name) }),
                 ),
                 listing::AssetKind::Part => (
                     "part",
@@ -374,7 +385,8 @@ pub fn read(
                 name: clip.name.clone(),
                 path: format!("{model} clip {}", clip.name),
                 open: json!({
-                    "reader": "character", "id": model, "animations": true, "clips": clip.key,
+                    "reader": "character", "id": model, "role": listed_role(&model), "animations": true,
+                    "clips": clip.key,
                 }),
                 details: json!({ "parent": parent, "model": model, "label": clip.name }),
             });
@@ -679,7 +691,7 @@ pub fn npc_entry(
         name: row.to_string(),
         path: format!("{model} NPC row {row}"),
         open: if binder {
-            json!({ "reader": "character", "id": model, "npc": row.to_string() })
+            json!({ "reader": "character", "id": model, "role": "npc", "npc": row.to_string() })
         } else {
             Value::Null
         },

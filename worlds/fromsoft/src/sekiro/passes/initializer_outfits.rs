@@ -137,7 +137,7 @@ pub const SELECT_FROMSOFT_INITIALIZER_OUTFITS: PassSpec = PassSpec {
         OptionSpec::required(
             "initializer",
             "9000",
-            "the stated initializer, all, or an explicit first-readable viewer choice",
+            "the stated initializer, all, or first-readable (the first readable one)",
         ),
         OptionSpec::required(
             "presentation",
@@ -323,7 +323,7 @@ impl Pass for SelectFromSoftInitializerOutfits {
                 .find(CharacterOutfit::readable)
                 .ok_or("no readable initializer outfit")?;
             log.count(
-                "first readable initializer selected by the program (viewer choice, not a game default)",
+                "first readable initializer selected by initializer=first-readable (not a game default)",
                 1,
             );
             variants = vec![chosen];
@@ -774,7 +774,7 @@ impl Pass for SelectFromSoftPlayerOutfit {
         let chosen = chosen.clone();
         log.count(
             if automatic {
-                "first readable initializer selected by caller policy (viewer choice, not game's default)"
+                "first readable initializer selected by first-readable (not the game's default)"
             } else {
                 "named initializer selected"
             },
