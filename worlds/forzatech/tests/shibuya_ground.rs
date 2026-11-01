@@ -66,7 +66,8 @@ fn shibuya_ground() {
             continue;
         }
         let t = triangles.get(&e).copied().unwrap_or(0);
-        let map = if part.has::<PbrMaterial>(e) {
+        // a road blended of layers is drawn as its blend alone: a layered material, with no plain one beside it
+        let map = if part.has::<PbrMaterial>(e) || part.has::<LayeredMaterial>(e) {
             &mut lowered
         } else {
             &mut unlowered
