@@ -56,7 +56,7 @@ ruzstd = { version = "=0.7.3", default-features = false, features = ["std", "has
 libloading = { version = "=0.9.0", default-features = false, features = ["std"] }
 oozextract = { version = "=0.5.7", default-features = false, features = ["verbose_errors"] }
 primase-core = { path = "core" }
-primase-testdata = { git = "https://github.com/Kalmarv/primase-testdata", rev = "6f6ff1b3bddd65c2351763e4ce650e12819074ad" }
+primase-testdata = { git = "https://github.com/Kalmarv/primase-testdata", rev = "23727033cd9d3926c26138bacca15d745b849418" }
 primase-texcodec = { path = "toolkit/texcodec" }
 primase-dds = { path = "toolkit/dds" }
 primase-image = { path = "toolkit/image" }

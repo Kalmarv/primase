@@ -67,18 +67,23 @@ Each texture records name/format/kind/mipmaps/flags, DDS size/SHA256 and, for ar
 2D images, width/height and decoded RGBA SHA256. Area DDS inputs reside at
 `area-dds/<uppercase-sha256>.dds`; none belong in the repository.
 
-The pixel gate additionally requires `oracles.scripts.sekiro/dds`, a folder holding
-an explicitly trusted .NET assembly, `DdsWorker.dll` (BCnEncoder.Net 2.2.1), with the
-libraries it loads, launched through `tools.dotnet` as `<dotnet> <folder>/DdsWorker.dll`. For each DDS path on stdin it
-writes a binary response to stdout: status byte (0 success), little-endian u64
-length, and that many RGBA8 bytes (UTF-8 error text for nonzero status). Diagnostics
-must go to stderr. It uses the independent C# decoder with BC1 punch-through
-alpha enabled; BC4 grayscale presentation is normalized to red-only by the gate.
-Pillow 11 is queried through the shared texture-codec test oracle, run by `tools.python_pillow`. Production
-D3D pixels must match bcdec exactly. C# and Pillow are independent value oracles:
-each channel may differ by at most one level. The gate reports exact/within/failed
-texture counts and channel-error histograms per format and oracle. It does not
-select alternate production arithmetic to reproduce an oracle's convention.
+The pixel gate (`tests/tpf_pixels.rs`) runs no decoder but ours. It reads
+`oracles.scripts.sekiro/dds-area`, which the oracle tools' dds-area producer makes from the
+census: every distinct area texture decoded by bcdec (bcdec_rs 0.2.0), BCnEncoder.Net 2.2.1
+(through `oracles.scripts.sekiro/dds`'s `DdsWorker.dll`, the worker the census ran) and
+Pillow 11.0.0, with per texture the digest of the base decoder's pixels (bcdec's; for RGB32,
+which bcdec does not decode, BCnEncoder's) and each other decoder's channel differences from
+them. BC4 is compared as Direct3D samples it, red only. Production D3D pixels must hash to the
+base digest exactly, and the other decoders may differ from the base by at most one level per
+channel. The gate reports exact/within/failed texture counts and channel-error histograms per
+format and decoder, and refuses a comparison made from another census or worker than the
+configured ones. It does not select alternate production arithmetic to reproduce a decoder's
+convention.
+
+The worker (`DdsWorker.dll`, with the libraries it loads, run as `<dotnet> <folder>/DdsWorker.dll`)
+answers each DDS path on stdin with a status byte (0 success), a little-endian u64 length, and
+that many RGBA8 bytes (UTF-8 error text for nonzero status); diagnostics go to stderr. It decodes
+BC1 with punch-through alpha.
 
 ## FLVER geometry
 

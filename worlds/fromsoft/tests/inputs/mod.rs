@@ -34,19 +34,9 @@ primase_testdata::inputs! {
         },
     }
     tools {
-        Dotnet = "dotnet" {
-            about: "the .NET host (`dotnet`, with the .NET 8 runtime) that runs the C# programs given as assemblies: `scripts.sekiro/dds`'s DdsWorker.dll and a `tools.scene_skate` that is a .dll",
-            source: "third-party: Microsoft's .NET 8 runtime",
-            gate: true,
-        },
         Oodle6 = "oodle6" {
             about: "an Oodle version-6 DLL (`oo2core_6_win64.dll`); on Windows only: elsewhere oozextract decodes and nothing is configured",
             source: "the game's own DLL from the user's install",
-            gate: true,
-        },
-        PythonPillow = "python_pillow" {
-            about: "a Python 3 interpreter with Pillow 11.0.0, which runs the Pillow oracle worker (toolkit/texcodec/tests/oracles/worker.py)",
-            source: "third-party: Pillow 11.0.0",
             gate: true,
         },
     }
@@ -142,6 +132,12 @@ primase_testdata::inputs! {
             gate: true,
             about: r#"a folder holding the DDS decoding worker `DdsWorker.dll` and the libraries it loads; protocol in worlds/fromsoft/README.md; worlds/fromsoft/tests/tpf_pixels.rs"#,
             source: r#"independent: BCnEncoder.Net 2.2.1 (MIT OR Unlicense), through a thin decoding worker kept with the private oracle tools"#,
+        },
+        Query::Oracle(OracleSet::Scripts, Game::Sekiro, "dds-area") => {
+            status: Live,
+            gate: true,
+            about: r#"three third-party decodes of every distinct area DDS of `oracles.soulsformats.sekiro/tpf`, compared: comparison.jsonl (per texture the exact base digest, bcdec's pixels or for RGB32 BCnEncoder's, and each other decoder's largest channel difference from them and histogram of differences) and provenance.json (the census and worker assemblies it was made from, which worlds/fromsoft/tests/tpf_pixels.rs requires to be those configured, the Pillow worker's digest and the decoders' versions)"#,
+            source: r#"independent: bcdec_rs 0.2.0, BCnEncoder.Net 2.2.1 through `oracles.scripts.sekiro/dds`'s DdsWorker.dll and Pillow 11.0.0, run by the dds-area producer kept with the private oracle tools"#,
         },
         Query::Oracle(OracleSet::Scripts, Game::Sekiro, "frames") => {
             status: Live,
