@@ -8,14 +8,17 @@
 //! A recorded record stands on a packed light where their view-space positions are within 0.01 m; the records of effect
 //! lights stand on none (effect lights are not read here). Each field of the table is compared where it stands on one.
 //! The expected counts are an independent script's over the same frames and bank (kept with the private oracle tools):
-//! 55 point records and 1 spot record stand on a bank light, 105 point records on none; their positions, ranges and
-//! types all match; the colour of 49 point records is the packed one and of 6 the packed one scaled by one factor below
-//! 1 (three distant lights the engine fades, in two frames each); the specular colour of all 55 and of the spot is the
-//! packed one, the light's own specular (`(specular byte / 255)^2 * specular power`, which the engine does not fade),
-//! and no packed light falls back to its colour there. The spot's cone vectors 0, 1 and 3, its bounding sphere and its
-//! depth range match; its vector 2 does not, as the light has a near plane of 15 and a `core.light` none. The fields
+//! 51 point records and 3 spot records stand on a bank light, 91 point records and 3 spot records on none; their
+//! positions, ranges and types all match; the colour of 46 point records is the packed one and of 5 the packed one
+//! scaled by one factor below 1 (five distant lights the engine fades, in one frame each); the specular colour of all 51
+//! and of the 3 spots is the packed one, the light's own specular (`(specular byte / 255)^2 * specular power`, which
+//! the engine does not fade), and no packed light falls back to its colour there. The spots' records (two bank spots:
+//! 30 by 30 degrees with a near plane of 15, and 90 by 8 degrees with a near plane of 3) are their `core.spot_frustum`'s:
+//! all four cone vectors, the near plane's among them, the cull sphere (the vertical cone's and its margin, to 1e-4 m)
+//! and the depth range match on all three. The fields
 //! only the shadowed program variants read are 0 in every recorded record: the frames hold no shadowed light, so those
-//! stay unknown.
+//! stay unknown. The bank holds none to show: its 34 lights (32 point, 2 spot) all have `cast_shadows` 0, and every
+//! record that stands on one has the light-type word 0.
 //!
 //! The organize step's own constants carry the counts and the view where the frames hold them: `g_lightCount` (+272) and
 //! `g_spotLightCount` (+280) as the light counts, `g_ViewMatrix` (+64) as the view, its lines unshown as not read
@@ -409,7 +412,7 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
         "records on no packed light: {} point, {} spot",
         on_none[0], on_none[1]
     );
-    assert_eq!(on_none, [105, 0]);
+    assert_eq!(on_none, [91, 3]);
     // every bank light states its own specular: none packs its colour there
     println!("packed lights whose specular is their colour: {specular_from_colour}");
     assert_eq!(specular_from_colour, 0);
@@ -420,19 +423,19 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
         "point range at 60",
         "point shadowed at 64",
     ] {
-        assert_eq!(tally.get(key), [55, 0], "{key}");
+        assert_eq!(tally.get(key), [51, 0], "{key}");
     }
-    assert_eq!(tally.get("point colour exact at 16"), [49, 6]);
-    assert_eq!(tally.get("point colour scaled at 16"), [6, 49]);
-    assert_eq!(tally.get("point colour exact at 32"), [55, 0]);
+    assert_eq!(tally.get("point colour exact at 16"), [46, 5]);
+    assert_eq!(tally.get("point colour scaled at 16"), [5, 46]);
+    assert_eq!(tally.get("point colour exact at 32"), [51, 0]);
     for key in [
         "point shadow place zero at 80",
         "point shadow place zero at 96",
         "point shadow place zero at 112",
     ] {
-        assert_eq!(tally.get(key), [55, 0], "{key}");
+        assert_eq!(tally.get(key), [51, 0], "{key}");
     }
-    // the spot: its cone but for the near plane, its sphere and depths, its colours
+    // the spots: their cones with the near plane, their cull spheres and depths, their colours
     for key in [
         "spot view at 0",
         "spot range at 12",
@@ -440,6 +443,7 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
         "spot colour exact at 32",
         "spot cone vector 0 at 64",
         "spot cone vector 1 at 64",
+        "spot cone vector 2 at 64",
         "spot cone vector 3 at 64",
         "spot shadowed at 128",
         "spot view at 132",
@@ -448,8 +452,7 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
         "spot shadow place zero at 160",
         "spot shadow place zero at 176",
     ] {
-        assert_eq!(tally.get(key), [1, 0], "{key}");
+        assert_eq!(tally.get(key), [3, 0], "{key}");
     }
-    assert_eq!(tally.get("spot cone vector 2 at 64"), [0, 1]);
     Ok(())
 }

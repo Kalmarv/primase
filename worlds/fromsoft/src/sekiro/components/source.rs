@@ -387,7 +387,8 @@ impl Resource for ReadScope {
 /// Colours are the stored bytes (the game squares them), powers the stored multipliers (the unit of one record's
 /// `colour^2 * power`), `cone_angle` the stored full angle in degrees of a spot's vertical axis and `cone_width` the
 /// full angle of its horizontal axis (record offset 184; 0 where the file stores none, and the game then uses
-/// `cone_angle` for both), `exposure_weight` the float at record offset 224 (the weight of the game's per-frame
+/// `cone_angle` for both), `near_distance` a spot's near plane in metres (record offset 188: a running game's spot
+/// record lights only past it), `exposure_weight` the float at record offset 224 (the weight of the game's per-frame
 /// exposure term on the light's colour; 0 on every Elden Ring light), `radius` the stored reach in metres.
 /// `tangent` is the light's local +X in the world frame, kept so it survives a pass that re-bases the transform.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -401,6 +402,7 @@ pub struct LightSource {
     pub cast_shadows: bool,
     pub cone_angle: f32,
     pub cone_width: f32,
+    pub near_distance: f32,
     pub exposure_weight: f32,
     pub radius: f32,
     /// BTL +164: the distance divisor of native DiffColor.w, distinct from the light's range and emitter radius.
@@ -428,8 +430,8 @@ fn lowered_light_has_its_unit(e: Entity, w: &primase_core::World) -> Result<(), 
 
 impl Component for LightSource {
     const NAME: &'static str = "fromsoft.light";
-    /// 2: preserve the authored sharpness at BTL +164.
-    const VERSION: u32 = 2;
+    /// 2: preserve the authored sharpness at BTL +164; 3: a spot's near plane at BTL +188.
+    const VERSION: u32 = 3;
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// Placed by its entity's transform; the tangent is world space.
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {

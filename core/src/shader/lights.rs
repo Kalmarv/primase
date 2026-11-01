@@ -69,19 +69,27 @@ pub enum LightValue {
     SpecularColour,
     /// Sixteen floats, four vectors of four at 16-byte steps: a spot's cone. The dot product of vector k with a view-space
     /// position `(x, y, z, 1)` is component k of the position in the cone's space: components 0 and 1 are the position's
-    /// offsets along the cone's horizontal and vertical axes, over the tangent of the outer cone angle; component 3 is its
-    /// distance along the beam from the light; component 2 equals component 3 (the cone has no near plane: a position is
-    /// past it when its distance along the beam is above 0). Components 0 and 1 over component 3 lie on the unit circle at
-    /// the cone's edge.
+    /// offsets along the cone's horizontal and vertical axes, each over the tangent of its axis's half-angle
+    /// ([`crate::SpotFrustum`]'s, else the outer cone's for both); component 3 is its distance `d` along the beam from
+    /// the light; component 2 is `(d - near) * range / (range - near)` for the frustum's near plane (`d` itself for a
+    /// light with none), above 0 past it. For a circular cone, components 0 and 1 over component 3 lie on the unit circle
+    /// at the cone's edge.
     ViewToCone,
     /// Four floats: a view-space sphere containing the light's volume, its centre then its radius. A point light's is
-    /// its range's sphere. A spot's volume is the cone of height `range` along the beam whose base has radius
-    /// `range * tan(outer)`: for an outer angle up to 45 degrees the smallest sphere through its apex and its base's rim
-    /// (radius `range / (2 cos^2(outer))`, centred that far along the beam), above that the base's own sphere.
+    /// its range's sphere. A spot's volume is the cone of height `range` along the beam whose base reaches
+    /// `range * tan(outer)` from the beam (for a pyramid, [`crate::SpotFrustum`], `outer` is the angle of its base's
+    /// corners, `atan(sqrt(tan^2 h + tan^2 v))`): for an outer angle up to 45 degrees the smallest sphere through its apex
+    /// and its base's rim (radius `range / (2 cos^2(outer))`, centred that far along the beam), above that the base's own
+    /// sphere.
     ViewBoundingSphere,
+    /// Four floats: the view-space sphere through a spot's apex and the rim of the circular cone of its vertical
+    /// half-angle `v` ([`crate::SpotFrustum::vertical_half_angle`], else its outer cone) at `range` along the beam:
+    /// centre `a = range / (2 cos^2 v)` along the beam, radius `a + margin`. It contains the light's volume only where the
+    /// horizontal half-angle is not the wider: a source whose light lists cull with such a sphere states it.
+    VerticalConeSphere { margin: f32 },
     /// One float: the least view-space depth of the light's volume. A point light's is its position's less its range. A
-    /// spot's is over its apex and the square of half-side `range * tan(outer)` across its horizontal and vertical axes at
-    /// `range` along the beam (the base's corners).
+    /// spot's is over its apex and its base's corners, `range` along the beam and `range * tan` of each axis's half-angle
+    /// across its horizontal and vertical axes ([`crate::SpotFrustum`]'s, else the outer cone's for both).
     ViewDepthMin,
     /// One float: the greatest view-space depth of the light's volume, as [`LightValue::ViewDepthMin`].
     ViewDepthMax,
@@ -121,7 +129,9 @@ impl LightValue {
             | LightValue::Shadowed
             | LightValue::Constant { .. } => 1,
             LightValue::ViewToCone => 16,
-            LightValue::ViewBoundingSphere | LightValue::ShadowCentre => 4,
+            LightValue::ViewBoundingSphere
+            | LightValue::VerticalConeSphere { .. }
+            | LightValue::ShadowCentre => 4,
             LightValue::ShadowProjection { floats } | LightValue::Unknown { floats, .. } => {
                 u32::from(*floats)
             }
@@ -191,6 +201,19 @@ pub struct PackedLights {
 
 type Vec3 = [f64; 3];
 
+/// A spot's shape in view space, as the packing takes it: its axes, the tangents of its half-angles, its vertical
+/// half-angle, the angle of its widest reach from the beam and its near plane.
+struct Cone {
+    right: Vec3,
+    up: Vec3,
+    beam: Vec3,
+    tan_horizontal: f64,
+    tan_vertical: f64,
+    vertical: f64,
+    widest: f64,
+    near: f64,
+}
+
 fn dot(a: Vec3, b: Vec3) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
@@ -246,8 +269,15 @@ impl LightTable {
                 ));
             }
             match &f.value {
-                LightValue::ViewToCone if self.kind != LightTableKind::Spot => {
+                LightValue::ViewToCone | LightValue::VerticalConeSphere { .. }
+                    if self.kind != LightTableKind::Spot =>
+                {
                     return Err("a cone in a table of point lights".into());
+                }
+                LightValue::VerticalConeSphere { margin } if !(margin.is_finite() && *margin >= 0.0) => {
+                    return Err(format!(
+                        "a cone sphere's margin {margin} is not finite and non-negative"
+                    ));
                 }
                 LightValue::Constant { value, why } if !value.is_finite() || why.trim().is_empty() => {
                     return Err(format!(
@@ -289,7 +319,9 @@ impl LightTable {
     /// The world's lights of the table's kind as its records, seen from `view` (the frame's world-to-view matrix, by rows:
     /// view-space component r of a world position `p` is `view[r] . (p, 1)`; its rotation is taken as rigid). Each light
     /// is a `core.light` of the kind with a `core.transform`, a range and, for a spot, an outer cone below 90 degrees; the
-    /// colours need the world's `core.light_unit`. Beyond `capacity` the lights nearest the view's origin are kept.
+    /// colours need the world's `core.light_unit`. A spot's `core.spot_frustum`, where it has one, is its shape: its
+    /// two half-angles and near plane take the place of the outer cone. Beyond `capacity` the lights nearest the view's
+    /// origin are kept.
     ///
     /// `shadows` are the lights the consumer draws with a local shadow this frame ([`LocalShadows::none`] where it
     /// draws none): in a table that says which lights are shadowed, such a light's record takes [`LightValue::Shadowed`]
@@ -373,18 +405,50 @@ impl LightTable {
                 .map(f64::from)
                 .filter(|r| r.is_finite() && *r > 0.0)
                 .ok_or_else(|| format!("{e:?}: a light with no range, which a light record holds"))?;
-            // a spot's axes in view space and the tangent of its outer cone
+            // a spot's axes in view space and its shape: the pyramid its source states, else its outer cone on both axes
             let cone = match light.kind {
                 LightKind::Spot { outer_cone, .. } => {
-                    let tan = f64::from(outer_cone).tan();
-                    if !(tan.is_finite() && tan > 0.0) {
+                    let frustum = w.get::<crate::SpotFrustum>(e);
+                    if let Some(f) = frustum {
+                        <crate::SpotFrustum as crate::Component>::verify(f, e, w)?;
+                    }
+                    let outer = f64::from(outer_cone);
+                    let (horizontal, vertical, near) = frustum.map_or((outer, outer, 0.0), |f| {
+                        (
+                            f64::from(f.horizontal_half_angle),
+                            f64::from(f.vertical_half_angle),
+                            f64::from(f.near),
+                        )
+                    });
+                    let (tan_horizontal, tan_vertical) = (horizontal.tan(), vertical.tan());
+                    for tan in [tan_horizontal, tan_vertical] {
+                        if !(tan.is_finite() && tan > 0.0) {
+                            return Err(format!(
+                                "{e:?}: a spot's cone {horizontal} by {vertical} has no tangent above 0"
+                            ));
+                        }
+                    }
+                    if near >= range {
                         return Err(format!(
-                            "{e:?}: a spot's outer cone {outer_cone} has no tangent above 0"
+                            "{e:?}: a spot's near plane {near} not before its range {range}"
                         ));
                     }
                     let axis = |c: usize| unit(turn(t.cols[c].map(f64::from)));
                     let beam = axis(2)?.map(|x| -x);
-                    Some((axis(0)?, axis(1)?, beam, tan, f64::from(outer_cone)))
+                    Some(Cone {
+                        right: axis(0)?,
+                        up: axis(1)?,
+                        beam,
+                        tan_horizontal,
+                        tan_vertical,
+                        vertical,
+                        // the angle of the volume's widest reach from the beam: a pyramid's corners
+                        widest: match frustum {
+                            Some(_) => tan_horizontal.hypot(tan_vertical).atan(),
+                            None => outer,
+                        },
+                        near,
+                    })
                 }
                 _ => None,
             };
@@ -427,21 +491,29 @@ impl LightTable {
                         None => colour(light.color, light.intensity)?,
                     },
                     LightValue::ViewToCone => {
-                        let (right, up, beam, tan, _) = cone.ok_or("a cone for a light that is no spot")?;
+                        let c = cone.as_ref().ok_or("a cone for a light that is no spot")?;
+                        // the near plane's row: (d - near) * range / (range - near), d itself where near is 0
+                        let depth = range / (range - c.near);
                         let mut m = Vec::with_capacity(16);
-                        for (axis, scale) in [(right, 1.0 / tan), (up, 1.0 / tan), (beam, 1.0), (beam, 1.0)] {
+                        for (axis, scale, shift) in [
+                            (c.right, 1.0 / c.tan_horizontal, 0.0),
+                            (c.up, 1.0 / c.tan_vertical, 0.0),
+                            (c.beam, depth, c.near),
+                            (c.beam, 1.0, 0.0),
+                        ] {
                             m.extend(axis.map(|x| x * scale));
-                            m.push(-dot(axis, at) * scale);
+                            m.push((-dot(axis, at) - shift) * scale);
                         }
                         m
                     }
-                    LightValue::ViewBoundingSphere => match cone {
+                    LightValue::ViewBoundingSphere => match &cone {
                         None => vec![at[0], at[1], at[2], range],
-                        Some((_, _, beam, tan, outer)) => {
+                        Some(c) => {
+                            let outer = c.widest;
                             let radius = if outer <= std::f64::consts::FRAC_PI_4 {
                                 range / (2.0 * outer.cos().powi(2))
                             } else {
-                                range * tan
+                                range * outer.tan()
                             };
                             let along = if outer <= std::f64::consts::FRAC_PI_4 {
                                 radius
@@ -449,19 +521,30 @@ impl LightTable {
                                 range
                             };
                             vec![
-                                at[0] + beam[0] * along,
-                                at[1] + beam[1] * along,
-                                at[2] + beam[2] * along,
+                                at[0] + c.beam[0] * along,
+                                at[1] + c.beam[1] * along,
+                                at[2] + c.beam[2] * along,
                                 radius,
                             ]
                         }
                     },
+                    LightValue::VerticalConeSphere { margin } => {
+                        let c = cone.as_ref().ok_or("a cone sphere for a light that is no spot")?;
+                        let along = range / (2.0 * c.vertical.cos().powi(2));
+                        vec![
+                            at[0] + c.beam[0] * along,
+                            at[1] + c.beam[1] * along,
+                            at[2] + c.beam[2] * along,
+                            along + f64::from(*margin),
+                        ]
+                    }
                     LightValue::ViewDepthMin | LightValue::ViewDepthMax => {
-                        let (least, most) = match cone {
+                        let (least, most) = match &cone {
                             None => (at[2] - range, at[2] + range),
-                            Some((right, up, beam, tan, _)) => {
-                                let base = at[2] + beam[2] * range;
-                                let reach = range * tan * (right[2].abs() + up[2].abs());
+                            Some(c) => {
+                                let base = at[2] + c.beam[2] * range;
+                                let reach = range
+                                    * (c.tan_horizontal * c.right[2].abs() + c.tan_vertical * c.up[2].abs());
                                 (at[2].min(base - reach), at[2].max(base + reach))
                             }
                         };
@@ -1227,6 +1310,125 @@ mod tests {
         let p = [3.0 * (std::f64::consts::FRAC_PI_6).tan(), 0.0, 13.0, 1.0];
         let row = |r: usize| (0..4).map(|k| f64::from(f[4 * r + k]) * p[k]).sum::<f64>();
         close((row(0) / row(3)) as f32, 1.0, "the cone's edge");
+    }
+
+    /// The same spot shaped by a `core.spot_frustum`: half-angles 45 degrees across (tan 1) and 30 up (tan 1 / sqrt 3),
+    /// near plane 2, range 6. Each axis's row is over its own tangent; the near plane's row is
+    /// `(d - 2) * 6 / (6 - 2)`; the bounding sphere is the base's own (the corners' angle, `atan(sqrt(1 + 1 / 3))`, is
+    /// above 45 degrees: radius 6 sqrt(4 / 3), centred at the base); the vertical cone's sphere is the 30-degree cone's,
+    /// radius 6 / (2 cos^2 30) = 4 and the margin, centred 4 along the beam; the depths are the apex's and the base's, as
+    /// both axes lie across the view.
+    #[test]
+    fn a_spot_frustum_shapes_its_cone_near_plane_and_spheres() {
+        let mut w = World::new();
+        w.insert_resource(LightUnit {
+            candela_per_unit: 1.0,
+        });
+        let e = w.spawn();
+        w.insert(
+            e,
+            Transform {
+                cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0., 0., 0.]],
+            },
+        );
+        let spot = Light {
+            kind: LightKind::Spot {
+                inner_cone: 0.3,
+                outer_cone: 0.6,
+            },
+            color: [1.0, 1.0, 1.0],
+            intensity: 1.0,
+            range: Some(6.0),
+            cast_shadows: None,
+            radius: None,
+            specular: None,
+        };
+        w.insert(e, spot.clone());
+        let frustum = crate::SpotFrustum {
+            horizontal_half_angle: std::f32::consts::FRAC_PI_4,
+            vertical_half_angle: std::f32::consts::FRAC_PI_6,
+            near: 2.0,
+        };
+        w.insert(e, frustum);
+        let t = table(
+            LightTableKind::Spot,
+            128,
+            vec![
+                (0, LightValue::ViewToCone),
+                (64, LightValue::ViewBoundingSphere),
+                (80, LightValue::VerticalConeSphere { margin: 0.001 }),
+                (96, LightValue::ViewDepthMin),
+                (100, LightValue::ViewDepthMax),
+            ],
+        );
+        let f = floats(&t.pack(&w, &VIEW, &LocalShadows::none()).unwrap().bytes);
+        let corners = (4.0f64 / 3.0).sqrt();
+        let want = [
+            1.0,
+            0.0,
+            0.0,
+            0.0, // right / tan 45
+            0.0,
+            3f64.sqrt(),
+            0.0,
+            0.0, // up / tan 30
+            0.0,
+            0.0,
+            1.5,
+            -18.0, // the near plane: (beam . p - beam . apex - 2) * 6 / 4
+            0.0,
+            0.0,
+            1.0,
+            -10.0, // beam, less beam . apex
+            0.0,
+            0.0,
+            16.0,
+            6.0 * corners, // the base's sphere
+            0.0,
+            0.0,
+            14.0,
+            4.001, // the vertical cone's sphere and its margin
+            10.0,
+            16.0, // depths
+        ];
+        for (i, v) in want.into_iter().enumerate() {
+            close(f[i], v, &format!("float {i}"));
+        }
+        // the near plane: a position 1 along the beam is before it, 3 along is past it
+        let row = |r: usize, d: f64| {
+            (0..4)
+                .map(|k| f64::from(f[4 * r + k]) * [0.0, 0.0, 10.0 + d, 1.0][k])
+                .sum::<f64>()
+        };
+        assert!(row(2, 1.0) < 0.0 && row(2, 3.0) > 0.0);
+
+        // refused: a frustum whose near plane is not before the range, a half-angle of 90 degrees, a frustum on a light
+        // that is no spot, and a cone sphere in a table of point lights
+        for bad in [
+            crate::SpotFrustum { near: 6.0, ..frustum },
+            crate::SpotFrustum {
+                vertical_half_angle: std::f32::consts::FRAC_PI_2,
+                ..frustum
+            },
+        ] {
+            w.insert(e, bad);
+            assert!(t.pack(&w, &VIEW, &LocalShadows::none()).is_err(), "{bad:?}");
+        }
+        w.insert(e, frustum);
+        w.insert(
+            e,
+            Light {
+                kind: LightKind::Point,
+                ..spot
+            },
+        );
+        assert!(<crate::SpotFrustum as crate::Component>::verify(&frustum, e, &w).is_err());
+        let points = table(
+            LightTableKind::Point,
+            16,
+            vec![(0, LightValue::VerticalConeSphere { margin: 0.0 })],
+        );
+        assert!(points.verify(None).is_err());
     }
 
     /// A table refuses a record of no whole floats, a buffer of another stride, fields outside the record or over one

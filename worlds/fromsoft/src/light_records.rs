@@ -48,6 +48,10 @@ const TRANSLUCENCY: &str = "the translucency term's strength (x) and exponent ov
 const ELDEN_SPOT: &str = "Elden Ring's spot record by its programs' declaration alone (no spot light was in the frames \
     read back): ";
 
+/// What a spot record's cull sphere (`CullPositionAndRange.w`) adds to the radius of its vertical cone's sphere, in
+/// metres: 0.001 on each of Sekiro's three recorded bank-spot records (to 2e-6 of their radii 16.0780 and 17.5866).
+const CULL_MARGIN: f32 = 0.001;
+
 fn field(offset: u32, value: LightValue) -> LightField {
     LightField { offset, value }
 }
@@ -146,6 +150,17 @@ pub(crate) fn lists(game: Game, name: &str, stride: u32) -> Option<LightListPart
 /// shadowed tile pass uses them), `ShadowCenterPos` (+96) and `ViewportScaleOffset` (+112, six cube faces, which the
 /// shadowed tile pass picks by the major axis of the light-to-pixel vector: +112 and +128 for x, +144 and +160 for y,
 /// +176 and +192 for z); a spot record's `ShadowParam.x` (+160) and its one face (+176).
+///
+/// A spot record holds the game's pyramid (`core.spot_frustum`): its `ViewToLightSpaceMatrix` (+64) scales the
+/// horizontal and vertical axes by `cot` of each axis's half-angle and its third row is the near plane's, which the tile
+/// pass tests above 0 before it lights a pixel; `MinDist` and `MaxDist` (+132, +136) bound the apex and the base's
+/// corners; `CullPositionAndRange` (+144), which the organize program tests against the tile's planes, is the sphere of
+/// the circular cone of the vertical half-angle and [`CULL_MARGIN`] ([`LightValue::VerticalConeSphere`]). Sekiro's
+/// recorded spot records hold exactly these (three records of two bank spots, one 90 by 8 degrees, near planes 3 and
+/// 15). Which half-angle the sphere takes is fitted, not read from code: the three records cannot tell the vertical
+/// axis from the narrower one, as the one record of unequal axes is narrower vertically; the vertical axis is the
+/// angle the executable's spot keeps beside its aspect ratio for drawing. Elden Ring declares the same record; no
+/// Elden Ring spot record has been read back.
 fn elden_translucency() -> [LightField; 2] {
     [
         field(48, LightValue::TranslucencyStrength),
@@ -200,7 +215,7 @@ pub(crate) fn table(game: Game, name: &str, stride: u32) -> Option<LightTable> {
                 field(128, LightValue::Shadowed),
                 field(132, LightValue::ViewDepthMin),
                 field(136, LightValue::ViewDepthMax),
-                field(144, LightValue::ViewBoundingSphere),
+                field(144, LightValue::VerticalConeSphere { margin: CULL_MARGIN }),
                 field(160, LightValue::ShadowProjection { floats: 1 }),
                 field(176, LightValue::ShadowFaces { faces: 1 }),
             ],
@@ -330,6 +345,104 @@ mod tests {
                     Some(BufferSource::LightLists(_))
                 ));
             }
+        }
+    }
+
+    /// Ashina Castle's bank spot `m11_01_00_00_0000` light 2 (cone angle 8, width 90, near plane 3, radius 35, rotation
+    /// (0.2961499, 0.7274523, 0) radians), lowered and packed into Sekiro's spot table with the view of the recorded frame
+    /// it stands in (`sek6` frame 5874, `g_ViewMatrix`, the map frame's z mirrored as the world frame's), against the
+    /// record the game uploaded there: its position and range, its four cone vectors (each axis over its own half-angle's
+    /// tangent, the near plane's row), its depth range over the pyramid's apex and corners and its cull sphere (the
+    /// 4-degree vertical cone's, and the margin), each within 5e-5 (three float steps at 200). The cone of one angle (the
+    /// equal-area circle, 14.8 degrees) differs in rows 0 and 1 by over 2, and a cone without the near plane in row 2 by 3.
+    #[test]
+    fn a_narrow_wide_spot_packs_as_the_game_uploads_it() {
+        use primase_core::pass::{PassManager, PassRegistry, RunReport};
+        let f = |bits: &[u32]| bits.iter().map(|b| f32::from_bits(*b)).collect::<Vec<_>>();
+        let btl = fromsoft_formats::btl::Light {
+            name: "m11_01 spot 2".into(),
+            kind: fromsoft_formats::btl::Kind::Spot,
+            diffuse: [255, 255, 255],
+            diffuse_power: 1.,
+            specular: [255, 255, 255],
+            specular_power: 1.,
+            cast_shadows: false,
+            cone_angle: 8.,
+            position: [-353.334, -22.1065, 235.501],
+            rotation: [0.296_149_9, 0.727_452_3, 0.],
+            radius: 35.,
+            flicker_interval: [0.; 2],
+            flicker_brightness: 1.,
+            event_id: -1,
+            near_clip: 1.,
+            shadow_model_cull_flip: false,
+            sharpness: 15.,
+            horizontal_angle: 90.,
+            near_distance: 3.,
+            enable_distance: 0.,
+            volume_density: 0.,
+            exposure_weight: 0.,
+            auxiliary: Default::default(),
+        };
+        let identity = primase_core::Transform {
+            cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0.; 3]],
+        };
+        let (transform, source) = crate::sekiro::light_record(&btl, &identity).unwrap();
+        let mut world = primase_core::World::new();
+        let e = world.spawn();
+        world.insert(e, transform);
+        world.insert(e, source);
+        let mut registry = PassRegistry::new();
+        crate::sekiro::passes::register(&mut registry);
+        let manager = PassManager::new(registry);
+        let pipeline = manager
+            .registry
+            .parse("lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15}")
+            .unwrap();
+        manager
+            .run(&mut world, &pipeline, &mut RunReport::default())
+            .unwrap();
+        assert!(world.has::<primase_core::SpotFrustum>(e));
+
+        let rows = f(&[
+            0x3f2a5252, 0xb0800000, 0x3f3f1e87, 0x3fe7bac1, 0x3c58d95a, 0x3f7ff5b4, 0xbc41405d, 0x41ec10b6,
+            0xbf3f16d7, 0x3c913b74, 0x3f2a4b78, 0xc383ece3,
+        ]);
+        let mut view = [[0., 0., 0., 1.]; 4];
+        for (r, row) in view.iter_mut().take(3).enumerate() {
+            *row = [rows[4 * r], rows[4 * r + 1], -rows[4 * r + 2], rows[4 * r + 3]];
+        }
+        let spots = table(Game::Sekiro, "g_SpotLightBuffer", 192).unwrap();
+        let packed = spots
+            .pack(&world, &view, &primase_core::shader::LocalShadows::none())
+            .unwrap();
+        let ours: Vec<f32> = packed
+            .bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
+            .collect();
+        let recorded = f(&[
+            // PositionAndRange
+            0xc265d0ac, 0xbd495600, 0x431c28d1, 0x420c0000, //
+            // ViewToLightSpaceMatrix, four rows
+            0x39f57c02, 0x3c913b74, 0xbf7ff5b4, 0x431c29a3, 0x40858d5a, 0x415ad0a1, 0x3e7a5053, 0x434a487f,
+            0x3f85e7c8, 0xbea368bb, 0xbba9620a, 0x42667580, 0x3f74db08, 0xbe956711, 0xbb9add4b,
+            0x425eb492, //
+            // MinDist, MaxDist
+            0x42f1ea58, 0x433f07c6, //
+            // CullPositionAndRange
+            0xc22288fb, 0xc0a5c7f5, 0x431c138b, 0x418cb14b,
+        ]);
+        let at: Vec<usize> = (0..4).chain(16..32).chain([33, 34]).chain(36..40).collect();
+        for (k, want) in at.iter().zip(&recorded) {
+            let got = ours[*k];
+            assert!(
+                (f64::from(got) - f64::from(*want)).abs() <= 5e-5,
+                "float {k} (+{}): ours {got}, the game's {want}",
+                4 * k
+            );
         }
     }
 }

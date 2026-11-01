@@ -703,7 +703,10 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   light scales each axis by `cot(angle / 2)`, read back from five live spot records, so the
   stored value is the full angle of the cone's edge) as the circle of the same area, with an
   inner cone at `1 - spot-blend` (no default: the game's falloff is `1 - (tan a / tan edge)^2`,
-  with no inner cone). A BTL light's rotation is stored in radians; a spot shines along the
+  with no inner cone). The game's spot itself, a pyramid of the two angles that lights only
+  past its near plane (record offset 188; `far * 0.01` where that is 0, each full angle at
+  least 1 degree, as the executable's spot setup takes them), is the light's
+  `core.spot_frustum`, which the spot records pack exactly. A BTL light's rotation is stored in radians; a spot shines along the
   rotated local +Z of the game frame (the transform's local -Z in the mirrored world frame).
   A spot with no angle in either axis is left off, as the game leaves it; the record's
   exposure weight (offset 224, a term of the game's per-frame exposure; 0 on every Elden

@@ -8,7 +8,7 @@
 use super::settings::{Factor, Fraction, Metres};
 use crate::sekiro::source::{EffectLight, EffectShape, EffectValue, LightKind, LightSource};
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::{Component, Light, LightSpecular, LightUnit, Resource, Transform, World};
+use primase_core::{Component, Light, LightSpecular, LightUnit, Resource, SpotFrustum, Transform, World};
 
 const TRANSLUCENCY_DEFAULTS: &str = "translucency strength/exponent: the light constructor's defaults (1, 1), exponent clamped to 0.01 as the packer does; per-light overrides not traced";
 
@@ -49,6 +49,35 @@ pub fn spot_half_angles(cone_angle: f32, cone_width: f32) -> Option<[f64; 2]> {
     }
     (horizontal >= EPSILON && vertical >= EPSILON && horizontal.is_finite() && vertical.is_finite())
         .then(|| [f64::from(horizontal) / 2., f64::from(vertical) / 2.])
+}
+
+/// A BTL spot light's `core.spot_frustum` as the game builds the spot: its half-angles [`spot_half_angles`] (the
+/// horizontal axis the light's local +X, the vertical its local +Y) and its near plane, the stored `near_distance`
+/// (record offset 188). The executable's frustum setter, which the BTL loader passes the near plane, the radius as the
+/// far plane and the two full angles, then takes the far plane as at least 1, each full angle as at least 1 degree and,
+/// where the near plane is not above 0, `far * 0.01` for it (read from the code of Sekiro 1.06); a running game's spot
+/// records hold exactly the cone rows, near plane and depth range of these (three records of two bank spots, near planes
+/// 3 and 15). `None` where the game leaves the spot off (no angle) or the near plane is not before the far plane.
+pub fn spot_frustum(
+    cone_angle: f32,
+    cone_width: f32,
+    near_distance: f32,
+    radius: f32,
+) -> Option<SpotFrustum> {
+    const ONE_DEGREE: f32 = 0.017_453_292;
+    let [horizontal, vertical] = spot_half_angles(cone_angle, cone_width)?;
+    let full = |half: f64| f64::from((half * 2.) as f32).max(f64::from(ONE_DEGREE)) / 2.;
+    let far = radius.max(1.);
+    let near = if near_distance > 0. {
+        near_distance
+    } else {
+        far * 0.01
+    };
+    (near.is_finite() && near < far).then(|| SpotFrustum {
+        horizontal_half_angle: full(horizontal) as f32,
+        vertical_half_angle: full(vertical) as f32,
+        near,
+    })
 }
 
 /// Which value of an effect light's colour and multiplier properties is lowered (`brightness=`).
@@ -500,6 +529,7 @@ impl Pass for LowerFromSoftLights {
             LightUnit::NAME,
             primase_core::LightFalloff::NAME,
             primase_core::LightTranslucency::NAME,
+            SpotFrustum::NAME,
         ]
     }
     fn approximates(&self) -> &'static str {
@@ -566,8 +596,29 @@ impl Pass for LowerFromSoftLights {
             }
         }
         for (e, light) in btl {
+            let spot = matches!(light.kind, primase_core::LightKind::Spot { .. });
             world.insert(e, light);
             log.count("lights lowered", 1);
+            if spot {
+                let source = world
+                    .get::<LightSource>(e)
+                    .ok_or("lowered BTL light lost its source")?;
+                match spot_frustum(
+                    source.cone_angle,
+                    source.cone_width,
+                    source.near_distance,
+                    source.radius,
+                ) {
+                    Some(frustum) => {
+                        world.insert(e, frustum);
+                        log.count("spot lights shaped by their two angles and near plane", 1);
+                    }
+                    None => log.count(
+                        "spot lights whose near plane is not before their far plane: the cone alone",
+                        1,
+                    ),
+                }
+            }
         }
         for (e, light) in effects {
             let source = world

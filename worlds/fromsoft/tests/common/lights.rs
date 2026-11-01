@@ -127,6 +127,10 @@ pub fn compare(kind: &str, table: &LightTable, packed: &[f32], recorded: &[f32],
             LightValue::ViewBoundingSphere => {
                 tally.add(name("sphere"), p.iter().zip(r).all(|(a, b)| near(*a, *b, 1e-3)));
             }
+            // to 1e-4 m: finer than the cull sphere's margin of 1e-3
+            LightValue::VerticalConeSphere { .. } => {
+                tally.add(name("sphere"), p.iter().zip(r).all(|(a, b)| near(*a, *b, 1e-4)));
+            }
             LightValue::Shadowed => tally.add(name("shadowed"), p[0].to_bits() == r[0].to_bits()),
             // a shadow's place: the packed one exactly where the recorded light is shadowed; an unshadowed record holds
             // there what the buffer held before, tallied as zero or not

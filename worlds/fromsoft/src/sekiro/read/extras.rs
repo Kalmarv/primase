@@ -65,6 +65,7 @@ pub fn light_record(
         cast_shadows: light.cast_shadows,
         cone_angle: light.cone_angle,
         cone_width: light.horizontal_angle,
+        near_distance: light.near_distance,
         exposure_weight: light.exposure_weight,
         radius: light.radius,
         sharpness: light.sharpness,

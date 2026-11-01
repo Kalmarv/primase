@@ -50,6 +50,8 @@ pub use light_falloff::LightFalloff;
 mod light_translucency;
 pub use irradiance_volume::IrradianceVolume;
 pub use light_translucency::LightTranslucency;
+mod spot_frustum;
+pub use spot_frustum::SpotFrustum;
 mod reflection_probe;
 pub use light_unit::{DirectionalLightUnit, LightUnit};
 pub use reflection_probe::{EnvironmentProbeBlend, ProbeMipPolicy, ProbeState, ReflectionProbeRegion};

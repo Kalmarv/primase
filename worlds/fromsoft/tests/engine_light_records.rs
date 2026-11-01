@@ -33,6 +33,7 @@ fn btl(diffuse: [u8; 3], power: f32, radius: f32) -> LightSource {
         cast_shadows: false,
         cone_angle: 0.,
         cone_width: 0.,
+        near_distance: 0.,
         exposure_weight: 0.,
         radius,
         sharpness: 1.,
