@@ -54,6 +54,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         &DROP_MARKER,
         &GROUP_PRIMITIVES,
         &OMIT_MATERIALLESS_PRIMITIVES,
+        &OMIT_UNSHADED_PRIMITIVES,
         &OMIT_PLACEMENTS,
         &PARTITION_GRID,
         &SET_SHADOW_CASTING,
@@ -66,6 +67,8 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
 }
 mod materialless;
 pub use materialless::{OMIT_MATERIALLESS_PRIMITIVES, OmitMateriallessPrimitives};
+mod unshaded;
+pub use unshaded::{OMIT_UNSHADED_PRIMITIVES, OmitUnshadedPrimitives};
 mod partition;
 pub use partition::{PARTITION_GRID, PartitionGrid};
 mod primitive;
@@ -543,6 +546,7 @@ mod tests {
             "group-primitives",
             "omit-materialless-primitives",
             "omit-placements",
+            "omit-unshaded-primitives",
             "partition-grid",
             "set-shadow-casting",
             "spawn-at-start",
@@ -558,6 +562,7 @@ mod tests {
             "draw-collision",
             "first-texcoord-set",
             "omit-materialless-primitives",
+            "omit-unshaded-primitives",
             "tessellate-colliders",
         ];
         for name in names {
