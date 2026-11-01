@@ -60,7 +60,7 @@ fn lower(world: &mut World) -> Vec<Light> {
             world,
             &manager
                 .registry
-                .parse("lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15}")
+                .parse("lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15,brightness=settled,min-range=0,include-disabled=off}")
                 .expect("pipeline"),
             &mut report,
         )
@@ -113,7 +113,7 @@ fn btl_falloff_is_preserved_raw_and_invalid_distances_are_named_by_the_pass() {
             &mut world,
             &manager
                 .registry
-                .parse("lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15}")
+                .parse("lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15,brightness=settled,min-range=0,include-disabled=off}")
                 .unwrap(),
             &mut report,
         )

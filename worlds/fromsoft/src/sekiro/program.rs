@@ -28,7 +28,7 @@ const AREA_PREP: &[&str] = &[
     "lower-sekiro-reinhard",
     "bake-fromsoft-layers{max-size=512,sample-time=0}",
     MATERIALS_PASS,
-    "lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15,min-range=0.5}",
+    "lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15,brightness=settled,min-range=0.5,include-disabled=off}",
     "lower-fromsoft-extras",
     MAP_RECORDS_PASS,
 ];
@@ -72,7 +72,7 @@ const ELDEN_AREA_PREP: &[&str] = &[
     ENVIRONMENT_PASS,
     "lower-elden-ring-reinhard",
     MATERIALS_PASS,
-    "lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15,min-range=0.5}",
+    "lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15,brightness=settled,min-range=0.5,include-disabled=off}",
     "lower-fromsoft-extras",
     MAP_RECORDS_PASS,
 ];

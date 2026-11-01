@@ -110,8 +110,12 @@ impl Choice for Disabled {
 /// Options: `candela-per-power` (required: candela per unit of the stored diffuse power, above 0; no default, it is a
 /// calibration, and the world's `core.light_unit` states it), `spot-blend` (required: the inner cone as `1 - blend` of the outer; the game's spot has no inner cone,
 /// its falloff is `1 - (tan a / tan edge)^2` of the angle `a` from the axis, so the blend is the program's choice
-/// of where a core spot's falloff starts) and `min-range` (metres; a light's range is its stored
-/// radius, at least this; default 0, the radius as stored).
+/// of where a core spot's falloff starts), `brightness` (required: which value of an effect light's keyframed colour
+/// and multiplier is lowered; no default, as the game's value at a moment depends on the effect's age, which a read
+/// does not know), `min-range` (required: metres, at least 0; a light's range is its stored radius, at least this, so 0
+/// keeps the radius as stored) and `include-disabled` (required: `off` leaves out the effect lights of regions that start
+/// disabled and of configs the effect's first state does not choose, counted by reason; `on` lowers them). Each changes
+/// which lights are drawn or how far they reach, so none has a default.
 ///
 /// Colour is the stored component squared, the game's own transfer (a BTL light's diffuse bytes over 255, an effect
 /// light's stored red, green and blue; every component of every effect light of both installs is a whole number of
@@ -127,7 +131,7 @@ impl Choice for Disabled {
 /// Effect lights (`fromsoft.effect_light`, read with `Options::effect_lights`) are lowered like BTL lights, in the same
 /// unit: the game's lighting shader takes a BTL light's `bytes^2 * power` and an effect light's `colour^2 * alpha *
 /// diffuse multiplier` as the same field of one record, so an effect light's brightness (alpha times the stored
-/// multiplier, at the value `brightness=` picks: `settled`, the default, or `initial`, the first keyframe) is a BTL
+/// multiplier, at the value `brightness=` picks: `settled`, where it ends, or `initial`, the first keyframe) is a BTL
 /// power and takes `candela-per-power` and nothing else. A spot's multiplier is used as stored: the game's code
 /// reads the property into the light's intensity with no tenth (the fxr library's tenth, `SPOT_MULTIPLIER_UNIT` of an
 /// earlier revision, is its own convention); that is read from the executable's code, not yet checked on a live spot
@@ -135,81 +139,32 @@ impl Choice for Disabled {
 /// radius (its settled value), a spot's its far plane; a spot's cone is the wider of the half-angles `atan(radius / far)`
 /// of its elliptic base and its axis the effect's local +Z, both counted approximations (the game's code builds the
 /// frustum from `2 * atan(radius / 2 / far)` per axis, also not yet checked on a live spot), with `spot-blend` for the
-/// inner cone. Lights of a region that starts disabled and lights of a config the effect's first state does not choose
-/// are left out, counted by reason, unless `include-disabled=on`.
+/// inner cone, and the lights of a region that starts disabled or of a config the effect's first state does not choose
+/// as `include-disabled` says.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LowerFromSoftLights {
     /// Candela per unit of the stored diffuse power.
-    candela_per_power: Factor,
-    /// The least range a light gets.
-    min_range: Metres,
+    pub candela_per_power: Factor,
     /// The inner cone as `1 - blend` of the outer.
-    spot_blend: Fraction,
+    pub spot_blend: Fraction,
     /// Which keyframe of an effect light's colour and multiplier is lowered.
-    brightness: Brightness,
+    pub brightness: Brightness,
+    /// The least range a light gets (0: the radius as stored).
+    pub min_range: Metres,
     /// Whether disabled and unchosen effect lights are lowered.
-    include_disabled: Disabled,
+    pub include_disabled: Disabled,
 }
 
 impl LowerFromSoftLights {
-    /// The lights at the program's calibration and spot blend, ranges as stored (`min-range` 0), effect lights at
-    /// their settled brightness, disabled ones left out.
-    pub fn new(candela_per_power: Factor, spot_blend: Fraction) -> Self {
-        LowerFromSoftLights {
-            candela_per_power,
-            min_range: Metres::new(0.).expect("zero"),
-            spot_blend,
-            brightness: Brightness::Settled,
-            include_disabled: Disabled::Skip,
-        }
-    }
-    /// The least range a light gets.
-    pub fn with_min_range(mut self, min_range: Metres) -> Self {
-        self.min_range = min_range;
-        self
-    }
-    /// Which keyframe of an effect light's colour and multiplier is lowered.
-    pub fn with_brightness(mut self, brightness: Brightness) -> Self {
-        self.brightness = brightness;
-        self
-    }
-    /// Whether disabled and unchosen effect lights are lowered.
-    pub fn with_include_disabled(mut self, include_disabled: Disabled) -> Self {
-        self.include_disabled = include_disabled;
-        self
-    }
-    pub fn candela_per_power(&self) -> Factor {
-        self.candela_per_power
-    }
-    pub fn min_range(&self) -> Metres {
-        self.min_range
-    }
-    pub fn spot_blend(&self) -> Fraction {
-        self.spot_blend
-    }
-    pub fn brightness(&self) -> Brightness {
-        self.brightness
-    }
-    pub fn include_disabled(&self) -> Disabled {
-        self.include_disabled
-    }
-
-    /// From its declared options, through [`LowerFromSoftLights::new`] and its setters.
+    /// From its declared options, every one of them stated.
     fn from_given(g: &Given) -> Result<Self, String> {
-        let mut pass = Self::new(
-            Factor::parse("candela-per-power", g.required("candela-per-power"))?,
-            Fraction::parse("spot-blend", g.required("spot-blend"))?,
-        );
-        if let Some(v) = g.optional("min-range") {
-            pass = pass.with_min_range(Metres::parse("min-range", v)?);
-        }
-        if let Some(b) = g.optional_choice::<Brightness>("brightness") {
-            pass = pass.with_brightness(b);
-        }
-        if let Some(d) = g.optional_choice::<Disabled>("include-disabled") {
-            pass = pass.with_include_disabled(d);
-        }
-        Ok(pass)
+        Ok(LowerFromSoftLights {
+            candela_per_power: Factor::parse("candela-per-power", g.required("candela-per-power"))?,
+            spot_blend: Fraction::parse("spot-blend", g.required("spot-blend"))?,
+            brightness: g.choice::<Brightness>("brightness"),
+            min_range: Metres::parse("min-range", g.required("min-range"))?,
+            include_disabled: g.choice::<Disabled>("include-disabled"),
+        })
     }
 }
 
@@ -228,22 +183,20 @@ pub const LOWER_FROMSOFT_LIGHTS: PassSpec = PassSpec {
             "0.15",
             "0 to 1: a spot cone's blend (the game's falloff, 1 - (tan a / tan edge)^2, has no inner cone)",
         ),
-        OptionSpec::optional(
+        OptionSpec::required(
             "min-range",
             "0",
-            "metres, at least 0: the least range a light gets",
-            "0: no least range",
+            "metres, at least 0: the least range a light gets (0: the radius as stored)",
         ),
-        OptionSpec::optional_choice::<Brightness>(
+        OptionSpec::choice::<Brightness>(
             "brightness",
-            "which value of an effect light's colour and multiplier is lowered",
-            "settled: the value the property ends on",
+            "which value of an effect light's colour and multiplier is lowered: settled (where it ends) or initial (its \
+             first keyframe)",
         ),
-        OptionSpec::optional_choice::<Disabled>(
+        OptionSpec::choice::<Disabled>(
             "include-disabled",
-            "lower the effect lights of regions that start disabled and of configs the effect's first state does not \
-             choose",
-            "off: they are left out, counted by reason",
+            "whether the effect lights of regions that start disabled and of configs the effect's first state does not \
+             choose are lowered: off (left out, counted by reason) or on",
         ),
     ],
     make: |g| Ok(Box::new(LowerFromSoftLights::from_given(g)?)),
@@ -499,21 +452,16 @@ impl Pass for LowerFromSoftLights {
         "lower-fromsoft-lights"
     }
     fn options(&self) -> Options {
-        let mut options = Options::from([
+        Options::from([
             ("candela-per-power".to_owned(), self.candela_per_power.to_string()),
-            ("min-range".to_owned(), self.min_range.to_string()),
             ("spot-blend".to_owned(), self.spot_blend.to_string()),
-        ]);
-        if self.brightness != Brightness::Settled {
-            options.insert("brightness".to_owned(), self.brightness.text().to_owned());
-        }
-        if self.include_disabled != Disabled::Skip {
-            options.insert(
+            ("brightness".to_owned(), self.brightness.text().to_owned()),
+            ("min-range".to_owned(), self.min_range.to_string()),
+            (
                 "include-disabled".to_owned(),
                 self.include_disabled.text().to_owned(),
-            );
-        }
-        options
+            ),
+        ])
     }
     /// Nothing is required: a read area may hold BTL records, effect lights, both or neither.
     fn requires(&self) -> &[&'static str] {

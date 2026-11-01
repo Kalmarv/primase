@@ -85,7 +85,8 @@ fn lowered(lights: Vec<EffectLight>, pipeline: &str) -> Result<(World, RunReport
     Ok((world, report))
 }
 
-const BASE: &str = "candela-per-power=2,spot-blend=0.25";
+/// The options every step states but `brightness` and `include-disabled`, which the tests vary.
+const BASE: &str = "candela-per-power=2,spot-blend=0.25,min-range=0";
 
 fn lights(world: &World) -> Vec<Light> {
     world.iter::<Light>().map(|(_, l)| l.clone()).collect()
@@ -97,7 +98,7 @@ fn an_effect_light_is_lowered_in_btl_power() {
     let l = point([1., 128. / 255., 0., 0.5], fade_in(6.4), 3.);
     let (world, report) = lowered(
         vec![l],
-        &format!("lower-fromsoft-lights{{{BASE},brightness=settled}}"),
+        &format!("lower-fromsoft-lights{{{BASE},brightness=settled,include-disabled=off}}"),
     )
     .unwrap();
     let all = lights(&world);
@@ -139,7 +140,11 @@ fn the_first_keyframe_is_lowered_with_brightness_initial_and_a_dark_light_is_lef
     );
     let pipeline = |extra: &str| format!("lower-fromsoft-lights{{{BASE}{extra}}}");
     // settled: the fade-in is lit, the flash is dark
-    let (world, report) = lowered(vec![fading.clone(), flash.clone()], &pipeline("")).unwrap();
+    let (world, report) = lowered(
+        vec![fading.clone(), flash.clone()],
+        &pipeline(",brightness=settled,include-disabled=off"),
+    )
+    .unwrap();
     assert_eq!(lights(&world).len(), 1);
     assert_eq!(
         report.steps[0].log.counts["effect lights dark at the lowered value, left out"],
@@ -147,7 +152,11 @@ fn the_first_keyframe_is_lowered_with_brightness_initial_and_a_dark_light_is_lef
     );
     assert!((f64::from(lights(&world)[0].intensity) - 6.4 * 2.).abs() < 1e-5);
     // initial: the other way round
-    let (world, report) = lowered(vec![fading, flash], &pipeline(",brightness=initial")).unwrap();
+    let (world, report) = lowered(
+        vec![fading, flash],
+        &pipeline(",brightness=initial,include-disabled=off"),
+    )
+    .unwrap();
     assert_eq!(lights(&world).len(), 1);
     assert!((f64::from(lights(&world)[0].intensity) - 8. * 2.).abs() < 1e-5);
     assert_eq!(
@@ -170,7 +179,7 @@ fn a_looping_property_is_lowered_at_its_first_keyframe_and_counted() {
     );
     let (world, report) = lowered(
         vec![looping],
-        &format!("lower-fromsoft-lights{{{BASE},brightness=settled}}"),
+        &format!("lower-fromsoft-lights{{{BASE},brightness=settled,include-disabled=off}}"),
     )
     .unwrap();
     assert!((f64::from(lights(&world)[0].intensity) - 2. * 2.).abs() < 1e-5);
@@ -185,7 +194,7 @@ fn a_spot_takes_its_multiplier_as_stored_and_the_wider_half_angle() {
     // far 10 m, base half-extents 10 and 5 m: half-angles 45 and 26.57 degrees; the wider is lowered
     let (world, report) = lowered(
         vec![spot(40., 10., 10., 5.)],
-        &format!("lower-fromsoft-lights{{{BASE},brightness=settled}}"),
+        &format!("lower-fromsoft-lights{{{BASE},brightness=settled,include-disabled=off}}"),
     )
     .unwrap();
     let all = lights(&world);
@@ -226,7 +235,7 @@ fn disabled_and_unchosen_lights_are_left_out_by_reason_unless_included() {
     let on = point([1.; 4], constant(&[1.]), 2.);
     let (world, report) = lowered(
         vec![off.clone(), unchosen.clone(), on.clone()],
-        &format!("lower-fromsoft-lights{{{BASE},brightness=settled}}"),
+        &format!("lower-fromsoft-lights{{{BASE},brightness=settled,include-disabled=off}}"),
     )
     .unwrap();
     assert_eq!(lights(&world).len(), 1);
@@ -241,7 +250,7 @@ fn disabled_and_unchosen_lights_are_left_out_by_reason_unless_included() {
     );
     let (world, _) = lowered(
         vec![off, unchosen, on],
-        &format!("lower-fromsoft-lights{{{BASE},include-disabled=on}}"),
+        &format!("lower-fromsoft-lights{{{BASE},brightness=settled,include-disabled=on}}"),
     )
     .unwrap();
     assert_eq!(lights(&world).len(), 3);
@@ -285,7 +294,9 @@ fn an_effect_light_and_a_btl_light_of_one_brightness_are_one_light() {
             &mut world,
             &manager
                 .registry
-                .parse(&format!("lower-fromsoft-lights{{{BASE}}}"))
+                .parse(&format!(
+                    "lower-fromsoft-lights{{{BASE},brightness=settled,include-disabled=off}}"
+                ))
                 .unwrap(),
             &mut report,
         )
@@ -312,17 +323,24 @@ fn an_effect_light_and_a_btl_light_of_one_brightness_are_one_light() {
 fn the_effect_options_refuse_bad_values() {
     let one = || vec![point([1.; 4], constant(&[1.]), 2.)];
     for pipeline in [
-        format!("lower-fromsoft-lights{{{BASE},brightness=middle}}"),
-        format!("lower-fromsoft-lights{{{BASE},include-disabled=maybe}}"),
-        format!("lower-fromsoft-lights{{{BASE},effect-power-per-unit=1}}"),
+        format!("lower-fromsoft-lights{{{BASE},brightness=middle,include-disabled=off}}"),
+        format!("lower-fromsoft-lights{{{BASE},brightness=settled,include-disabled=maybe}}"),
+        format!(
+            "lower-fromsoft-lights{{{BASE},brightness=settled,include-disabled=off,effect-power-per-unit=1}}"
+        ),
+        // brightness and include-disabled are required: the program states which value of a keyframed property is
+        // lowered and whether disabled effects' lights are
+        format!("lower-fromsoft-lights{{{BASE}}}"),
+        format!("lower-fromsoft-lights{{{BASE},include-disabled=on}}"),
+        format!("lower-fromsoft-lights{{{BASE},brightness=settled}}"),
     ] {
         assert!(lowered(one(), &pipeline).is_err(), "{pipeline}");
     }
-    // the effect options alone are complete pipeline steps, and so are the two required options
+    // every option stated is a complete pipeline step
     for pipeline in [
-        format!("lower-fromsoft-lights{{{BASE}}}"),
-        format!("lower-fromsoft-lights{{{BASE},brightness=initial}}"),
-        format!("lower-fromsoft-lights{{{BASE},include-disabled=on}}"),
+        format!("lower-fromsoft-lights{{{BASE},brightness=settled,include-disabled=off}}"),
+        format!("lower-fromsoft-lights{{{BASE},brightness=initial,include-disabled=off}}"),
+        format!("lower-fromsoft-lights{{{BASE},brightness=settled,include-disabled=on}}"),
     ] {
         assert!(lowered(one(), &pipeline).is_ok(), "{pipeline}");
     }

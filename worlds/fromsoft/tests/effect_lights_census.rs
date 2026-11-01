@@ -248,7 +248,7 @@ fn the_effect_lights_of_three_areas_are_placed_as_the_census_counts() -> Result<
 
         // the lowering: every light is lowered or counted by reason
         let m = common::manager().with_conservation(primase_core::ledger::Conservation::Enforce);
-        let pipeline = "lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15}";
+        let pipeline = "lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15,brightness=settled,min-range=0,include-disabled=off}";
         let mut run = RunReport::default();
         m.run(&mut world, &m.registry.parse(pipeline)?, &mut run)?;
         let log = &run.steps[0].log;

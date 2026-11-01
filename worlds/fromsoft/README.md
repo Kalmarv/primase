@@ -693,7 +693,7 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   environment regions. It provides `fromsoft.prepared_lighting`, verified against the core pipeline,
   so further graph lowerings can require preparation through the pass manager. Repeating it keeps the
   prepared graph unchanged. No renderer needs to know the source's binding names or make these choices.
-- `lower-fromsoft-lights{candela-per-power=...,spot-blend=...}` makes `core.light` from the BTL
+- `lower-fromsoft-lights{candela-per-power=...,spot-blend=...,brightness=...,min-range=...,include-disabled=...}` makes `core.light` from the BTL
   records: colour the stored byte over 255 squared (the game's own transfer, read back from
   a running game: the lighting shader's diffuse colour of every light is `(byte / 255)^2 *
   power`, not the sRGB curve), intensity the diffuse power times the program's calibration

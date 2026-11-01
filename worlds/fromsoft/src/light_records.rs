@@ -397,7 +397,7 @@ mod tests {
         let manager = PassManager::new(registry);
         let pipeline = manager
             .registry
-            .parse("lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15}")
+            .parse("lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15,brightness=settled,min-range=0,include-disabled=off}")
             .unwrap();
         manager
             .run(&mut world, &pipeline, &mut RunReport::default())

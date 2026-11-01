@@ -14,7 +14,7 @@ use primase_fromsoft::sekiro;
 use primase_fromsoft::sekiro::collision::{FMeshes, LowerFromSoftCollision};
 use primase_fromsoft::sekiro::convert::AreaReader;
 use primase_fromsoft::sekiro::extras::LowerFromSoftExtras;
-use primase_fromsoft::sekiro::lights::LowerFromSoftLights;
+use primase_fromsoft::sekiro::lights::{Brightness, Disabled, LowerFromSoftLights};
 use primase_fromsoft::sekiro::objects::{
     ConvexBodies, ConvexSurface, LowerFromSoftObjectCollision, MotionSelection, ResolutionChoice,
 };
@@ -70,7 +70,8 @@ fn main() -> Result<()> {
             Box::new(BakeFromSoftLayers::new(PixelCap::new(512)?, Seconds::new(0.0)?)),
             // water without a base texture: the skate look's flat blue-grey (the destination's choice)
             Box::new(LowerFromSoftMaterials::new(None, primase_image::Srgba8([48, 98, 122, 190]))),
-            Box::new(LowerFromSoftLights::new(Factor::new(1.0)?, Fraction::new(0.15)?).with_min_range(Metres::new(0.5)?)),
+            Box::new(LowerFromSoftLights { candela_per_power: Factor::new(1.0)?, spot_blend: Fraction::new(0.15)?,
+                brightness: Brightness::Settled, min_range: Metres::new(0.5)?, include_disabled: Disabled::Skip }),
             Box::new(LowerFromSoftExtras),
         ],
     };
