@@ -561,7 +561,7 @@ dependencies = [
 [[package]]
 name = "fromsoft-formats"
 version = "0.14.0"
-source = "git+https://github.com/Kalmarv/fromsoft-formats?rev=d5968c8a4286e5f8b0d87dc2dd3b2c8e0b6a7bfc#d5968c8a4286e5f8b0d87dc2dd3b2c8e0b6a7bfc"
+source = "git+https://github.com/Kalmarv/fromsoft-formats?rev=b4e48238d2bd5f8337e8f13633c94a6706e13f24#b4e48238d2bd5f8337e8f13633c94a6706e13f24"
 dependencies = [
  "aes",
  "encoding_rs",
@@ -1259,9 +1259,9 @@ dependencies = [
 
 [[package]]
 name = "primase-foundations"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8ce10679d3b7293ed544edd2db56485a7b458574d3c95084d97d27e9d7e9200"
+checksum = "971b770a0981fda2fd6014982c9b7ab5c2fd1a11d5ffdbaf4fc3bab06b58e3a4"
 dependencies = [
  "flate2",
  "half",

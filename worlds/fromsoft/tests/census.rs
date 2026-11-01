@@ -218,59 +218,96 @@ fn whole_install_of(
             message.to_owned(),
         );
     }
+    /// What one entry gave: its stored kind (the envelope's or the file's magic) once read, whether its bytes matched,
+    /// the binder members matched, and the error that stopped it.
+    struct Visited {
+        kind: Option<String>,
+        matched: bool,
+        members: usize,
+        result: Result<(), String>,
+    }
+    // every entry in one pass over the BDTs, its checks on the configured threads; a mismatch panics and stops the scan
+    let visited = std::sync::Mutex::new(BTreeMap::new());
+    archive
+        .scan_stored(
+            inputs::threads(),
+            |_| true,
+            |hash, raw| {
+                let shard = archive.entries[&hash].shard;
+                let mut v = Visited {
+                    kind: None,
+                    matched: false,
+                    members: 0,
+                    result: Ok(()),
+                };
+                v.result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    let raw = raw?;
+                    let magic = if raw.starts_with(b"DCX\0") {
+                        raw.get(40..44)
+                    } else {
+                        raw.get(..4)
+                    };
+                    v.kind = Some(String::from_utf8_lossy(magic.unwrap_or_default()).into_owned());
+                    let bytes = decoder.decode_if_dcx(raw)?;
+                    let want = expected.get(&(shard, hash)).ok_or("missing oracle entry")?;
+                    assert_eq!(
+                        (
+                            bytes.len(),
+                            Sha256::digest(&bytes)
+                                .iter()
+                                .map(|b| format!("{b:02X}"))
+                                .collect::<String>()
+                        ),
+                        *want,
+                        "{hash:08x}"
+                    );
+                    v.matched = true;
+                    if bytes.starts_with(b"BND4") {
+                        let binder = Binder::read(&bytes, &decoder)?;
+                        for (i, file) in binder.files.iter().enumerate() {
+                            let want = members.get(&(shard, hash, i)).ok_or("missing oracle member")?;
+                            assert_eq!(
+                                (
+                                    file.id.unwrap_or(-1),
+                                    file.name.clone().unwrap_or_default(),
+                                    file.bytes.len(),
+                                    Sha256::digest(&file.bytes)
+                                        .iter()
+                                        .map(|b| format!("{b:02X}"))
+                                        .collect::<String>()
+                                ),
+                                *want,
+                                "{hash:08x} member {i}"
+                            );
+                            v.members += 1;
+                        }
+                    }
+                    Ok(())
+                })()
+                .map_err(|e| e.to_string());
+                visited
+                    .lock()
+                    .expect("only an insert holds the lock")
+                    .insert(hash, v);
+            },
+        )
+        .map_err(|p| p.to_string())?;
+    let visited = visited.into_inner().map_err(|e| e.to_string())?;
+
+    // the entries' outcomes in hash order
     let mut agreed_rejections = 0;
     let mut counts = BTreeMap::<(u8, String), usize>::new();
     let mut failures = Vec::new();
     let mut checked = 0;
     let mut checked_members = 0;
     for (&hash, entry) in &archive.entries {
-        let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-            let raw = archive.read_stored(hash)?;
-            let kind = if raw.starts_with(b"DCX\0") {
-                String::from_utf8_lossy(raw.get(40..44).unwrap_or_default()).into_owned()
-            } else {
-                String::from_utf8_lossy(raw.get(..4).unwrap_or_default()).into_owned()
-            };
-            *counts.entry((entry.shard, kind)).or_default() += 1;
-            let bytes = decoder.decode_if_dcx(&raw)?;
-            let want = expected.get(&(entry.shard, hash)).ok_or("missing oracle entry")?;
-            assert_eq!(
-                (
-                    bytes.len(),
-                    Sha256::digest(&bytes)
-                        .iter()
-                        .map(|b| format!("{b:02X}"))
-                        .collect::<String>()
-                ),
-                *want,
-                "{hash:08x}"
-            );
-            checked += 1;
-            if bytes.starts_with(b"BND4") {
-                let binder = Binder::read(&bytes, &decoder)?;
-                for (i, file) in binder.files.iter().enumerate() {
-                    let want = members
-                        .get(&(entry.shard, hash, i))
-                        .ok_or("missing oracle member")?;
-                    assert_eq!(
-                        (
-                            file.id.unwrap_or(-1),
-                            file.name.clone().unwrap_or_default(),
-                            file.bytes.len(),
-                            Sha256::digest(&file.bytes)
-                                .iter()
-                                .map(|b| format!("{b:02X}"))
-                                .collect::<String>()
-                        ),
-                        *want,
-                        "{hash:08x} member {i}"
-                    );
-                    checked_members += 1;
-                }
-            }
-            Ok(())
-        })();
-        match result {
+        let v = visited.get(&hash).ok_or("an entry the scan did not visit")?;
+        if let Some(kind) = &v.kind {
+            *counts.entry((entry.shard, kind.clone())).or_default() += 1;
+        }
+        checked += usize::from(v.matched);
+        checked_members += v.members;
+        match &v.result {
             Err(e) => {
                 // both decoders reject it: agreement on the entry; the reasons are an independent decoder's own
                 // words, reported side by side, not compared

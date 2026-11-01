@@ -37,6 +37,10 @@ binary(grass_census) | binary(sekiro_scene) | binary(elden_area) | binary(elden_
 threads-required = 9
 
 [[profile.default.overrides]]
+filter = "binary(census) & test(whole_install)"
+threads-required = 8
+
+[[profile.default.overrides]]
 filter = "binary(baked_area) | binary(material_class_census) | binary(shadow_census) | binary(layer_bake_digest)"
 threads-required = 6
 
