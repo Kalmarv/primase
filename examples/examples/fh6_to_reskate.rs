@@ -17,7 +17,9 @@ use primase_forzatech::read::open::Track;
 use primase_forzatech::read::placements::Scope;
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_image::{Beyond, CapMode, CapTextures, MissingLevels, NormalDownscale, NormalizeNormals, OrmSize, PackOrm};
-use primase_meshops::{BakeNonrigid, Mirrors, OmitUnshadedPrimitives, SpecializeMaterialVariants, UnusedVariants};
+use primase_meshops::{
+    BakeNonrigid, FirstTexcoordSet, Mirrors, OmitUnshadedPrimitives, SpecializeMaterialVariants, UnusedVariants,
+};
 use primase_reskate::compile::{CompileChoices, Streaming, Studio, TimeOfDay, compile_map};
 use primase_reskate::components::{CollisionSurfaces, CollisionWeld};
 use primase_reskate::layered::{LowerLayeredReskate, OverlayLimit};
@@ -85,6 +87,9 @@ fn main() -> Result<()> {
             // the writer takes rigid placements: a mirrored or sheared one draws a baked copy of its prototype
             Box::new(BakeNonrigid { mirrors: Mirrors::Bake }),
             Box::new(PrepareReskateLaidLayers::default()),
+            // skate samples the first coordinate set: a material whose slots all sample another (a one-layer road at its
+            // planar coordinates) has it swapped first in its primitives
+            Box::new(FirstTexcoordSet),
             // each map of an environment material tiles on its own; skate samples one way, the base colour's
             Box::new(PrepareReskateUvTransforms::new(TextureSlot::BaseColor, SamplingConflicts::Adopt)),
             // skate's mask holds both: a material's separate occlusion and metallic-roughness maps packed as one, at the
