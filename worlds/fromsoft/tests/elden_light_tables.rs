@@ -3,23 +3,30 @@
 //! intensity over the world's unit is its stored `(byte / 255)^2 * power`, its specular the same of its specular bytes
 //! and power) and packed by `LightTable::pack` with each read-back dispatch's own view, against the records that dispatch
 //! read (`oracles.scripts.elden/frames`, session `erlight2`: four `GXLightOrganize8` dispatches read back from the running
-//! game before they ran, each with its `cbLightAccParam`, which holds the counts at +272 and +280 and the world-to-view
-//! matrix's rows at +64, and its t19 and t20 buffers). The tables are the ones the area's render graph binds at that step.
+//! game before they ran at the Stormveil Castle gate, each with its `cbLightAccParam`, which holds the counts at +272 and
+//! +280 and the world-to-view matrix's rows at +64, and its t19 and t20 buffers). The tables are the ones the area's render
+//! graph binds at that step.
 //!
 //! The game draws in a frame whose origin it moves (the dispatches' camera positions are all in it, so the frame states
 //! no offset): the translation from it to the map's frame is the one, among those each pair of a recorded record and a
 //! lowered light proposes, that puts the most records on a light, and it is whole metres. That translation is the render
 //! origin of the session the capture was taken in, not a constant of the game: sessions of the stock game show
-//! (-88, 16, 16), and the shifted origin of this capture's session, (-216, 40, 16), appears in sessions with a character
-//! or map mod loaded. The capture is frozen, so its translation is a fixed fact of it, and the test expects it exactly.
+//! (-88, 16, 16), as this capture's does, and a shifted origin, (-216, 40, 16), appears in sessions with a character or
+//! map mod loaded. The capture is frozen, so its translation is a fixed fact of it, and the test expects it exactly.
 //! A recorded record stands on a packed light where their view-space positions are within 0.01 m; the records of effect
 //! lights stand on none (effect lights are not read here). The expected counts are an independent script's over the same
-//! dispatches and the bank's own bytes (kept with the private oracle tools): the translation (-216, 40, 16), that
-//! session's render origin; 16 point records and no spot record a
-//! dispatch; 20 point records (five lights in four dispatches) stand on a bank light and 44 on none; on the 20, the
-//! position, `1 / range^2`, the range, `LightType` 0, the colour and the specular colour are the packed ones, and no
-//! packed light falls back to its colour for its specular. The shadowed variants' fields of an unshadowed record hold
-//! what the buffer held before, so they are not compared.
+//! dispatches and the bank's own bytes (kept with the private oracle tools): the translation (-88, 16, 16); 22 point
+//! records and no spot record a dispatch; 8 point records (bank lights 32 and 116 in four dispatches) stand on a bank
+//! light and 80 on none; on the 8, the position, `1 / range^2`, the range, the colour and the specular colour are the
+//! packed ones, and no packed light falls back to its colour for its specular.
+//!
+//! `LightType`: the game draws bank light 32, the one shadow-casting light among the records (its `cast_shadows` byte
+//! set), with a local shadow, and its four records hold 1.0 there and its shadow's place after it; light 116's hold 0.
+//! The consumer here draws no local shadow, so every light packs unshadowed: light 32's record holds 0 and zeros, and
+//! the packing names it, with the bank's eight other shadow-casting point lights, as a shadow-casting light packed
+//! unshadowed. Packed with its shadow (the place its own records state), its record is the recorded one word for word
+//! from `LightType` on, and the light lists leave its entry out of the tile pass (bit 31 clear) and out of the lookup's
+//! count copy. The shadow fields of an unshadowed record hold what the buffer held before, so they are not compared.
 //!
 //! Needs `installs.elden`, `keys.elden`, `tools.oodle6` and `oracles.scripts.elden/frames`.
 #![allow(clippy::unwrap_used)]
@@ -29,15 +36,15 @@ use fromsoft_formats::{Binder, Game, Keys, dcx::Decoder};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::render_graph::RenderGraph;
 use primase_core::shader::{
-    BufferSource, ConstantRole, FrameParameter, LightListPart, LightTableKind, ShaderBinding,
-    pack_light_lists,
+    BufferSource, ConstantRole, FrameParameter, LightListPart, LightTableKind, LocalShadow, LocalShadows,
+    ShaderBinding, pack_light_lists,
 };
 use primase_core::{Light, Transform, World};
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro;
 use std::collections::BTreeMap;
 mod common;
-use common::lights::{Tally, compare, floats, fnv1a64, near, organize_tables};
+use common::lights::{Tally, compare, floats, fnv1a64, near, organize_tables, shadowed};
 
 /// One read-back dispatch: the world-to-view matrix's three rows, the counted point and spot records as floats.
 struct Recorded {
@@ -209,6 +216,7 @@ fn eldens_light_tables_pack_the_read_back_records() -> Result<(), Box<dyn std::e
     // Installed forward programs receive generic list/tile roles, not zero-filled unknown buffers. Exercise their
     // actual descriptors with independent counts: lookup word 2 keeps nonempty tiles alive in the native ER tile pass.
     let mut listed = 0;
+    let mut first_lists = None;
     for stage in world.iter::<ShaderBinding>().flat_map(|(_, b)| &b.stages) {
         let lookup = stage.buffers.iter().find_map(|b| match &b.source {
             BufferSource::LightLists(LightListPart::Lookup(l)) => Some(l),
@@ -231,10 +239,12 @@ fn eldens_light_tables_pack_the_read_back_records() -> Result<(), Box<dyn std::e
                     .any(|c| c.role == ConstantRole::Frame(parameter))
             );
         }
+        first_lists.get_or_insert_with(|| (lookup.clone(), indices.clone()));
         let packed = pack_light_lists(
             lookup,
             indices,
             &[(LightTableKind::Point, 2), (LightTableKind::Spot, 1)],
+            &[],
             1,
         )?;
         let words = |bytes: &[u8]| {
@@ -309,13 +319,16 @@ fn eldens_light_tables_pack_the_read_back_records() -> Result<(), Box<dyn std::e
         "drawing frame to map: {translation:?}, {} records on a light",
         best.1
     );
-    assert_eq!(translation, [-216.0, 40.0, 16.0]);
+    assert_eq!(translation, [-88.0, 16.0, 16.0]);
     let mut tally = Tally::default();
     let mut on_none = [0usize; 2];
     let mut specular_from_colour = 0usize;
     let mut full_records = Vec::new();
+    // the records the game shadowed, with the packed light they stand on: (dispatch, light, recorded, ours unshadowed)
+    let mut game_shadowed = Vec::new();
+    let mut unshadowed_casters = Vec::new();
     for d in &dispatches {
-        assert_eq!((d.points.len(), d.spots.len()), (16, 0));
+        assert_eq!((d.points.len(), d.spots.len()), (22, 0));
         // the world-to-view matrix of the world frame: the map's z mirrored, the drawing frame's origin moved back
         let mut view = [[0.0, 0.0, 0.0, 1.0]; 4];
         for (row, v) in view.iter_mut().zip(d.view) {
@@ -324,8 +337,10 @@ fn eldens_light_tables_pack_the_read_back_records() -> Result<(), Box<dyn std::e
         }
         for (k, (table, records)) in [(points, &d.points), (spots, &d.spots)].into_iter().enumerate() {
             let kind = if k == 0 { "point" } else { "spot" };
-            let packed = table.pack(&world, &view)?;
+            let packed = table.pack(&world, &view, &LocalShadows::none())?;
             specular_from_colour += packed.specular_from_colour;
+            assert!(packed.shadowed.is_empty());
+            unshadowed_casters.push((k, packed.unshadowed_casters.clone()));
             let entities = packed.lights.clone();
             let stride = table.stride as usize;
             let packed: Vec<Vec<f32>> = (0..packed.lights.len())
@@ -339,6 +354,9 @@ fn eldens_light_tables_pack_the_read_back_records() -> Result<(), Box<dyn std::e
                 {
                     Some((index, p)) => {
                         compare(kind, table, p, r, &mut tally);
+                        if shadowed(table, r) {
+                            game_shadowed.push((d, entities[index], r.clone(), p.clone()));
+                        }
                         full_records.push(serde_json::json!({
                             "dispatch": d.id, "native_index": native_index, "kind": kind,
                             "light_name": world.get::<primase_core::Name>(entities[index]).map(|n| &n.0),
@@ -359,14 +377,14 @@ fn eldens_light_tables_pack_the_read_back_records() -> Result<(), Box<dyn std::e
         "records on no packed light: {} point, {} spot",
         on_none[0], on_none[1]
     );
-    assert_eq!(on_none, [44, 0]);
+    assert_eq!(on_none, [80, 0]);
     {
         let path = inputs::scratch().join("point-record-census.json");
-        assert_eq!(full_records.len(), 20);
+        assert_eq!(full_records.len(), 8);
         std::fs::write(
             path,
             serde_json::to_vec_pretty(&serde_json::json!({
-                "scope": "four retained dispatches; all 20 bank-matched point records, every word including unmodeled fields",
+                "scope": "four retained dispatches; all 8 bank-matched point records, every word including unmodeled fields",
                 "map_translation": translation, "records": full_records,
             }))?,
         )?;
@@ -380,12 +398,142 @@ fn eldens_light_tables_pack_the_read_back_records() -> Result<(), Box<dyn std::e
         "point range at 60",
         "point translucency at 48",
         "point translucency at 52",
-        "point constant at 64",
         "point colour exact at 16",
         "point colour exact at 32",
         "point inverse falloff distance at 28",
     ] {
-        assert_eq!(tally.get(key), [20, 0], "{key}");
+        assert_eq!(tally.get(key), [8, 0], "{key}");
+    }
+
+    // LightType: the game shadows bank light 32, the one shadow-casting light the records stand on, in every dispatch;
+    // light 116 (casting none) is unshadowed; ours packs both unshadowed
+    assert_eq!(tally.get("point shadowed at 64"), [4, 4]);
+    let bank: Vec<(primase_core::Entity, &sekiro::source::LightSource)> =
+        world.iter::<sekiro::source::LightSource>().collect();
+    let light_32 = bank[32].0;
+    // the bank's light 32 by its own stored position (the world frame mirrors the map's z)
+    let at_32 = world
+        .get::<Transform>(light_32)
+        .ok_or("light 32 has no transform")?
+        .cols[3];
+    assert!(
+        at_32
+            .iter()
+            .zip([-122.254, 24.0794, -15.4499])
+            .all(|(a, b)| near(*a, b, 1e-3)),
+        "{at_32:?}"
+    );
+    assert!(bank[32].1.cast_shadows);
+    assert!(!bank[116].1.cast_shadows);
+    assert_eq!(game_shadowed.len(), 4);
+    for (_, light, recorded, ours) in &game_shadowed {
+        assert_eq!(*light, light_32);
+        assert_eq!(
+            recorded[16], 1.0,
+            "the game's record of light 32 says it is shadowed"
+        );
+        assert!(
+            recorded[20..52].iter().any(|x| *x != 0.0),
+            "and places its shadow"
+        );
+        assert_eq!(ours[16].to_bits(), 0.0f32.to_bits(), "ours packs it unshadowed");
+        assert!(ours[20..52].iter().all(|x| x.to_bits() == 0));
+    }
+    // the packing names every shadow-casting light it packs unshadowed: the bank's nine shadow-casting point lights,
+    // light 32 among them, in every dispatch, and no spot
+    let casters: Vec<primase_core::Entity> = bank
+        .iter()
+        .filter(|(_, s)| s.cast_shadows && s.kind == sekiro::source::LightKind::Point)
+        .map(|(e, _)| *e)
+        .collect();
+    assert_eq!(casters.len(), 9);
+    assert!(casters.contains(&light_32));
+    assert_eq!(unshadowed_casters.len(), 8);
+    for (k, named) in &unshadowed_casters {
+        let mut named = named.clone();
+        named.sort();
+        assert_eq!(named, if *k == 0 { casters.clone() } else { Vec::new() });
+    }
+    println!(
+        "light 32 ({}): shadowed by the game in 4 of 4 dispatches, packed unshadowed and named",
+        world
+            .get::<primase_core::Source>(light_32)
+            .map(|s| s.0.as_str())
+            .unwrap_or("?")
+    );
+
+    // light 32 packed with the shadow its own records place: its record is the game's, LightType and the shadow's place
+    // word for word, every other field as above; the lists leave its entry out of the tile pass and the count copy
+    let (lookup, indices) = first_lists.ok_or("no light lists")?;
+    for (d, _, recorded, _) in &game_shadowed {
+        let shadow = LocalShadow {
+            projection: recorded[20..24].to_vec(),
+            centre: [recorded[24], recorded[25], recorded[26], recorded[27]],
+            faces: recorded[28..52].as_chunks::<4>().0.to_vec(),
+        };
+        let mut view = [[0.0, 0.0, 0.0, 1.0]; 4];
+        for (row, v) in view.iter_mut().zip(d.view) {
+            let moved = (0..3).map(|k| f64::from(v[k]) * translation[k]).sum::<f64>();
+            *row = [v[0], v[1], -v[2], (f64::from(v[3]) - moved) as f32];
+        }
+        let shadows = LocalShadows([(light_32, shadow)].into());
+        let packed = points.pack(&world, &view, &shadows)?;
+        let at = packed
+            .lights
+            .iter()
+            .position(|e| *e == light_32)
+            .ok_or("light 32 not packed")?;
+        assert_eq!(packed.shadowed, vec![at as u32]);
+        assert!(!packed.unshadowed_casters.contains(&light_32));
+        assert_eq!(packed.unshadowed_casters.len(), 8);
+        let ours = floats(&packed.bytes[208 * at..208 * (at + 1)]);
+        let words = |f: &[f32]| f.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(words(&ours[16..17]), words(&recorded[16..17]), "LightType");
+        assert_eq!(
+            words(&ours[20..52]),
+            words(&recorded[20..52]),
+            "the shadow's place"
+        );
+        let mut one = Tally::default();
+        compare("point", points, &ours, recorded, &mut one);
+        for (key, [_, differ]) in &one.0 {
+            if !key.contains("colour scaled") {
+                assert_eq!(*differ, 0, "{key}");
+            }
+        }
+        for key in [
+            "point shadowed at 64",
+            "point shadow place at 80",
+            "point shadow place at 96",
+            "point shadow place at 112",
+        ] {
+            assert_eq!(one.get(key), [1, 0], "{key}");
+        }
+        let n = packed.lights.len() as u32;
+        let lists = pack_light_lists(
+            &lookup,
+            &indices,
+            &[(LightTableKind::Point, n), (LightTableKind::Spot, 0)],
+            &packed
+                .shadowed
+                .iter()
+                .map(|i| (LightTableKind::Point, *i))
+                .collect::<Vec<_>>(),
+            1,
+        )?;
+        let list_words = |bytes: &[u8]| {
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|w| u32::from_le_bytes(*w))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(list_words(&lists.lookup), [0, n, n - 1]);
+        let want: Vec<u32> = (0..n)
+            .map(|i| i | 0x7fff_0000 | if i == at as u32 { 0 } else { 0x8000_0000 })
+            .collect();
+        assert_eq!(list_words(&lists.indices), want);
     }
     Ok(())
 }

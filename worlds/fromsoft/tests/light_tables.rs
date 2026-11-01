@@ -33,7 +33,7 @@ use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::render_graph::RenderGraph;
 use primase_core::shader::{
     BufferSource, ConstantRole, FrameParameter, LightIndices, LightListPart, LightLookup, LightTableKind,
-    ListBits, ShaderBinding, ViewParameter, pack_light_lists,
+    ListBits, LocalShadows, ShaderBinding, ViewParameter, pack_light_lists,
 };
 use primase_fromsoft::sekiro;
 use std::collections::BTreeMap;
@@ -177,7 +177,7 @@ fn check_lists(
                     "{frame}: a {kind:?} entry names record {index} of {}",
                     records[k]
                 );
-                flagged += u64::from(indices.constants.iter().all(|c| value(entry, c.bits) == c.value));
+                flagged += u64::from(indices.tile_pass.is_some_and(|bits| value(entry, bits) == 1));
                 all_slices += u64::from(value(entry, indices.slices) == indices.slices.max());
                 at += 1;
                 in_tile += 1;
@@ -370,7 +370,7 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
             .enumerate()
         {
             let kind = if k == 0 { "point" } else { "spot" };
-            let packed = table.pack(&world, &view)?;
+            let packed = table.pack(&world, &view, &LocalShadows::none())?;
             packed_counts[k] = packed.lights.len() as u32;
             specular_from_colour += packed.specular_from_colour;
             let stride = table.stride as usize;
@@ -394,6 +394,7 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
                     (LightTableKind::Point, packed_counts[0]),
                     (LightTableKind::Spot, packed_counts[1]),
                 ],
+                &[],
                 tiles,
             )?;
             assert_eq!(ours.lookup.len(), lists.lookup.len(), "{frame}");
@@ -417,7 +418,7 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
         "point view at 0",
         "point range at 12",
         "point range at 60",
-        "point constant at 64",
+        "point shadowed at 64",
     ] {
         assert_eq!(tally.get(key), [55, 0], "{key}");
     }
@@ -425,9 +426,9 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
     assert_eq!(tally.get("point colour scaled at 16"), [6, 49]);
     assert_eq!(tally.get("point colour exact at 32"), [55, 0]);
     for key in [
-        "point ProjParam zero",
-        "point ShadowCenterPos zero",
-        "point ViewportScaleOffset zero",
+        "point shadow place zero at 80",
+        "point shadow place zero at 96",
+        "point shadow place zero at 112",
     ] {
         assert_eq!(tally.get(key), [55, 0], "{key}");
     }
@@ -440,12 +441,12 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
         "spot cone vector 0 at 64",
         "spot cone vector 1 at 64",
         "spot cone vector 3 at 64",
-        "spot constant at 128",
+        "spot shadowed at 128",
         "spot view at 132",
         "spot view at 136",
         "spot sphere at 144",
-        "spot ShadowParam.x zero",
-        "spot ViewportScaleOffset zero",
+        "spot shadow place zero at 160",
+        "spot shadow place zero at 176",
     ] {
         assert_eq!(tally.get(key), [1, 0], "{key}");
     }

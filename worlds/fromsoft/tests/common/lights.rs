@@ -127,11 +127,31 @@ pub fn compare(kind: &str, table: &LightTable, packed: &[f32], recorded: &[f32],
             LightValue::ViewBoundingSphere => {
                 tally.add(name("sphere"), p.iter().zip(r).all(|(a, b)| near(*a, *b, 1e-3)));
             }
-            // the shadowed variants' fields: the frames hold no shadowed light, every one is 0
-            LightValue::Unknown { name: field, why, .. } if why.contains("Sdw") => {
-                tally.add(format!("{kind} {field} zero"), r.iter().all(|x| *x == 0.0));
+            LightValue::Shadowed => tally.add(name("shadowed"), p[0].to_bits() == r[0].to_bits()),
+            // a shadow's place: the packed one exactly where the recorded light is shadowed; an unshadowed record holds
+            // there what the buffer held before, tallied as zero or not
+            LightValue::ShadowProjection { .. }
+            | LightValue::ShadowCentre
+            | LightValue::ShadowFaces { .. } => {
+                if shadowed(table, recorded) {
+                    tally.add(
+                        name("shadow place"),
+                        p.iter().zip(r).all(|(a, b)| a.to_bits() == b.to_bits()),
+                    );
+                } else {
+                    tally.add(name("shadow place zero"), r.iter().all(|x| *x == 0.0));
+                }
             }
             _ => {}
         }
     }
+}
+
+/// Whether a record of `table` says its light is shadowed ([`LightValue::Shadowed`] above 0, as the programs test it).
+pub fn shadowed(table: &LightTable, record: &[f32]) -> bool {
+    table
+        .fields
+        .iter()
+        .find(|f| f.value == LightValue::Shadowed)
+        .is_some_and(|f| record[f.offset as usize / 4] > 0.0)
 }

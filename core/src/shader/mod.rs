@@ -25,7 +25,7 @@ pub use input_fallback::{
 };
 pub use lights::{
     LightField, LightIndices, LightListPart, LightLookup, LightTable, LightTableKind, LightValue, ListBits,
-    ListConstant, ListUnknown, PackedLightLists, PackedLights, pack_light_lists,
+    ListConstant, ListUnknown, LocalShadow, LocalShadows, PackedLightLists, PackedLights, pack_light_lists,
 };
 pub use program::{LiftedShader, Shader};
 pub use roles::{

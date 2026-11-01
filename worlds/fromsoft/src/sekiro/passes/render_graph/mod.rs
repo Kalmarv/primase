@@ -269,6 +269,7 @@ fn describe(
     }
     let mut notices = vec!["light lists conservatively include every light in every tile and depth slice; native culling is not reproduced".into(),
         "native environment, ambient occlusion and shadow producer stages remain unexecuted".into(),
+        "local lights that cast shadows are lit by the tile pass without them: no local-light shadow atlas or shadowed per-light pass is selected, so every light packs unshadowed (LightType 0) and the packing names each shadow-casting one".into(),
         "full-screen vertex inputs are reconstructed from the native lighting vertex program's clip-position and UV reads, not captured vertex-buffer bytes".into()];
     if game == Game::EldenRing {
         notices.push(sun::NOTICE.into());
