@@ -1,5 +1,6 @@
-//! The Shibuya Scramble of Forza Horizon 6's Tokyo read, prepared and written as a skate. map folder, then compiled by
-//! ReSkate Studio. Usage: `fh6_to_reskate <ForzaHorizon6 install> <skate install> <ReSkate CLI>`.
+//! The Shibuya Scramble of Forza Horizon 6's Tokyo read, prepared and written as a skate. map folder (`out/shibuya`),
+//! then, given a skate. install and ReSkate Studio's CLI, compiled and finished into `out/staging`. Usage:
+//! `fh6_to_reskate <ForzaHorizon6 install> [<skate install> <ReSkate CLI>]`.
 use std::path::{Path, PathBuf};
 
 use forzatech_formats::world::{Area, Season};
@@ -19,6 +20,7 @@ use primase_image::{Beyond, CapMode, CapTextures, MissingLevels, NormalDownscale
 use primase_meshops::{BakeNonrigid, Mirrors, OmitUnshadedPrimitives, SpecializeMaterialVariants, UnusedVariants};
 use primase_reskate::compile::{CompileChoices, Streaming, Studio, TimeOfDay, compile_map};
 use primase_reskate::components::{CollisionSurfaces, CollisionWeld};
+use primase_reskate::layered::{LowerLayeredReskate, OverlayLimit};
 use primase_reskate::passes::{
     ClipReskateRegion, LightCalibration, PlaceReskateSpawn, PrepareReskateCollision, PrepareReskateFloor,
     PrepareReskateGrinds, PrepareReskateLaidLayers, PrepareReskateTextures, PrepareReskateUvTransforms, RaiseOptions,
@@ -28,8 +30,12 @@ use primase_reskate::{EncodingOptions, MapSink};
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1).map(PathBuf::from);
-    let (Some(fh6), Some(skate), Some(cli)) = (args.next(), args.next(), args.next()) else {
-        return Err("usage: fh6_to_reskate <ForzaHorizon6 install> <skate install> <ReSkate CLI>".into());
+    let usage = "usage: fh6_to_reskate <ForzaHorizon6 install> [<skate install> <ReSkate CLI>]";
+    let fh6 = args.next().ok_or(usage)?;
+    let compile = match (args.next(), args.next()) {
+        (Some(skate), Some(cli)) => Some((skate, cli)),
+        (None, None) => None,
+        _ => return Err(usage.into()),
     };
     // the Shibuya Scramble, [west, south, east, north] in world metres (the game's x and z: north is its +z), and the
     // placements whose origins lie within 30 m of it
@@ -86,6 +92,9 @@ fn main() -> Result<()> {
                 LightCalibration::Standard,
                 Unclassified::Surface("concrete".into()),
             )?)),
+            // a road of two or three layers (core.layered) is drawn as its base layer with each other layer a decal
+            // overlay over it, as the writer takes blends
+            Box::new(LowerLayeredReskate::new(OverlayLimit::All)),
             Box::new(ClipReskateRegion::new(region, margin)?),
             Box::new(PrepareReskateFloor::new(100.0, 250.0)?),
             Box::new(PrepareReskateGrinds::studio()),
@@ -106,6 +115,10 @@ fn main() -> Result<()> {
         println!("{notice}");
     }
 
+    // without Studio, the map folder is the result
+    let Some((skate, cli)) = compile else {
+        return Ok(());
+    };
     let studio = Studio { cli, game: skate.clone() };
     let skate_oodle = load_oodle(&skate.join("oo2core_9_win64.dll"), Version::V9)?;
     let choices = CompileChoices {
