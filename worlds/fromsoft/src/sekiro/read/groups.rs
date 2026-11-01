@@ -53,6 +53,11 @@ pub enum DisplayGroups {
     Axes,
 }
 
+impl primase_core::pass::Choice for DisplayGroups {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("none", DisplayGroups::None), ("axes", DisplayGroups::Axes)];
+}
+
 /// The display groups one collision sets.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CollisionGroups {

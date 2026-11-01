@@ -71,6 +71,15 @@ pub enum TextureQuality {
     Max,
 }
 
+impl primase_core::pass::Choice for TextureQuality {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("low", TextureQuality::Low),
+        ("medium", TextureQuality::Medium),
+        ("high", TextureQuality::High),
+        ("max", TextureQuality::Max),
+    ];
+}
+
 impl TextureQuality {
     /// `Ok` at the quality the rule is checked at; otherwise the read's refusal, naming the quality.
     pub fn check(self) -> Result<()> {

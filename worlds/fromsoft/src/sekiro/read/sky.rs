@@ -79,6 +79,10 @@ pub enum Sky {
     Include,
 }
 
+impl primase_core::pass::Choice for Sky {
+    const VALUES: &'static [(&'static str, Self)] = &[("none", Sky::None), ("include", Sky::Include)];
+}
+
 /// What a sky part is, by its model: a dome `m900000..=m900099`, a ring `m900100..=m900299`, the moon object; `None`
 /// for any other model of the sky map.
 pub fn role(model: &str, object: bool) -> Option<SkyRole> {

@@ -8,6 +8,10 @@
 //!
 //! What stays the pass's: parsing and checking a value (numbers, `;` lists, values the data names), and how options
 //! constrain each other beyond one-of groups (all four of a rectangle or none; one value that needs another).
+//!
+//! A program's choices that are not a pass (how a reader reads) take the same form ([`TextForm`]): a name and declared
+//! options, checked by the same declaration and read through the same [`Given`], so a program can state them as text
+//! another program runs as written.
 
 use std::collections::BTreeSet;
 
@@ -313,10 +317,6 @@ impl std::fmt::Debug for PassSpec {
 }
 
 impl PassSpec {
-    fn declared(&self, key: &str) -> Option<&OptionSpec> {
-        self.options.iter().find(|o| o.key == key)
-    }
-
     /// The groups of one-of options, in the order they are first declared, each with its members.
     fn groups(&self) -> Vec<(&'static str, Vec<&OptionSpec>)> {
         groups(self.options)
@@ -351,7 +351,7 @@ impl PassSpec {
     /// The pass made from `options`, once [`PassSpec::check`] lets them through.
     pub fn instance(&self, options: &Options) -> Result<Box<dyn Pass>, String> {
         self.check(options)?;
-        (self.make)(&Given { spec: self, options })
+        (self.make)(&Given::new(self.name, self.options, options))
     }
 
     /// Its text form and what each option means: `translate-world{by*}` (`*` a required option, `|` between the
@@ -411,22 +411,36 @@ impl PassSpec {
     }
 }
 
-/// The options a pass is made from, after its declaration let them through ([`PassSpec::check`]). Reading a key the
-/// declaration does not have, or reading it as what it is not declared as, is a bug in the pass: a panic.
+/// The options a pass (or a [`TextForm`]) is made from, after its declaration let them through ([`PassSpec::check`]).
+/// Reading a key the declaration does not have, or reading it as what it is not declared as, is a bug in the pass: a
+/// panic.
 #[derive(Debug)]
 pub struct Given<'a> {
-    spec: &'a PassSpec,
+    /// The name of what is made, for the panics.
+    name: &'a str,
+    declarations: &'a [OptionSpec],
     options: &'a Options,
 }
 
 impl<'a> Given<'a> {
+    pub(crate) fn new(name: &'a str, declarations: &'a [OptionSpec], options: &'a Options) -> Self {
+        Given {
+            name,
+            declarations,
+            options,
+        }
+    }
+
     fn declared(&self, key: &str) -> &'a OptionSpec {
-        self.spec.declared(key).unwrap_or_else(|| {
-            panic!(
-                "pass {} reads option {key}, which its declaration does not have",
-                self.spec.name
-            )
-        })
+        self.declarations
+            .iter()
+            .find(|o| o.key == key)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{} reads option {key}, which its declaration does not have",
+                    self.name
+                )
+            })
     }
 
     /// A required option's value: always there.
@@ -434,8 +448,8 @@ impl<'a> Given<'a> {
         let o = self.declared(key);
         assert!(
             o.need == Need::Required,
-            "pass {} reads option {key} as required, which it declares optional or one of a group",
-            self.spec.name
+            "{} reads option {key} as required, which it declares optional or one of a group",
+            self.name
         );
         self.options
             .get(key)
@@ -456,8 +470,8 @@ impl<'a> Given<'a> {
             .map(|(_, v)| *v)
             .unwrap_or_else(|| {
                 panic!(
-                    "pass {} reads option {key} as a choice its declaration does not give it",
-                    self.spec.name
+                    "{} reads option {key} as a choice its declaration does not give it",
+                    self.name
                 )
             })
     }
@@ -472,6 +486,24 @@ impl<'a> Given<'a> {
     pub fn optional_choice<T: Choice>(&self, key: &str) -> Option<T> {
         self.optional(key).map(|text| self.of(key, text))
     }
+}
+
+/// A program's choices that are not a pass, stated as a pass is (`read-fromsoft-area{area=m10_00_00_00,margin=30}`): a
+/// name, the options it takes declared once, made from what the declaration let through, and printing back what it was
+/// made with. [`crate::pass::parse_text_form`] reads it and [`crate::pass::text_form`] writes it, with the declaration's
+/// refusals (an undeclared key, a missing required option, a value outside a choice's) in a pass's words;
+/// [`crate::pass::validate_text_form`] checks the declaration as [`crate::pass::PassRegistry::add`] checks a pass's.
+pub trait TextForm: Sized {
+    /// The name its text starts with.
+    const NAME: &'static str;
+    /// The options it takes.
+    const OPTIONS: &'static [OptionSpec];
+
+    /// It, from what the declaration let through; the refusal names the option whose value it cannot take.
+    fn make(given: &Given) -> Result<Self, String>;
+
+    /// Its options, as text: what it was made with.
+    fn options(&self) -> Options;
 }
 
 #[cfg(test)]
@@ -682,7 +714,7 @@ mod tests {
 
     /// Reading an option the declaration does not have is a bug in the pass.
     #[test]
-    #[should_panic(expected = "pass bad reads option other, which its declaration does not have")]
+    #[should_panic(expected = "bad reads option other, which its declaration does not have")]
     fn reading_an_undeclared_option_panics() {
         const BAD: PassSpec = PassSpec {
             name: "bad",
@@ -718,5 +750,95 @@ mod tests {
             make: |_| Ok(Box::new(Toy(Options::new()))),
         };
         LONELY.validate();
+    }
+
+    /// A reader's choices in a pass's form: a cell size and a detail, and a name it may leave out.
+    #[derive(Debug, PartialEq)]
+    struct Read {
+        name: Option<String>,
+        cell: f32,
+        detail: Detail,
+    }
+
+    impl TextForm for Read {
+        const NAME: &'static str = "read-toy";
+        const OPTIONS: &'static [OptionSpec] = &[
+            OptionSpec::optional("name", "a", "what is read", "the caller names it"),
+            OptionSpec::required("cell", "4", "metres, above 0: the grid's cell"),
+            OptionSpec::choice::<Detail>("detail", "which collision is read"),
+        ];
+        fn make(given: &Given) -> Result<Self, String> {
+            let cell = given.required("cell");
+            Ok(Read {
+                name: given.optional("name").map(str::to_owned),
+                cell: cell
+                    .parse()
+                    .ok()
+                    .filter(|c: &f32| *c > 0.)
+                    .ok_or_else(|| format!("cell={cell} is not a number of metres above 0"))?,
+                detail: given.choice("detail"),
+            })
+        }
+        fn options(&self) -> Options {
+            let mut options = options(&[("cell", &self.cell.to_string()), ("detail", self.detail.text())]);
+            if let Some(name) = &self.name {
+                options.insert("name".into(), name.clone());
+            }
+            options
+        }
+    }
+
+    /// A text form reads back what it prints, field by field, and refuses as a pass's declaration does, naming the
+    /// option; a text that is not one item of its name is refused.
+    #[test]
+    fn a_text_form_reads_back_what_it_prints() {
+        use crate::pass::{parse_text_form, text_form, validate_text_form};
+        validate_text_form::<Read>();
+        for read in [
+            Read {
+                name: Some("m10".into()),
+                cell: 2.5,
+                detail: Detail::High,
+            },
+            Read {
+                name: None,
+                cell: 4.,
+                detail: Detail::Plain,
+            },
+        ] {
+            let text = text_form(&read);
+            assert_eq!(parse_text_form::<Read>(&text).unwrap(), read, "{text}");
+        }
+        assert_eq!(
+            text_form(&Read {
+                name: Some("m10".into()),
+                cell: 2.5,
+                detail: Detail::High
+            }),
+            "read-toy{cell=2.5,detail=high,name=m10}"
+        );
+        let refusal = |text: &str| parse_text_form::<Read>(text).unwrap_err().to_string();
+        assert_eq!(
+            refusal("read-toy{detail=plain}"),
+            "read-toy: cell is required: metres, above 0: the grid's cell"
+        );
+        assert_eq!(
+            refusal("read-toy{cell=4,detail=fine}"),
+            "read-toy: detail=fine is none of plain or high"
+        );
+        assert_eq!(
+            refusal("read-toy{cell=4,detail=plain,colour=red}"),
+            "read-toy: unknown option colour (read-toy takes name, cell, detail)"
+        );
+        assert_eq!(
+            refusal("read-toy{cell=-1,detail=plain}"),
+            "read-toy: cell=-1 is not a number of metres above 0"
+        );
+        assert_eq!(refusal("toy{cell=4,detail=plain}"), "toy is not read-toy");
+        assert!(
+            refusal("read-toy{cell=4,detail=plain}, read-toy{cell=4,detail=plain}")
+                .contains("is not one read-toy")
+        );
+        assert!(refusal("").contains("is not one read-toy"));
     }
 }

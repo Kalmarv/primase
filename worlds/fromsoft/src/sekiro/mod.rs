@@ -28,7 +28,7 @@ pub use read::area::{
     GrassTypes, ObjectAnimations, Options, Parents, Report, StateClasses, read_area_draw_param,
     read_game_area, read_game_area_staged, world_bounds,
 };
-pub use read::area_plan::{AreaRead, read_area_candidates};
+pub use read::area_plan::{AreaRead, AreaReadText, read_area_candidates};
 pub use read::attack_clip;
 pub use read::character::{
     CharacterOptions, CharacterReader, CharacterReport, animation_notices, character_display_masks,

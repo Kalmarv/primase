@@ -137,6 +137,11 @@ pub enum Parents {
     /// Also the `<map>-<part>` parts of every larger map above it.
     Include,
 }
+
+impl primase_core::pass::Choice for Parents {
+    const VALUES: &'static [(&'static str, Self)] = &[("none", Parents::None), ("include", Parents::Include)];
+}
+
 /// The state axis classes a read produces.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum StateClasses {
@@ -144,6 +149,11 @@ pub enum StateClasses {
     None,
     /// Event flags (`fromsoft.flag.<id>`) from the block's part-state common functions.
     Event,
+}
+
+impl primase_core::pass::Choice for StateClasses {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("none", StateClasses::None), ("event", StateClasses::Event)];
 }
 /// What a read found and kept. Counts are source records (placements, prototypes, materials, texture files).
 #[derive(Default, Debug)]

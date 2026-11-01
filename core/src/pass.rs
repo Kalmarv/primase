@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 pub mod memo;
 
 pub use crate::ledger::{Conservation, Gap, Measure};
-pub use crate::pass_options::{Choice, Given, OptionSpec, PassSpec};
+pub use crate::pass_options::{Choice, Given, OptionSpec, PassSpec, TextForm};
 use crate::world::{Component, Entity, Resource, World};
 
 /// A pass's text options (`name{key=value,...}`), sorted by key.
@@ -542,12 +542,70 @@ pub fn carries(value: &str) -> bool {
 /// A pass with its options as pipeline text (`bake{size=512}`), as [`PassRegistry::parse`] reads it; what
 /// `core.provenance` records for the passes that derive an entity.
 pub fn pass_text(p: &dyn Pass) -> String {
-    let opts = p.options();
-    if opts.is_empty() {
-        return p.name().to_owned();
+    stated(p.name(), &p.options())
+}
+
+/// `value` as text (`read-fromsoft-area{area=m10_00_00_00,margin=30}`), in a pass's form; [`parse_text_form`] reads it
+/// back.
+pub fn text_form<T: TextForm>(value: &T) -> String {
+    stated(T::NAME, &value.options())
+}
+
+/// `name` with `options` as pipeline text: the name alone where there are none.
+fn stated(name: &str, options: &Options) -> String {
+    if options.is_empty() {
+        return name.to_owned();
     }
-    let items: Vec<String> = opts.iter().map(|(k, v)| format!("{k}={v}")).collect();
-    format!("{}{{{}}}", p.name(), items.join(","))
+    let items: Vec<String> = options.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    format!("{name}{{{}}}", items.join(","))
+}
+
+/// The `T` that `text` states: one item, named [`TextForm::NAME`], whose options the declaration lets through
+/// ([`TextForm::OPTIONS`]; refused as a pass's would be) and `T` takes.
+pub fn parse_text_form<T: TextForm>(text: &str) -> Result<T, Error> {
+    let mut items = parse_pipeline(text)?;
+    let (name, options) = match (items.pop(), items.is_empty()) {
+        (Some(item), true) => item,
+        _ => return Err(Error::Parse(format!("{text:?} is not one {}", T::NAME))),
+    };
+    if name != T::NAME {
+        return Err(Error::Parse(format!("{name} is not {}", T::NAME)));
+    }
+    let refused = |message| Error::Stated {
+        name: T::NAME,
+        message,
+    };
+    crate::pass_options::check_options(T::NAME, T::OPTIONS, &options).map_err(refused)?;
+    T::make(&Given::new(T::NAME, T::OPTIONS, &options)).map_err(refused)
+}
+
+/// The checks [`PassRegistry::add`] makes of a pass, made of `T`: panics where the declaration is wrong (a key twice,
+/// a group of one, a choice with no values, an optional option that says nothing of its absence), `T` is not made from
+/// the declaration's examples, or what it prints is refused by the declaration or does not make a `T` that prints the
+/// same.
+pub fn validate_text_form<T: TextForm>() {
+    let name = T::NAME;
+    assert!(is_word(name), "{name:?} is not a name a text can start with");
+    crate::pass_options::validate_options(name, T::OPTIONS);
+    let example = PassSpec {
+        name,
+        options: T::OPTIONS,
+        make: |_| unreachable!("the example is only read"),
+    }
+    .example();
+    let made = T::make(&Given::new(name, T::OPTIONS, &example))
+        .unwrap_or_else(|e| panic!("{name} with its example options {example:?}: {e}"));
+    let printed = made.options();
+    if let Err(e) = crate::pass_options::check_options(name, T::OPTIONS, &printed) {
+        panic!("{name} prints {printed:?}, which its declaration refuses: {e}");
+    }
+    let again = T::make(&Given::new(name, T::OPTIONS, &printed))
+        .unwrap_or_else(|e| panic!("{name}: what it prints, {printed:?}, does not make it: {e}"));
+    assert_eq!(
+        again.options(),
+        printed,
+        "{name}: made from what it prints, it prints otherwise"
+    );
 }
 
 /// A predicate deciding whether one entity's component is legal for a target (e.g. a texture format it writes).
@@ -851,6 +909,9 @@ pub enum Error {
     UnknownPass(String),
     #[error("pass {pass}: {message}")]
     Options { pass: String, message: String },
+    /// A [`TextForm`]'s options refused by its declaration or by it.
+    #[error("{name}: {message}")]
+    Stated { name: &'static str, message: String },
     #[error("pass {pass} requires `{name}`, which the world does not have")]
     Missing { pass: String, name: String },
     #[error("pass {pass} failed: {message}")]
