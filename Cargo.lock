@@ -1259,9 +1259,9 @@ dependencies = [
 
 [[package]]
 name = "primase-foundations"
-version = "0.3.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "971b770a0981fda2fd6014982c9b7ab5c2fd1a11d5ffdbaf4fc3bab06b58e3a4"
+checksum = "b8f1ac54cab06733f0b3398524582727077c55ed3495dca565f29df560abd409"
 dependencies = [
  "flate2",
  "half",

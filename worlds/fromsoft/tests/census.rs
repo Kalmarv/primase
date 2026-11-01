@@ -248,7 +248,13 @@ fn whole_install_of(
                         raw.get(..4)
                     };
                     v.kind = Some(String::from_utf8_lossy(magic.unwrap_or_default()).into_owned());
-                    let bytes = decoder.decode_if_dcx(raw)?;
+                    // an entry stored without an envelope is checked where the scan read it, not copied (the largest
+                    // are over a gigabyte)
+                    let bytes: std::borrow::Cow<'_, [u8]> = if raw.starts_with(b"DCX\0") {
+                        decoder.decode(raw)?.into()
+                    } else {
+                        std::borrow::Cow::Borrowed(raw)
+                    };
                     let want = expected.get(&(shard, hash)).ok_or("missing oracle entry")?;
                     assert_eq!(
                         (
