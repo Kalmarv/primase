@@ -56,11 +56,11 @@ pub fn selected_weapon_parts(
     }
     Ok(parts)
 }
-/// The caller's animation target. Its name follows reader/assembly names; no hierarchy policy is chosen here.
+/// The caller's animation target: the skeleton a clip binds onto. Its name follows reader/assembly names; no hierarchy
+/// policy is chosen here, and how closely the rests must agree is the program's (`bind-fromsoft-animation{tolerance}`).
 #[derive(Clone, Debug)]
 pub struct AnimationTarget {
     pub skeleton: String,
-    pub tolerance: &'static str,
 }
 #[derive(Clone, Debug)]
 pub enum StandaloneAsset {
@@ -196,16 +196,13 @@ pub enum CharacterRole {
     Npc,
 }
 pub fn animation_target(asset: &StandaloneAsset) -> AnimationTarget {
-    let (skeleton, tolerance) = match asset {
-        StandaloneAsset::Character { id, .. } => (format!("{id} skeleton"), "0.0001"),
-        StandaloneAsset::Parts(parts) if parts.len() > 1 => ("assembled skeleton".into(), "0.001"),
-        StandaloneAsset::Parts(parts) => (
-            format!("{} skeleton", parts.first().map_or("", String::as_str)),
-            "0.0001",
-        ),
-        StandaloneAsset::Form { form, .. } => (format!("{form} skeleton"), "0.0001"),
+    let skeleton = match asset {
+        StandaloneAsset::Character { id, .. } => format!("{id} skeleton"),
+        StandaloneAsset::Parts(parts) if parts.len() > 1 => "assembled skeleton".into(),
+        StandaloneAsset::Parts(parts) => format!("{} skeleton", parts.first().map_or("", String::as_str)),
+        StandaloneAsset::Form { form, .. } => format!("{form} skeleton"),
     };
-    AnimationTarget { skeleton, tolerance }
+    AnimationTarget { skeleton }
 }
 /// A staged load retains identities borrowed from the prepared scene, including the selected target rig.
 #[derive(Debug)]

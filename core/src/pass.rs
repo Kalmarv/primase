@@ -389,7 +389,7 @@ fn is_word(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
 }
 
-fn parse_pipeline(text: &str) -> Result<Vec<(String, Options)>, Error> {
+pub(crate) fn parse_pipeline(text: &str) -> Result<Vec<(String, Options)>, Error> {
     let bad = |m: String| Error::Parse(format!("{m} in pipeline {text:?}"));
     let mut out = Vec::new();
     let mut rest = text.trim();

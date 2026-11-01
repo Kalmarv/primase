@@ -14,13 +14,25 @@
 //!
 //! The file says which stage each text belongs to and in which order the texts run; what a stage means, and which
 //! stages a program needs, is the program's.
+//!
+//! **Parameters.** Where a value is the user's to pick (which NPC row dresses a character, which clip binds), the file
+//! writes a parameter in its place, `$name`, as an option's whole value: `select-fromsoft-dressing{npc=$npc,empty=show}`.
+//! The program running the stages binds them to the user's picks ([`Stages::bind`]) before it parses them. A value the
+//! file states is never a pick: a file that writes `npc=first-map` takes no `npc` pick, and one given is refused.
 
-use super::Error;
+use std::collections::{BTreeMap, BTreeSet};
+
+use super::{Error, parse_pipeline, stated};
 
 /// Named stages of texts, in the order they are stated; each name once.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Stages {
     stages: Vec<(String, Vec<String>)>,
+}
+
+/// Whether `name` can name a parameter: letters, digits, `-` and `_`.
+fn is_parameter(name: &str) -> bool {
+    is_stage_name(name)
 }
 
 /// Whether `name` can name a stage: letters, digits, `-` and `_`.
@@ -108,6 +120,84 @@ impl Stages {
             }
         }
         out
+    }
+
+    /// The stages with the parameters of stages `names` bound to `picks`: each option of their texts whose value is
+    /// `$p` takes `picks[p]`, the other stages kept as they are. Refused, naming them, where a stage of `names` is not
+    /// stated, a parameter of those stages has no pick, a pick is taken by none of their parameters (so a user never
+    /// takes a pick as applied that was not), or a pick could not stand as a value (a brace or a line break).
+    pub fn bind(&self, names: &[&str], picks: &BTreeMap<String, String>) -> Result<Stages, Error> {
+        if let Some(name) = names.iter().find(|name| self.stage(name).is_none()) {
+            return Err(Error::Parse(format!("no stage [{name}] to bind")));
+        }
+        if let Some((name, pick)) = picks
+            .iter()
+            .find(|(_, pick)| pick.contains(['{', '}', '\n', '\r']))
+        {
+            return Err(Error::Parse(format!(
+                "the pick {name}={pick:?} cannot stand as a value (a brace or a line break)"
+            )));
+        }
+        let mut used: BTreeSet<String> = BTreeSet::new();
+        let mut unpicked: BTreeSet<String> = BTreeSet::new();
+        let mut bound = self.clone();
+        for (stage, texts) in &mut bound.stages {
+            if !names.contains(&stage.as_str()) {
+                continue;
+            }
+            for text in texts.iter_mut() {
+                let mut items =
+                    parse_pipeline(text).map_err(|e| Error::Parse(format!("stage [{stage}]: {e}")))?;
+                let mut parameters = 0;
+                for (_, options) in &mut items {
+                    for value in options.values_mut() {
+                        let Some(parameter) = value.strip_prefix('$').map(str::to_owned) else {
+                            continue;
+                        };
+                        if !is_parameter(&parameter) {
+                            return Err(Error::Parse(format!(
+                                "stage [{stage}]: ${parameter} cannot name a parameter (letters, digits, - and _)"
+                            )));
+                        }
+                        parameters += 1;
+                        match picks.get(&parameter) {
+                            Some(pick) => *value = pick.clone(),
+                            None => {
+                                unpicked.insert(parameter.clone());
+                            }
+                        }
+                        used.insert(parameter);
+                    }
+                }
+                if parameters > 0 {
+                    *text = items
+                        .iter()
+                        .map(|(name, options)| stated(name, options))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                }
+            }
+        }
+        let stages = format!("[{}]", names.join("], ["));
+        if !unpicked.is_empty() {
+            let names: Vec<String> = unpicked.iter().map(|p| format!("${p}")).collect();
+            return Err(Error::Parse(format!(
+                "no pick for {}, which {stages} take",
+                names.join(", ")
+            )));
+        }
+        let unused: Vec<&str> = picks
+            .keys()
+            .map(String::as_str)
+            .filter(|pick| !used.contains(*pick))
+            .collect();
+        if !unused.is_empty() {
+            return Err(Error::Parse(format!(
+                "{stages} take no pick {}: it would not apply",
+                unused.join(", ")
+            )));
+        }
+        Ok(bound)
     }
 
     /// Stage `name`'s texts, in order, if it is stated (it may be stated with none).
@@ -204,6 +294,86 @@ mod tests {
         assert!(refusal("[a b]").starts_with("line 1: \"a b\" cannot name a stage"));
         assert!(Stages::new().with("read", texts(&["a\nb"])).is_err());
         assert!(Stages::new().with("read", texts(&["# a"])).is_err());
+    }
+
+    fn picks(items: &[(&str, &str)]) -> BTreeMap<String, String> {
+        items
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
+    }
+
+    /// Each parameter of the stages bound takes its pick, as an option's whole value; the other stages keep theirs.
+    #[test]
+    fn parameters_take_the_picks() {
+        let stages = Stages::parse(
+            "[selection]\nselect-fromsoft-dressing{npc=$npc,empty=show}\n\
+             [read]\nread-fromsoft-character{id=$id,role=npc,weapons=false}\n\
+             [clips]\nbind-fromsoft-animation{clips=$clip,rate=2}",
+        )
+        .unwrap();
+        let bound = stages
+            .bind(
+                &["selection", "read"],
+                &picks(&[("npc", "30000014"), ("id", "c1010")]),
+            )
+            .unwrap();
+        assert_eq!(
+            bound.stage("selection").unwrap(),
+            ["select-fromsoft-dressing{empty=show,npc=30000014}"]
+        );
+        assert_eq!(
+            bound.stage("read").unwrap(),
+            ["read-fromsoft-character{id=c1010,role=npc,weapons=false}"]
+        );
+        assert_eq!(bound.stage("clips"), stages.stage("clips"));
+        let clip = bound
+            .bind(&["clips"], &picks(&[("clip", "a000_000020")]))
+            .unwrap();
+        assert_eq!(
+            clip.stage("clips").unwrap(),
+            ["bind-fromsoft-animation{clips=a000_000020,rate=2}"]
+        );
+        // a stage with no parameter is kept as written
+        let plain = Stages::parse("[lowering]\nplace-assets").unwrap();
+        assert_eq!(plain.bind(&["lowering"], &BTreeMap::new()).unwrap(), plain);
+    }
+
+    /// A parameter with no pick, a pick no parameter takes, a stage that is not there and a pick that cannot be a value
+    /// are refused, naming them; a stated value takes no pick.
+    #[test]
+    fn binding_refuses_naming_the_parameter_or_the_pick() {
+        let stages = Stages::parse(
+            "[selection]\nselect-fromsoft-dressing{npc=$npc,empty=show}\nselect-fromsoft-area{region=$region}",
+        )
+        .unwrap();
+        let refusal = |names: &[&str], items: &[(&str, &str)]| {
+            stages.bind(names, &picks(items)).unwrap_err().to_string()
+        };
+        assert_eq!(
+            refusal(&["selection"], &[]),
+            "no pick for $npc, $region, which [selection] take"
+        );
+        assert_eq!(
+            refusal(
+                &["selection"],
+                &[("npc", "1"), ("region", "whole"), ("outfit", "x")]
+            ),
+            "[selection] take no pick outfit: it would not apply"
+        );
+        assert_eq!(refusal(&["read"], &[]), "no stage [read] to bind");
+        assert!(
+            refusal(&["selection"], &[("npc", "{1}"), ("region", "whole")])
+                .contains("cannot stand as a value")
+        );
+        let fixed = Stages::parse("[selection]\nselect-fromsoft-dressing{npc=first-map,empty=show}").unwrap();
+        assert_eq!(
+            fixed
+                .bind(&["selection"], &picks(&[("npc", "30000014")]))
+                .unwrap_err()
+                .to_string(),
+            "[selection] take no pick npc: it would not apply"
+        );
     }
 
     /// A program refuses a file without a stage it needs, or with one it does not know, naming them.
