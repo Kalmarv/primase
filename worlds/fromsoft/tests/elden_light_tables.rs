@@ -581,15 +581,15 @@ fn eldens_light_tables_pack_the_read_back_records() -> Result<(), Box<dyn std::e
     }
 
     // its first face's camera is the one the game drew the face's casters with (er3 frame 6990's cbSceneParam of the
-    // casters: FC_MatrixView's rows at +80, FC_MatrixProj at +256): the view word for word, the projection to 1e-6 (the
-    // game's far plane is 8.0000057, not the range's 8, so its depth row differs in the last bits)
+    // casters: FC_MatrixView's rows at +80, FC_MatrixProj at +256): the view value for value (exact; the game's forward
+    // row holds a -0.0 where ours holds 0.0, the same value), the projection to 1e-6 (the game's far plane is 8.0000057,
+    // not the range's 8, so its depth row differs in the last bits)
     let scene = blob(&frames.join("er3"), "9a2574ee8926b3f5")?;
     let face = &placed.faces[0];
     let game_view: Vec<f32> = scene[20..32].to_vec();
     let our_view: Vec<f32> = face.view[..3].iter().flatten().copied().collect();
     assert_eq!(
-        our_view.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
-        game_view.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+        our_view, game_view,
         "the +X face's view: ours {our_view:?}, the game's {game_view:?}"
     );
     let game_projection = &scene[64..80];

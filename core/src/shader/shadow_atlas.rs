@@ -133,7 +133,8 @@ impl LocalShadowAtlas {
         if width == 0 || height == 0 || self.region == 0 {
             return Err("a local shadow atlas with an empty target or region".into());
         }
-        if self.covered == 0 || self.covered > self.region || (self.region - self.covered) % 2 != 0 {
+        if self.covered == 0 || self.covered > self.region || !(self.region - self.covered).is_multiple_of(2)
+        {
             return Err(format!(
                 "a local shadow atlas covering {} of a region's {} texels: not a centred span inside it",
                 self.covered, self.region

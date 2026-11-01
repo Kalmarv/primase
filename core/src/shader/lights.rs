@@ -17,6 +17,16 @@ pub enum LightTableKind {
     Spot,
 }
 
+impl LightTableKind {
+    /// Whether `light` is of this kind: a point light for points, a spot for spots.
+    pub fn holds(self, light: &Light) -> bool {
+        matches!(
+            (self, light.kind),
+            (LightTableKind::Point, LightKind::Point) | (LightTableKind::Spot, LightKind::Spot { .. })
+        )
+    }
+}
+
 /// The scene's lights of one kind as a program reads them from a buffer: one record of `stride` bytes per `core.light` of
 /// `kind`, in no order the programs rely on (they read how many there are from a
 /// [`super::FrameParameter::LightCount`] constant and visit each), each holding `fields` as 32-bit floats. A byte no field
@@ -230,10 +240,7 @@ fn unit(v: Vec3) -> Result<Vec3, String> {
 impl LightTable {
     /// Whether `light` is of the table's kind: a point light for a point table, a spot for a spot table.
     pub fn holds(&self, light: &Light) -> bool {
-        matches!(
-            (self.kind, light.kind),
-            (LightTableKind::Point, LightKind::Point) | (LightTableKind::Spot, LightKind::Spot { .. })
-        )
+        self.kind.holds(light)
     }
 
     /// The table agrees with itself and with its buffer: a stride of whole floats that a structured buffer's elements

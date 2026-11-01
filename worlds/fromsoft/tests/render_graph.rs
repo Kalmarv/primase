@@ -692,13 +692,14 @@ fn lighting_boundary(graph: &RenderGraph, game: FsGame) {
     assert!(stencil.why.contains("producer not traced"));
 }
 
-fn screen_triangle_inputs(graph: &RenderGraph) -> usize {
-    fn walk(passes: &[RenderPass], n: &mut usize) {
+fn screen_triangle_inputs(graph: &RenderGraph) -> Vec<(String, usize)> {
+    fn walk(passes: &[RenderPass], out: &mut Vec<(String, usize)>) {
         for p in passes {
             match &p.work {
                 PassWork::Screen { stages, .. } => {
+                    let mut n = 0;
                     for s in stages {
-                        *n += s
+                        n += s
                             .inputs
                             .iter()
                             .filter(|i| {
@@ -710,15 +711,18 @@ fn screen_triangle_inputs(graph: &RenderGraph) -> usize {
                             })
                             .count();
                     }
+                    if n > 0 {
+                        out.push((p.name.clone(), n));
+                    }
                 }
-                PassWork::Group { steps } => walk(steps, n),
+                PassWork::Group { steps } => walk(steps, out),
                 _ => {}
             }
         }
     }
-    let mut n = 0;
-    walk(&graph.passes, &mut n);
-    n
+    let mut out = Vec::new();
+    walk(&graph.passes, &mut out);
+    out
 }
 
 /// The installed deferred sun's camera aliases carry both their generic value and the matrix lines its code reads.
@@ -932,7 +936,7 @@ fn sekiros_render_graph_is_its_recorded_frames() -> Result<(), Box<dyn std::erro
         graph.targets[picture].format,
         primase_core::render_graph::TargetFormat::Rgb10A2Unorm
     );
-    assert!(screen_triangle_inputs(graph) > 0);
+    assert!(!screen_triangle_inputs(graph).is_empty());
     if let Some(frames) = oracle(OracleSet::Scripts, Game::Sekiro, "frames") {
         let table_frames = frames_of(FsGame::Sekiro);
         let checked = check_frames(
@@ -1246,7 +1250,19 @@ fn elden_rings_render_graph_is_its_recorded_frames() -> Result<(), Box<dyn std::
     );
     // No captured vertex bytes are asserted: only the selected native lighting VS reads have a labelled reconstruction.
     sun_outputs_are_finite(graph, &world);
-    assert_eq!(screen_triangle_inputs(graph), 8);
+    // the selected lighting steps that draw a full-screen triangle through GXLightAcc.vpo, each its POSITION and
+    // TEXCOORD0: er3 frame 6993 records five such draws in this order (seq 1958, 1963, 1965, 1967, 1975), each with that
+    // input layout, the shadowed point light's at seq 1965 (pso 9112, ps 9db1aa8c894a6a8e)
+    let screen = screen_triangle_inputs(graph);
+    let expected = [
+        "GXLightAcc_DDirLightShadowed1",
+        "GXRend_TileBasedLighting",
+        "GXLightAcc_DPointLightShadowed1",
+        "GXLightCmbAlbedo",
+        "GXLightComposite",
+    ]
+    .map(|name| (name.to_owned(), 2));
+    assert_eq!(screen, expected, "{screen:?}");
     assert!(
         graph
             .lighting
