@@ -136,10 +136,8 @@ impl Lowering {
                 // the bush's normal is the map's red and green, brought to the world on the vertex tangent; the
                 // tree's is a canopy normal of all four channels and the bounding box, which has no glTF form
                 if p.on("Bush") {
-                    if Self::normal_map(w, t, log) {
-                        pbr.normal_texture = Some(TextureRef::new(t));
-                    } else {
-                        approximate(log, e, "normal map not lowered", triangles);
+                    if let Some(slot) = self.normal_slot(w, e, t, triangles, log, TextureRef::new)? {
+                        pbr.normal_texture = Some(slot);
                     }
                 } else {
                     approximate(log, e, "canopy normal left out", triangles);

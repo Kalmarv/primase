@@ -970,3 +970,84 @@ fn deferred_decal_is_blended_in_the_decal_layer_and_projected_ones_are_left() {
     assert_eq!(log.approximations["swatch tint left out"], 3);
     assert_eq!(log.counts["environmentdeferreddecal materials lowered"], 3);
 }
+
+/// A `projection_lod` material whose `NormalATexture` is a 1x1 `Rgba8Snorm` texture of `texel` (signed bytes), with the
+/// lowering's log.
+fn signed_normal(texel: [u8; 4]) -> (World, Entity, Entity, PassLog) {
+    let mut world = World::new();
+    let normal = texture(&mut world, "normal", ColorSpace::Linear, texel);
+    world.get_mut::<Texture>(normal).unwrap().format = TexFormat::Rgba8Snorm;
+    let e = world.spawn();
+    world.insert(
+        e,
+        material("projection_lod", "Standard", vec![tex("NormalATexture", 3)]),
+    );
+    world.insert(e, MaterialTextures(vec![bound(3, Some(normal))]));
+    let mut log = PassLog::default();
+    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    (world, e, normal, log)
+}
+
+/// A normal map in a signed format whose texels are all the neutral normal (`v` about 0.5, so the shader's `2 v - 1` is
+/// about 0) is the engine's flat default: the material takes no normal map, counted as such and not as a loss.
+#[test]
+fn a_flat_signed_normal_map_is_no_normal_map() {
+    // 64/127 = 0.504: 2 v - 1 = 0.008, under the flat tilt
+    let (world, e, _, log) = signed_normal([64, 64, 127, 127]);
+    assert!(world.get::<PbrMaterial>(e).unwrap().normal_texture.is_none());
+    assert_eq!(log.counts["flat default normal map: no normal map"], 1);
+    assert!(
+        !log.approximations
+            .keys()
+            .any(|k| k.contains("normal map") || k.contains("normal maps")),
+        "{:?}",
+        log.approximations
+    );
+}
+
+/// Any other signed normal map is re-encoded: the positive half of the signed value `v` as the unsigned byte glTF reads
+/// as `2 b - 1`, the shader's own `2 v - 1`, with the rebuilt `z` in blue.
+#[test]
+fn a_signed_normal_map_is_re_encoded_as_the_unsigned_map_the_shader_read() {
+    // the signed bytes 127 and 32 are v = 1 and 0.252, stored as 255 and 160 (v * 0.5 + 0.5) by the decoder
+    let (world, e, source, log) = signed_normal([127, 32, 127, 127]);
+    let slot = world
+        .get::<PbrMaterial>(e)
+        .unwrap()
+        .normal_texture
+        .expect("a normal map");
+    assert_ne!(slot.texture, source);
+    let made = world.get::<Texture>(slot.texture).unwrap();
+    assert_eq!(made.role, TexRole::Normal);
+    assert_eq!(made.color_space, ColorSpace::Linear);
+    assert_eq!(made.normal.unwrap().z, NormalZ::Rebuild);
+    // x = 2 * 1 - 1 = 1 and y = 2 * 0.2549 - 1 = -0.49: no z is left (0.5 stored); the byte is the signed value back
+    assert_eq!(made.levels[0], vec![255, 65, 128, 255]);
+    assert_eq!(
+        log.counts["signed normal textures re-encoded as glTF normal maps"],
+        1
+    );
+    assert!(!log.counts.contains_key("flat default normal map: no normal map"));
+    assert!(
+        !log.approximations
+            .keys()
+            .any(|k| k.contains("normal map not lowered") || k.contains("clamped")),
+        "{:?}",
+        log.approximations
+    );
+}
+
+/// A texel below zero cannot be held by glTF's unsigned map (the shader's `2 v - 1` of it is below -1): clamped to
+/// zero, counted by texel.
+#[test]
+fn negative_texels_of_a_signed_normal_map_are_clamped_and_counted() {
+    // the signed byte 192 is -64: v = -0.504
+    let (world, e, _, log) = signed_normal([192, 64, 127, 127]);
+    let slot = world.get::<PbrMaterial>(e).unwrap().normal_texture.unwrap();
+    let made = world.get::<Texture>(slot.texture).unwrap();
+    assert_eq!(made.levels[0][0], 0);
+    assert_eq!(
+        log.approximations["signed normal map texels below zero clamped to zero (glTF's unsigned map cannot hold them)"],
+        1
+    );
+}

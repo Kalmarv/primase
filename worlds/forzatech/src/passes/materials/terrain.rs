@@ -93,8 +93,8 @@ impl Lowering {
             Binding::Texture(t) => {
                 match self.derive(w, t, Derived::WorldNormalXz, log)? {
                     Some(normal) => {
-                        if Self::normal_map(w, normal, log) {
-                            pbr.normal_texture = Some(slot(normal));
+                        if let Some(map) = self.normal_slot(w, e, normal, triangles, log, slot)? {
+                            pbr.normal_texture = Some(map);
                         }
                     }
                     None => approximate(log, e, "normal map not lowered", triangles),

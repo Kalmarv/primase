@@ -102,10 +102,8 @@ impl Lowering {
         // the HiQ permutation reads NormalATexture's red and green; the others use the vertex normal
         match p.texture("NormalATexture") {
             Binding::Texture(t) => {
-                if Self::normal_map(w, t, log) {
-                    pbr.normal_texture = Some(slot(t));
-                } else {
-                    approximate(log, e, "normal map not lowered", triangles);
+                if let Some(map) = self.normal_slot(w, e, t, triangles, log, slot)? {
+                    pbr.normal_texture = Some(map);
                 }
             }
             Binding::Absent | Binding::None => approximate(log, e, "no normal map", triangles),

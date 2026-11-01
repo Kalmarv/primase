@@ -26,8 +26,7 @@
 //! `window_linecastroom` 51, 78; `emissiveonly` 2, 64: every one of the box's 90,430 triangles. Each lowered material passes `pbr.material`'s own verification, and the decal families alone
 //! have a draw order (the decal layer, no depth write).
 //!
-//! The `environment` rule packs 85 distinct RoughMetAoPor maps and makes normal maps of 83 distinct textures (7 more,
-//! 838 triangles, are BC5 SNORM, which the shader's `2 r - 1` does not read: left out, counted). The packed maps'
+//! The `environment` rule packs 85 distinct RoughMetAoPor maps and makes normal maps of 83 distinct textures. The packed maps'
 //! metallic channel holds an extreme (below 16 or above 239) in 97.97% of its texels over the lowered materials' maps,
 //! the binary mask a metalness is. Left out by name (materials, triangles; a material may carry several): modulate 594, 8,747; deposits 554, 7,159; triplanar 568, 7,642; wetness 594, 11,139; relaxed cone-step
 //! mapping 556, 5,596; mega-skirt 20, 13,188; emission 15, 1,636; retro-reflection 8, 1,032; per-instance random UV
@@ -62,6 +61,16 @@
 //! composited into its frame texture where the frame's mask leaves the pane empty (one baked texture per frame and room
 //! colour), and the room's emission, where it is not black, as an emission map with the same mask; each is counted per
 //! material and triangle (`window_linecastroom` holds the rest).
+//!
+//! A normal map in a signed format (BC5 SNORM) holds the shader's `v`, whose normal is `2 v - 1`. Over the whole box
+//! (`STEP=1`) four such textures are read as normal maps, and none has a negative texel: a 32 x 32 default whose every
+//! texel is the neutral normal (bytes 191 and 192, `|2 v - 1|` at most 0.012), a 16 x 16 default with bytes 184 to 198
+//! (up to 0.11) and a 128 x 128 one with bytes 151 to 231 (up to 0.63), and a terrain map no lowered slot reads. A map whose
+//! every texel has `|2 v - 1|` within 0.02 (about 1.1 degrees) is flat and perturbs no normal, so the material takes no
+//! normal map: 778 slots, counted as `flat default normal map: no normal map` (not as a loss). Any other is re-encoded as the
+//! unsigned map glTF reads (the byte is `v`, so glTF's `2 b - 1` is the shader's `2 v - 1`; the rebuilt `z` in blue; a
+//! negative `v` is clamped and counted by texel): 1 texture. `normal map not lowered` now means a texture with no
+//! pixels, and the box has none.
 //!
 //! A base colour factor above 1 (the flipbook panel's brightness of 10 in the whole box: 8 materials, 16 triangles) is
 //! stored as 1 and counted: no shader of the surface families saturates the albedo it writes, and the albedo target's
@@ -260,6 +269,8 @@ struct Lowering {
     rooms: BTreeMap<(Entity, [u32; 2]), RoomMeans>,
     /// Whether an emission texture holds any light (a texel with a colour other than black), by texture.
     lit: BTreeMap<Entity, bool>,
+    /// Whether a signed normal map is flat (see [`FLAT_TILT`]), by texture.
+    flat: BTreeMap<Entity, bool>,
 }
 
 impl Lowering {
@@ -298,6 +309,25 @@ enum Derived {
     /// Roughness in R alone and a metalness that is a constant of the material: G roughness, B 1 (the constant is the
     /// metallic factor), R 1.
     RedRoughnessMetal,
+    /// A normal map stored in a signed format, whose shader reads `2 v - 1` of the signed value `v`: the positive half
+    /// `v` in red and green (a negative `v` is 0), which glTF's `2 b - 1` reads as the same normal, and the rebuilt `z`
+    /// in blue.
+    SignedNormal,
+}
+
+/// The tilt below which a signed normal map is flat: every texel of both channels has `|2 v - 1|` at most this, about
+/// 1.1 degrees, under the 8-bit resolution of a normal map twice over. A flat map perturbs no normal.
+const FLAT_TILT: f64 = 0.02;
+
+/// What a normal-map slot makes of its texture.
+enum NormalMap {
+    /// The slot's normal map: the texture itself, or the map re-encoded from it.
+    Map(Entity),
+    /// A flat default map (a signed texture holding the neutral normal everywhere): it perturbs nothing, so the
+    /// material takes no normal map.
+    Flat,
+    /// The texture has no pixels.
+    Missing,
 }
 
 /// The value a shader reads from a texel channel `x` of a texture in `space`: decoded to linear when it is sRGB (the
@@ -472,6 +502,7 @@ impl Lowering {
             Derived::WorldNormalXz => ("world-space normal", "normal"),
             Derived::OcclusionRoughnessRed => ("occlusion-in-blue roughness-in-red", "occlusion roughness"),
             Derived::RedRoughnessMetal => ("roughness-in-red", "roughness metallic"),
+            Derived::SignedNormal => ("signed normal", "normal"),
         };
         let Some(t) = w.get::<Texture>(source) else {
             log.count(&format!("{what} textures left out: no pixels"), 1);
@@ -488,6 +519,7 @@ impl Lowering {
                 | TexFormat::Bc4Snorm
                 | TexFormat::Bc5Snorm
         );
+        let mut negative = 0u64;
         let texture = primase_image::map_rgba8_levels(
             t,
             0..t.levels.len(),
@@ -499,6 +531,14 @@ impl Lowering {
             |texel| {
                 let [r, g, b, a] = texel.rgba;
                 Ok(match kind {
+                    Derived::SignedNormal => {
+                        // the signed value is `byte / 127.5 - 1`; the shader's normal is `2 v - 1` of it
+                        let (vx, vy) = (f64::from(r) / 127.5 - 1.0, f64::from(g) / 127.5 - 1.0);
+                        negative += u64::from(vx < 0.0) + u64::from(vy < 0.0);
+                        let (x, y) = (2.0 * vx.max(0.0) - 1.0, 2.0 * vy.max(0.0) - 1.0);
+                        let z = (1.0 - x * x - y * y).max(0.0).sqrt();
+                        [byte(vx), byte(vy), byte(z * 0.5 + 0.5), 255]
+                    }
                     Derived::OcclusionRoughnessMetallic => [
                         byte(seen(space, b)),
                         byte(seen(space, r)),
@@ -548,6 +588,14 @@ impl Lowering {
             },
         )
         .map_err(|e| format!("making a {what} map: {e}"))?;
+        if negative > 0 {
+            log.approximate(
+                &format!(
+                    "{what} map texels below zero clamped to zero (glTF's unsigned map cannot hold them)"
+                ),
+                negative,
+            );
+        }
         let name = w.get::<Name>(source).map(|n| n.0.clone()).unwrap_or_default();
         let e = w.spawn();
         w.insert(e, Name(format!("{name} ({suffix})")));
@@ -557,20 +605,97 @@ impl Lowering {
         Ok(Some(e))
     }
 
-    /// Make `texture` a normal map in the frame the environment shader reads: X in red, green up, Z rebuilt.
-    fn normal_map(w: &mut World, texture: Entity, log: &mut PassLog) -> bool {
-        let Some(t) = w.get_mut::<Texture>(texture) else {
-            log.count("normal maps left out: no pixels", 1);
-            return false;
-        };
-        if matches!(t.format, TexFormat::Bc5Snorm) {
-            // the shader reads 2 r - 1 of an unsigned value; a signed format cannot be that map
-            log.count(
-                "normal maps left out: stored in a signed format the shader's 2 r - 1 does not read",
-                1,
-            );
-            return false;
+    /// Whether the signed normal map `texture` is flat: a texel of level 0 with a channel whose `|2 v - 1|` is above
+    /// [`FLAT_TILT`] (or whose `v` is negative, which the shader's `2 v - 1` cannot read as a unit-length normal) makes it
+    /// not. Read once per texture; a texture that cannot be read is not flat.
+    fn signed_flat(&mut self, w: &World, texture: Entity) -> bool {
+        if let Some(&flat) = self.flat.get(&texture) {
+            return flat;
         }
+        let mut tilt = 0.0f64;
+        let mut read = false;
+        if let Some(t) = w.get::<Texture>(texture) {
+            read = primase_image::map_rgba8_levels(
+                t,
+                0..1,
+                primase_image::TextureMetadata {
+                    color_space: ColorSpace::Linear,
+                    role: TexRole::Mask,
+                    normal: None,
+                },
+                |texel| {
+                    for c in &texel.rgba[..2] {
+                        tilt = tilt.max((2.0 * (f64::from(*c) / 127.5 - 1.0) - 1.0).abs());
+                    }
+                    Ok(texel.rgba)
+                },
+            )
+            .is_ok();
+        }
+        let flat = read && tilt <= FLAT_TILT;
+        self.flat.insert(texture, flat);
+        flat
+    }
+
+    /// The normal-map slot of material `e` for `texture` (`slot` makes it of the map), or none: a flat default map takes
+    /// no slot, a texture with no pixels is counted as a normal map not lowered.
+    fn normal_slot(
+        &mut self,
+        w: &mut World,
+        e: Entity,
+        texture: Entity,
+        triangles: u64,
+        log: &mut PassLog,
+        slot: impl FnOnce(Entity) -> TextureRef,
+    ) -> Result<Option<TextureRef>, String> {
+        Ok(match self.normal_map(w, texture, log)? {
+            NormalMap::Map(map) => Some(slot(map)),
+            NormalMap::Flat => None,
+            NormalMap::Missing => {
+                approximate(
+                    log,
+                    e,
+                    "normal map not lowered: the texture has no pixels",
+                    triangles,
+                );
+                None
+            }
+        })
+    }
+
+    /// Make `texture` a normal map in the frame the environment shader reads: X in red, green up, Z rebuilt. A texture
+    /// in a signed format holds the shader's `v` (its normal is `2 v - 1`): a flat one is [`NormalMap::Flat`], any other
+    /// is re-encoded ([`Derived::SignedNormal`]) as the unsigned map glTF reads.
+    fn normal_map(&mut self, w: &mut World, texture: Entity, log: &mut PassLog) -> Result<NormalMap, String> {
+        let Some(t) = w.get::<Texture>(texture) else {
+            log.count("normal maps left out: no pixels", 1);
+            return Ok(NormalMap::Missing);
+        };
+        let texture = if matches!(
+            t.format,
+            TexFormat::Rg8Snorm | TexFormat::Rgba8Snorm | TexFormat::Rg16Snorm | TexFormat::Bc5Snorm
+        ) {
+            if t.levels.is_empty() {
+                log.count("normal maps left out: no pixels", 1);
+                return Ok(NormalMap::Missing);
+            }
+            if self.signed_flat(w, texture) {
+                log.count("flat default normal map: no normal map", 1);
+                return Ok(NormalMap::Flat);
+            }
+            match self.derive(w, texture, Derived::SignedNormal, log)? {
+                Some(made) => made,
+                None => {
+                    log.count("normal maps left out: no pixels", 1);
+                    return Ok(NormalMap::Missing);
+                }
+            }
+        } else {
+            texture
+        };
+        let Some(t) = w.get_mut::<Texture>(texture) else {
+            return Ok(NormalMap::Missing);
+        };
         if t.role != TexRole::Normal {
             t.role = TexRole::Normal;
             t.color_space = ColorSpace::Linear;
@@ -582,7 +707,7 @@ impl Lowering {
             });
             log.count("textures made normal maps by their slot", 1);
         }
-        true
+        Ok(NormalMap::Map(texture))
     }
 }
 
@@ -687,6 +812,7 @@ impl Pass for LowerForzaMaterials {
             reflected: BTreeSet::new(),
             rooms: BTreeMap::new(),
             lit: BTreeMap::new(),
+            flat: BTreeMap::new(),
         };
         let mut left: BTreeMap<String, (u64, u64)> = BTreeMap::new();
         for (e, m) in &materials {

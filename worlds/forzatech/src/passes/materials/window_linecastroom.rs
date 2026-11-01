@@ -308,10 +308,8 @@ impl Lowering {
                 pbr.roughness = 1.0;
             }
             if let Binding::Texture(t) = p.texture("FrameGlassNormalTexture") {
-                if Self::normal_map(w, t, log) {
-                    pbr.normal_texture = Some(slot(t));
-                } else {
-                    approximate(log, e, "normal map not lowered", triangles);
+                if let Some(map) = self.normal_slot(w, e, t, triangles, log, slot)? {
+                    pbr.normal_texture = Some(map);
                 }
             }
         } else {

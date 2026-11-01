@@ -194,10 +194,8 @@ impl Lowering {
         if p.on("NormalTexOnOff") {
             match p.texture("Normal") {
                 Binding::Texture(t) => {
-                    if Self::normal_map(w, t, log) {
-                        pbr.normal_texture = Some(TextureRef::new(t));
-                    } else {
-                        approximate(log, e, "normal map not lowered", triangles);
+                    if let Some(slot) = self.normal_slot(w, e, t, triangles, log, TextureRef::new)? {
+                        pbr.normal_texture = Some(slot);
                     }
                 }
                 Binding::Absent | Binding::None => approximate(log, e, "no normal map", triangles),

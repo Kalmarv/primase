@@ -28,7 +28,7 @@
 //! `ModulateNormal`, `ModulateUV`), the terrain blend, frost and snow (run-time state, `Winter`), the deformable
 //! tracks, parallax, noise and the custom surfaces. The weights are per pixel; a consumer that bakes them to the
 //! vertices says so.
-use super::{Binding, Derived, Lowered, Lowering, PLANAR_TEXCOORD, Params, approximate, left_out};
+use super::{Binding, Derived, Lowered, Lowering, NormalMap, PLANAR_TEXCOORD, Params, approximate, left_out};
 use crate::components::{ForzaMaterial, MaterialTextures, PlanarUv};
 use primase_core::layered::{Channel, Composition, Source};
 use primase_core::pass::PassLog;
@@ -280,8 +280,9 @@ impl Lowering {
         if let Some(occlusion) = self.derive(w, normal, Derived::BlueOcclusion, log)? {
             pbr.occlusion_texture = Some(TextureRef::new(occlusion));
         }
-        if Self::normal_map(w, normal, log) {
-            pbr.normal_texture = Some(TextureRef::new(normal));
+        // a flat default map takes no slot; one with no pixels is counted by `normal_map`
+        if let NormalMap::Map(map) = self.normal_map(w, normal, log)? {
+            pbr.normal_texture = Some(TextureRef::new(map));
         }
         let height = match self.derive(w, normal, Derived::AlphaHeight, log)? {
             Some(h) => Source::Mask {

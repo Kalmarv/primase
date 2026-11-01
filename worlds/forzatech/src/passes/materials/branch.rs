@@ -63,12 +63,12 @@ impl Lowering {
 
         match p.texture("NormalA") {
             Binding::Texture(t) => {
-                if Self::normal_map(w, t, log) {
-                    pbr.normal_texture = Some(Self::slot(t, normal_tiling, [0.0; 2]));
+                if let Some(slot) = self.normal_slot(w, e, t, triangles, log, |n| {
+                    Self::slot(n, normal_tiling, [0.0; 2])
+                })? {
+                    pbr.normal_texture = Some(slot);
                     // z is rebuilt from the unscaled x and y, then x and y are scaled: glTF's scale
                     pbr.normal_scale = p.float("NormalAIntensity").unwrap_or(1.0);
-                } else {
-                    approximate(log, e, "normal map not lowered", triangles);
                 }
                 // NormalAlpha_AO: the map's alpha is the ambient occlusion
                 if p.on("NormalAlpha_AO")

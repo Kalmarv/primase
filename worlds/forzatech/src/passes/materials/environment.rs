@@ -222,10 +222,11 @@ impl Lowering {
 
         match p.texture("NormHeightTex_A") {
             Binding::Texture(t) => {
-                if Self::normal_map(w, t, log) {
-                    pbr.normal_texture = Some(Self::slot(t, p.vec2("NormalHeight_A_UVTiling"), offset));
-                } else {
-                    approximate(log, e, "normal map not lowered", triangles);
+                let tiling = p.vec2("NormalHeight_A_UVTiling");
+                if let Some(slot) =
+                    self.normal_slot(w, e, t, triangles, log, |n| Self::slot(n, tiling, offset))?
+                {
+                    pbr.normal_texture = Some(slot);
                 }
             }
             Binding::Absent | Binding::None => approximate(log, e, "no normal map", triangles),

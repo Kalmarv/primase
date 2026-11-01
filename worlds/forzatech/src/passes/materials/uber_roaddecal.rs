@@ -377,10 +377,10 @@ impl Lowering {
                     .is_some_and(|x| matches!(x.format, TexFormat::Bc4Unorm | TexFormat::Bc4Snorm));
                 if one_channel {
                     approximate(log, e, "normal map has one channel: not lowered", triangles);
-                } else if Self::normal_map(w, t, log) {
-                    pbr.normal_texture = Some(Self::slot(t, tiling, [0.0; 2]));
-                } else {
-                    approximate(log, e, "normal map not lowered", triangles);
+                } else if let Some(slot) =
+                    self.normal_slot(w, e, t, triangles, log, |n| Self::slot(n, tiling, [0.0; 2]))?
+                {
+                    pbr.normal_texture = Some(slot);
                 }
             }
             Binding::Absent | Binding::None => approximate(log, e, "no normal map", triangles),
