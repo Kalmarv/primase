@@ -152,8 +152,8 @@ disallowed_types = "allow"
 [profile.dev]
 debug = "line-tables-only"
 
-[profile.test]
-opt-level = 1
+# The test profile is dev's: our crates unoptimised, their dependencies at opt-level 2 (below). The unit tests run as
+# fast unoptimised and build 114 s sooner; a real-data test needs `--cargo-profile gate`.
 
 [profile.dev.package."*"]
 opt-level = 2
