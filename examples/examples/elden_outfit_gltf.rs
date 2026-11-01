@@ -3,20 +3,21 @@
 //!
 //! Usage: `elden_outfit_gltf <output.glb>`. The install and the archive keys come from the `GAME_DATA` configuration
 //! (`tests/inputs/mod.rs`, `elden`). Prints what the selection, the lowering and the writer's preparation did, and what
-//! the writer left out, and writes the passes the lowering and the writer's preparation ran beside the output
-//! (`<output>.passes.txt`, one per line).
+//! the writer left out, and writes what it ran beside the output (`<output>.preparation.txt`, [`Stages`]): the
+//! selection, the read, the lowering and the writer's preparation, each stage's texts one per line as each states
+//! itself, for another program to read and prepare the same outfit the same way.
 //!
 //! The program reads in three steps, each one a choice stated below: the candidate outfits (nothing is chosen by the
-//! reader), the registered selection passes that choose among them, and the selected model scope, which is then lowered
-//! by registered passes and written. Every option a pass takes is written out; a pass that names no default has none
-//! here.
+//! reader), the registered selection passes that choose among them, and the selected model scope, read as the program
+//! states it (`read-fromsoft-character`), which is then lowered by registered passes and written. Every option a pass
+//! takes is written out; a pass that names no default has none here.
 use std::path::Path;
 
 use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::{Game, Install, Keys};
 use primase_animation::simulation_schedule::{ConfigureSimulations, SimulationSchedule};
 use primase_animation::{AssembleCharacter, Correspondence, ReferencePose, UnweightedRests, WeightedRests};
-use primase_core::pass::{MissingInputs, PassManager, PassRegistry, Pipeline, RunReport, pass_text};
+use primase_core::pass::{MissingInputs, PassManager, PassRegistry, Pipeline, RunReport, Stages, pass_text, text_form};
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro;
 use primase_fromsoft::sekiro::passes::bake_materials::BakeFromSoftMaterials;
@@ -29,7 +30,7 @@ use primase_fromsoft::sekiro::passes::{
 };
 use primase_fromsoft::sekiro::program::{CharacterPreparation, Materials};
 use primase_fromsoft::sekiro::standalone::{
-    CharacterRole, InventoryRequest, SelectedModelRequest, StandaloneAsset, read_inventory, read_selected_models,
+    CharacterReadText, CharacterRole, InventoryRequest, SelectedModelRequest, read_inventory, read_selected_models,
 };
 use primase_image::Srgba8;
 
@@ -38,6 +39,16 @@ mod inputs;
 
 /// The model whose outfit is dressed: the player's.
 const CHARACTER: &str = "c0000";
+
+/// The read: the player's model, read as the player, with no weapons, animations or clip effects (none are asked for).
+fn read() -> CharacterReadText {
+    CharacterReadText {
+        character: Some((CHARACTER.to_owned(), CharacterRole::Player)),
+        weapons: false,
+        animations: false,
+        clip_effects: false,
+    }
+}
 
 /// The outfit selection. `initializer`, `presentation` and `level` list the candidate variants (initializer row 3002,
 /// the female presentation; `prefer-low` takes a part's low-detail binder where the install holds both), and `outfit`
@@ -62,8 +73,8 @@ const SELECT: &[&str] = &[
 ///   store.
 /// - A part's own collision (a weapon's) is lowered onto it, convex bodies as their rounded surface within 1 cm, every
 ///   stored motion type at its stored pose.
-/// - An outfit of `parts` parts is assembled when there is more than one: joints correspond by name, each part's skins
-///   are moved onto the assembled skeleton at the assembled rest, rest disagreements up to a millimetre are taken
+/// - The outfit's parts are assembled (one part would be nothing to relate): joints correspond by name, each part's
+///   skins are moved onto the assembled skeleton at the assembled rest, rest disagreements up to a millimetre are taken
 ///   (0.1 mm in model space for a joint a reference reparents), one a part does not weight is reported, not refused. A
 ///   weighted joint that disagrees by more keeps the part's own inverse bind (`weighted-rests=report`): the game poses
 ///   a part through its own inverse binds (Sekiro's Ashina's Memory costume stands its face's Head 4.7e-3 from the
@@ -73,12 +84,10 @@ const SELECT: &[&str] = &[
 /// - Simulations step at 30 Hz, with 30 steps of pre-roll and at most 8 steps a frame.
 /// - The selected outfit's display masks are resolved (`dressing`) and the entities named; no form of a part is
 ///   selected out, no animation is bound, no weapon is held.
-fn preparation(parts: usize) -> Result<CharacterPreparation, Error> {
+fn preparation() -> Result<CharacterPreparation, Error> {
     Ok(CharacterPreparation {
         game: Game::EldenRing,
         materials: Materials::Preserve,
-        parts,
-        select_assets: Vec::new(),
         animations: None,
         dressing: true,
         entity_names: true,
@@ -107,7 +116,7 @@ fn preparation(parts: usize) -> Result<CharacterPreparation, Error> {
             unweighted_rests: UnweightedRests::Report,
             weighted_rests: WeightedRests::Report,
             name: "assembled".into(),
-            leave_out: Vec::new(),
+            leave_out_marked: None,
         },
         simulations: ConfigureSimulations(SimulationSchedule::new(1. / 30., 30, 8)?),
     })
@@ -127,10 +136,33 @@ const WRITER: &[&str] = &[
     "bake-nonrigid{mirrors=bake}",
 ];
 
-/// The lowering and the writer's preparation of an outfit of `parts` parts.
-fn lowering(parts: usize) -> Result<Vec<String>, Error> {
-    let writer = WRITER.iter().map(|text| (*text).to_owned());
-    Ok(preparation(parts)?.texts()?.into_iter().chain(writer).collect())
+/// The lowering: the preparation program's passes.
+fn lowering() -> Result<Vec<String>, Error> {
+    Ok(preparation()?.texts()?)
+}
+
+/// The writer's preparation.
+fn writer() -> Vec<String> {
+    WRITER.iter().map(|text| (*text).to_owned()).collect()
+}
+
+/// Each pass of `pipeline` as it states itself.
+fn texts(pipeline: &Pipeline) -> Vec<String> {
+    pipeline.passes.iter().map(|pass| pass_text(pass.as_ref())).collect()
+}
+
+/// What the program ran, as stages: the selection, the read, the lowering and the writer's preparation.
+fn stages(
+    selection: &Pipeline,
+    read: &CharacterReadText,
+    lowering: &Pipeline,
+    writer: &Pipeline,
+) -> Result<Stages, Error> {
+    Ok(Stages::new()
+        .with("selection", texts(selection))?
+        .with("read", vec![text_form(read)])?
+        .with("lowering", texts(lowering))?
+        .with("writer", texts(writer))?)
 }
 
 fn registry() -> PassRegistry {
@@ -160,26 +192,19 @@ fn main() -> Result<(), Error> {
     let out = std::env::args().nth(1).ok_or("usage: elden_outfit_gltf <output.glb>")?;
     let root = inputs::install(inputs::Game::Elden).ok_or("GAME_DATA states no `elden` install")?;
     let keys = inputs::keys(inputs::Game::Elden).ok_or("GAME_DATA states no `elden` keys")?;
-    let (world, pipeline) = outfit(&root, &keys)?;
+    let (world, stages) = outfit(&root, &keys)?;
     let report = primase_gltf::write_file(&world, &options(), Path::new(&out))?;
     println!("glTF {out}:\n{report}");
-    write_passes(Path::new(&out), &pipeline)?;
+    let path = Path::new(&out).with_extension("preparation.txt");
+    let comment = format!("What elden_outfit_gltf ran to write {out}: its selection, read, lowering and writer.");
+    std::fs::write(&path, stages.text(&comment))?;
+    println!("preparation {}", path.display());
     Ok(())
 }
 
-/// The passes `pipeline` runs, one per line as each pass states itself, written beside the output `out` as
-/// `<out>.passes.txt`: the preparation another program runs to prepare the same read the same way.
-fn write_passes(out: &Path, pipeline: &Pipeline) -> Result<(), Error> {
-    let path = out.with_extension("passes.txt");
-    let texts: String = pipeline.passes.iter().map(|pass| pass_text(pass.as_ref()) + "\n").collect();
-    std::fs::write(&path, texts)?;
-    println!("passes {}", path.display());
-    Ok(())
-}
-
-/// The outfit read from the install at `root` with the archive keys in `keys`, selected and lowered: the world the
-/// program writes, and the lowering it ran (its passes depend on how many parts the outfit has).
-fn outfit(root: &Path, keys: &Path) -> Result<(primase_core::World, Pipeline), Error> {
+/// The outfit read from the install at `root` with the archive keys in `keys`, selected, lowered and prepared for the
+/// writer: the world the program writes, and the stages it ran.
+fn outfit(root: &Path, keys: &Path) -> Result<(primase_core::World, Stages), Error> {
     let game = Game::EldenRing;
     let install = Install::new(root, game, Keys::from_folder(keys, game, game.param_key_sha256())?)
         .with_threads(std::thread::available_parallelism()?);
@@ -188,11 +213,19 @@ fn outfit(root: &Path, keys: &Path) -> Result<(primase_core::World, Pipeline), E
     let manager = manager();
 
     // The candidates: every variant the install lists for the stated initializer, with no choice made by the reader.
-    let asset = StandaloneAsset::Character { id: CHARACTER.to_owned(), role: CharacterRole::Player };
+    let stated = read();
+    let asset = stated.asset().ok_or("the read names no character")?;
     let mut candidates = read_inventory(
         &install,
         decoder(),
-        InventoryRequest { asset: &asset, names: None, npc: None, weapons: false, save: None, attack_of: None },
+        InventoryRequest {
+            asset: &asset,
+            names: None,
+            npc: None,
+            weapons: stated.weapons,
+            save: None,
+            attack_of: None,
+        },
     )?;
 
     // The registered selection passes choose among them.
@@ -201,25 +234,31 @@ fn outfit(root: &Path, keys: &Path) -> Result<(primase_core::World, Pipeline), E
     manager.run(&mut candidates, &selection, &mut selected)?;
     println!("{selected}");
 
-    // The selected scope is read, with no animations, weapons or effects: none were asked for.
+    // The selected scope is read as stated: no animations, weapons or effects.
     let read = read_selected_models(
         install,
         decoder(),
         &candidates,
-        SelectedModelRequest { asset, animations: None, weapons: Default::default(), grip: None, clip_effects: false },
+        SelectedModelRequest {
+            asset,
+            animations: None,
+            weapons: Default::default(),
+            clip_effects: stated.clip_effects,
+        },
     )?;
     for notice in &read.models.notices {
         println!("notice: {notice}");
     }
-    let parts = read.models.dressed_parts.len();
     let mut world = read.models.world;
 
-    // The lowering and the writer's preparation, as registered passes.
-    let pipeline = manager.registry.parse(&lowering(parts)?.join(", "))?;
+    // The lowering, then the writer's preparation, as registered passes.
+    let lowering = manager.registry.parse(&lowering()?.join(", "))?;
+    let writer = manager.registry.parse(&writer().join(", "))?;
     let mut lowered = RunReport::default();
-    manager.run(&mut world, &pipeline, &mut lowered)?;
+    manager.run(&mut world, &lowering, &mut lowered)?;
+    manager.run(&mut world, &writer, &mut lowered)?;
     println!("{lowered}");
-    Ok((world, pipeline))
+    Ok((world, stages(&selection, &stated, &lowering, &writer)?))
 }
 
 #[cfg(test)]
@@ -232,17 +271,38 @@ mod tests {
     fn the_stated_pipelines_parse_and_order() -> Result<(), Error> {
         let manager = manager();
         manager.registry.parse(&SELECT.join(", "))?.check()?;
-        for parts in [1, 2] {
-            manager.registry.parse(&lowering(parts)?.join(", "))?.check()?;
+        manager.registry.parse(&[lowering()?, writer()].concat().join(", "))?.check()?;
+        Ok(())
+    }
+
+    /// The stages the program writes read back as what it ran: the read's text as the read, every stage's texts as
+    /// the passes it parsed.
+    #[test]
+    fn the_stages_read_back_as_what_ran() -> Result<(), Error> {
+        let registry = registry();
+        let (selection, lowering, writer) = (
+            registry.parse(&SELECT.join(", "))?,
+            registry.parse(&lowering()?.join(", "))?,
+            registry.parse(&writer().join(", "))?,
+        );
+        let written = stages(&selection, &read(), &lowering, &writer)?;
+        let stages = Stages::parse(&written.text("a comment"))?;
+        assert_eq!(stages, written);
+        assert_eq!(stages.names().collect::<Vec<_>>(), ["selection", "read", "lowering", "writer"]);
+        let [read_text] = stages.stage("read").ok_or("no read")? else { return Err("one read text".into()) };
+        assert_eq!(primase_core::pass::parse_text_form::<CharacterReadText>(read_text)?, read());
+        for (name, pipeline) in [("selection", &selection), ("lowering", &lowering), ("writer", &writer)] {
+            let again = registry.parse(&stages.stage(name).ok_or(name)?.join(", "))?;
+            assert_eq!(texts(&again), texts(pipeline), "{name}");
         }
         Ok(())
     }
 
-    /// The lowering of an outfit of several parts, pass by pass as each pass states itself: the passes and values
-    /// below, the writer's preparation after them.
+    /// The lowering of an outfit, pass by pass as each pass states itself: the passes and values below.
     #[test]
     fn the_lowering_states_these_passes() -> Result<(), Error> {
         let stated = [
+            "select-fromsoft-requested-form",
             "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program}",
             "lower-fromsoft-selected-outfit",
             "resolve-fromsoft-shaders{unbound-textures=preview}",
@@ -260,9 +320,8 @@ mod tests {
         let canonical = |texts: &[String]| -> Result<Vec<String>, Error> {
             Ok(registry.parse(&texts.join(", "))?.passes.iter().map(|p| pass_text(p.as_ref())).collect())
         };
-        let mut expected: Vec<String> = stated.iter().map(|t| (*t).to_owned()).collect();
-        expected.extend(WRITER.iter().map(|t| (*t).to_owned()));
-        assert_eq!(canonical(&lowering(4)?)?, canonical(&expected)?);
+        let expected: Vec<String> = stated.iter().map(|t| (*t).to_owned()).collect();
+        assert_eq!(canonical(&lowering()?)?, canonical(&expected)?);
         Ok(())
     }
 

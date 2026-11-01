@@ -77,3 +77,44 @@ impl Resource for CharacterReadChoice {
         Ok(Some(self.report.clone()))
     }
 }
+
+/// Public loading scope. Sampling, absent-track interpretation and root motion are pass settings, not read defaults.
+pub static CHARACTER_SCOPE: primase_core::read_scope::ReadScopeSpec =
+    primase_core::read_scope::ReadScopeSpec {
+        name: "fromsoft-character",
+        options: &[
+            primase_core::pass::OptionSpec::optional_choice::<bool>(
+                "animations",
+                "list animation plans without decoding tracks",
+                "no animation family requested",
+            ),
+            primase_core::pass::OptionSpec::optional_choice::<bool>(
+                "effects",
+                "read event-referenced effects when a selected clip is loaded",
+                "no effect payloads requested",
+            ),
+        ],
+    };
+/// Caller-selected part forms and animation family; absent family means no animations, never the player by default.
+pub static PARTS_SCOPE: primase_core::read_scope::ReadScopeSpec = primase_core::read_scope::ReadScopeSpec {
+    name: "fromsoft-parts",
+    options: &[
+        primase_core::pass::OptionSpec::optional(
+            "animations_of",
+            "c0000",
+            "the explicitly named animation family",
+            "no animation family requested",
+        ),
+        primase_core::pass::OptionSpec::optional(
+            "form",
+            "wp_a_0761_l",
+            "one explicitly requested form",
+            "all forms remain candidates",
+        ),
+        primase_core::pass::OptionSpec::optional_choice::<bool>(
+            "effects",
+            "read event-referenced effects when a selected clip is loaded",
+            "no effect payloads requested",
+        ),
+    ],
+};

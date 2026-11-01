@@ -747,6 +747,7 @@ fn the_fromsoft_passes_register_by_name() {
         "select-fromsoft-npc-outfits",
         "select-fromsoft-outfit",
         "select-fromsoft-player-outfit",
+        "select-fromsoft-requested-form",
         "select-fromsoft-saved-attack",
         "select-fromsoft-saved-hold",
         "select-fromsoft-weapon-forms",
@@ -770,6 +771,7 @@ fn the_fromsoft_passes_register_by_name() {
         "raise-fromsoft-display-masks",
         "select-fromsoft-weapon-forms",
         "select-fromsoft-saved-hold",
+        "select-fromsoft-requested-form",
         "lower-fromsoft-selected-outfit",
     ];
     for name in names {

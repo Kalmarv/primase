@@ -385,6 +385,66 @@ impl Pass for BindFromSoftAnimation {
     }
 }
 
+/// `select-fromsoft-requested-form` (no options): the form of a part the read was asked for, kept. A part's file holds
+/// every form of the part and the read reads them all; it records the form it was asked for (its `fromsoft-parts`
+/// scope's `form=`, in `core.read_scopes`), and this pass keeps that form's asset and the animations the read was asked
+/// for (`animations_of=`, the asset `<of> animations`), leaving every other entity out as `select-assets{names=...}`
+/// does. A read asked for no form (a character, or every form of a part) is left as it is, and the pass says so.
+#[derive(Clone, Copy, Debug)]
+pub struct SelectFromSoftRequestedForm;
+pub const SELECT_FROMSOFT_REQUESTED_FORM: PassSpec = PassSpec {
+    name: "select-fromsoft-requested-form",
+    options: &[],
+    make: |_| Ok(Box::new(SelectFromSoftRequestedForm)),
+};
+impl Pass for SelectFromSoftRequestedForm {
+    fn name(&self) -> &'static str {
+        "select-fromsoft-requested-form"
+    }
+    fn requires(&self) -> &[&'static str] {
+        use primase_core::Component;
+        &[
+            primase_core::Asset::NAME,
+            <primase_core::read_scope::ReadScopes as Resource>::NAME,
+        ]
+    }
+    fn despawns_entities(&self) -> bool {
+        true
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let scopes = w
+            .resource::<primase_core::read_scope::ReadScopes>()
+            .ok_or("no read scope: the read records what it was asked for")?;
+        let parts: Vec<&primase_core::read_scope::ReadScope> = scopes
+            .0
+            .iter()
+            .filter(|scope| scope.reader == crate::sekiro::components::standalone::PARTS_SCOPE.name)
+            .collect();
+        let scope = match parts.as_slice() {
+            [] => None,
+            [scope] => Some(*scope),
+            more => {
+                return Err(format!(
+                    "{} reads of parts in one world: which form each was asked for is not one",
+                    more.len()
+                ));
+            }
+        };
+        let Some((form, of)) = scope.and_then(|scope| {
+            scope
+                .choices
+                .get("form")
+                .map(|form| (form.clone(), scope.choices.get("animations_of").cloned()))
+        }) else {
+            log.count("reads asked for no one form: every asset kept", 1);
+            return Ok(());
+        };
+        let mut names = vec![form];
+        names.extend(of.map(|of| format!("{of} animations")));
+        primase_core::asset::keep_assets(w, primase_core::asset::AssetField::Name, &names, log)
+    }
+}
+
 /// One part-level policy shared with initializer selection; the reader only supplies candidates.
 #[derive(Clone, Copy, Debug)]
 pub struct SelectFromSoftWeaponForms;

@@ -13,6 +13,7 @@
 use fromsoft_formats::Game;
 use primase_animation::AssembleCharacter;
 use primase_animation::simulation_schedule::ConfigureSimulations;
+use primase_core::Component;
 use primase_core::SelectLod;
 use primase_core::pass::pass_text;
 
@@ -36,6 +37,8 @@ use crate::materials::SkipClass;
 const RENDER_GRAPH: &str = "lower-fromsoft-render-graph";
 /// The pass that lowers the sky an area read brought in to core's sky layer and anchors.
 const SKY_PASS: &str = "lower-fromsoft-sky";
+/// The pass that keeps the form of a part a read was asked for: the first of a character's preparation.
+const REQUESTED_FORM: &str = "select-fromsoft-requested-form";
 
 /// The key a game's passes and sources are named by.
 pub fn game_key(game: Game) -> &'static str {
@@ -282,39 +285,30 @@ fn keeps_the_authored_uvs(geometry: &LowerFromSoftGeometry) -> Result<(), String
     Ok(())
 }
 
-/// Held weapons: the sources of their models' assets, which the body's assembly leaves out, and how they are held
-/// after the assets are placed.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HeldWeapons {
-    pub held: Vec<String>,
-    pub hold: HoldFromSoftWeapons,
-}
-
-/// A character's or a set of parts' preparation: the geometry and material lowering they need, then (for several
-/// parts, which each carry a skeleton of their own) the assembly, then `place-assets` so the standalone asset is drawn
-/// at the origin. No area collision, state, far, light or extra passes.
+/// A character's or a set of parts' preparation: the geometry and material lowering they need, then the assembly of
+/// its parts (each carries a skeleton of its own; one part is nothing to relate), then `place-assets` so the standalone
+/// asset is drawn at the origin. No area collision, state, far, light or extra passes. Its texts do not depend on what
+/// the read found: the form the read was asked for is kept by `select-fromsoft-requested-form`, the held weapons are
+/// the assets the read marks `fromsoft.held_weapon`, and `hold-fromsoft-weapons` leaves a world with none as it is.
 ///
-/// The order: the asset forms selected, the geometry, the selected outfit (where it is dressed), the shader
+/// The order: the requested form kept, the geometry, the selected outfit (where it is dressed), the shader
 /// resolution, the layer bake (where the program bakes), the materials and their surface bake, the part's collision,
-/// the assembly (several parts), the animations' binding, the simulation schedule, the display masks and material
-/// events (where it is dressed), the entities' names, `place-assets`, and the held weapons.
+/// the assembly, the animations' binding, the simulation schedule, the display masks and material events (where it is
+/// dressed), the entities' names, `place-assets`, and the held weapons.
 #[derive(Clone, Debug)]
 pub struct CharacterPreparation {
     pub game: Game,
     /// What becomes of the layered source materials.
     pub materials: Materials,
-    /// How many parts the asset assembles: more than one are related into one character (`assembly`).
-    pub parts: usize,
-    /// The names `select-assets` keeps (one form of a part and the animations' asset): none keeps everything.
-    pub select_assets: Vec<String>,
     /// The animations bound onto the asset's skeleton.
     pub animations: Option<BindFromSoftAnimation>,
     /// The selected outfit's display masks, resolved after the geometry, and lowered with the material events.
     pub dressing: bool,
     /// The entities' names (`name-fromsoft-entities`).
     pub entity_names: bool,
-    /// The weapons held. The assembly's `leave_out` must be their sources.
-    pub held: Option<HeldWeapons>,
+    /// How held weapons are held, after the assets are placed. The assembly must leave out what the read marks held
+    /// (`leave-out-marked=fromsoft.held_weapon`).
+    pub held: Option<HoldFromSoftWeapons>,
     /// The geometry. Its `uv-tiling` must be `keep`: the surface bake reads the authored UVs.
     pub geometry: LowerFromSoftGeometry,
     /// Each material's game program bound before the materials are consumed.
@@ -325,7 +319,7 @@ pub struct CharacterPreparation {
     pub material_bake: BakeFromSoftMaterials,
     /// A part's own collision (a weapon's `_collidable.hkx`) as collision on the part.
     pub part_collision: LowerFromSoftPartCollision,
-    /// How several parts are related into one character; run where there is more than one part.
+    /// How the parts are related into one character.
     pub assembly: AssembleCharacter,
     /// The schedule the character's simulations run at.
     pub simulations: ConfigureSimulations,
@@ -336,21 +330,19 @@ impl CharacterPreparation {
     pub fn texts(&self) -> Result<Vec<String>, String> {
         materials_agree(self.materials, &self.lower_materials)?;
         keeps_the_authored_uvs(&self.geometry)?;
-        let held: &[String] = self.held.as_ref().map_or(&[], |h| &h.held);
-        if self.parts > 1 && self.assembly.leave_out != held {
+        let held = crate::sekiro::effect_data::HeldWeapon::NAME;
+        if self.held.is_some() && self.assembly.leave_out_marked.as_deref() != Some(held) {
             return Err(format!(
-                "held weapons [{}]: assemble-character leaves out [{}]; the assembly leaves out exactly the held \
-                 weapons' sources",
-                held.join(", "),
-                self.assembly.leave_out.join(", ")
+                "hold-fromsoft-weapons holds the weapons the read marks {held}, but assemble-character leaves out {}: \
+                 the assembly leaves out leave-out-marked={held}",
+                self.assembly
+                    .leave_out_marked
+                    .as_deref()
+                    .map_or_else(|| "nothing".to_owned(), |m| format!("what {m} marks"))
             ));
         }
         let key = game_key(self.game);
-        let mut texts = Vec::new();
-        if !self.select_assets.is_empty() {
-            texts.push(format!("select-assets{{names={}}}", self.select_assets.join(";")));
-        }
-        texts.push(pass_text(&self.geometry));
+        let mut texts = vec![REQUESTED_FORM.to_owned(), pass_text(&self.geometry)];
         if self.dressing {
             texts.push("lower-fromsoft-selected-outfit".to_owned());
         }
@@ -363,9 +355,7 @@ impl CharacterPreparation {
             pass_text(&self.material_bake),
             pass_text(&self.part_collision),
         ]);
-        if self.parts > 1 {
-            texts.push(pass_text(&self.assembly));
-        }
+        texts.push(pass_text(&self.assembly));
         if let Some(binding) = &self.animations {
             texts.push(pass_text(binding));
         }
@@ -378,10 +368,8 @@ impl CharacterPreparation {
             texts.push(format!("name-fromsoft-entities{{game={key}}}"));
         }
         texts.push("place-assets".to_owned());
-        if let Some(weapons) = &self.held
-            && !weapons.held.is_empty()
-        {
-            texts.push(pass_text(&weapons.hold));
+        if let Some(hold) = &self.held {
+            texts.push(pass_text(hold));
         }
         Ok(texts)
     }

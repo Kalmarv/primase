@@ -21,8 +21,9 @@ The example sources document their inputs and output paths.
 glTF binaries from an Elden Ring install: the player's starting outfit (initializer row 3002, the female
 presentation) and a slice of Stormveil Castle at a stated hour. Each states its choices (the outfit row; the region,
 the environment file and the hour) as constants, reads, runs registered passes and the glTF writer, and prints the
-passes' reports and what the writer left out, and writes the passes it ran beside the output (`<output>.passes.txt`,
-one pass per line as each pass states itself), for a program that prepares the same read the same way. They find the
+passes' reports and what the writer left out, and writes what it ran beside the output (`<output>.preparation.txt`):
+its `[selection]`, `[read]`, `[lowering]` and `[writer]` stages, each stage's texts one per line as each states itself,
+for a program that reads and prepares the same asset the same way. They find the
 install and the archive keys through the `GAME_DATA` configuration (`elden`, declared in `tests/inputs/mod.rs`) and
 take the output file as their argument:
 

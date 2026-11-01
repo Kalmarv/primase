@@ -1,6 +1,6 @@
 //! Weapons held where the game holds them: the player's parts read with a weapon row in the right hand, the character's
 //! own model's dummy polygons placed on them (where weapons stand, with Elden Ring's body part's in the 2000s), the body
-//! assembled without the weapon (`leave-out=`), every asset placed, and `hold-fromsoft-weapons{grip=one-handed}`
+//! assembled without the weapon (`leave-out-marked=fromsoft.held_weapon`), every asset placed, and `hold-fromsoft-weapons{grip=one-handed}`
 //! attaching each weapon model's rig to the dummy polygon its `WepAbsorpPosParam` row names. Sekiro's Kusabimaru (row
 //! 8000000, hold row 5000): the blade (model 0) at dummy polygon 20 (the right hand's `R_Weapon`), the scabbard (model 1)
 //! at 147 (`Sheath`), model 2 at 149 (`LargeSheath`). Elden Ring's Uchigatana (9000000, hold row 29): the blade at 20, the
@@ -155,9 +155,8 @@ fn the_player_holds_a_weapon_at_the_dummy_polygons_its_rows_name() -> Result<()>
             let m = PassManager::new(registry);
             let pipeline = format!(
                 "lower-fromsoft-geometry{{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program}}, \
-             assemble-character{{correspondence=by-name,reference-pose=assembled,tolerance=0.001,unweighted-rests=report,weighted-rests=report,name=assembled,leave-out={}}}, \
-             place-assets, hold-fromsoft-weapons{{grip={grip}}}",
-                held_sources.join("+")
+             assemble-character{{correspondence=by-name,reference-pose=assembled,tolerance=0.001,unweighted-rests=report,weighted-rests=report,name=assembled,leave-out-marked=fromsoft.held_weapon}}, \
+             place-assets, hold-fromsoft-weapons{{grip={grip}}}"
             );
             let mut run = RunReport::default();
             m.run(&mut w, &m.registry.parse(&pipeline)?, &mut run)?;

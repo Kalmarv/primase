@@ -6,7 +6,7 @@ use super::super::passes::object_collision::{
     ConvexBodies, ConvexSurface, MotionSelection, ResolutionChoice,
 };
 use super::super::passes::settings::{Factor, Fraction, Metres, PixelCap, Seconds};
-use super::super::passes::weapons::Grip;
+use super::super::passes::weapons::{Grip, HoldGrip};
 use super::super::passes::{Cards, Degenerates, Pose, SpeedTreeFrame, Unbound, Winding};
 use super::*;
 use primase_animation::simulation_schedule::SimulationSchedule;
@@ -72,7 +72,10 @@ fn resolve() -> ResolveFromSoftShaders {
     ResolveFromSoftShaders::new(Unbound::Preview)
 }
 
-fn assembly(leave_out: &[String]) -> AssembleCharacter {
+/// What the read marks held: the assembly leaves it out where weapons are held.
+const HELD: &str = "fromsoft.held_weapon";
+
+fn assembly(marked: Option<&str>) -> AssembleCharacter {
     AssembleCharacter {
         correspondence: Correspondence::ByName,
         reference_pose: ReferencePose::Assembled,
@@ -81,7 +84,7 @@ fn assembly(leave_out: &[String]) -> AssembleCharacter {
         unweighted_rests: UnweightedRests::Report,
         weighted_rests: WeightedRests::Report,
         name: "assembled".into(),
-        leave_out: leave_out.to_vec(),
+        leave_out_marked: marked.map(str::to_owned),
     }
 }
 
@@ -89,8 +92,6 @@ fn character() -> CharacterPreparation {
     CharacterPreparation {
         game: Game::Sekiro,
         materials: Materials::Preserve,
-        parts: 1,
-        select_assets: Vec::new(),
         animations: None,
         dressing: false,
         entity_names: false,
@@ -111,7 +112,7 @@ fn character() -> CharacterPreparation {
             convex: ConvexBodies::Rounded(metres(0.01)),
             motion: MotionSelection::All,
         },
-        assembly: assembly(&[]),
+        assembly: assembly(None),
         simulations: ConfigureSimulations(SimulationSchedule::new(1. / 30., 30, 8).unwrap()),
     }
 }
@@ -236,9 +237,9 @@ fn texts(texts: &[&str]) -> Vec<String> {
     texts.iter().map(|text| (*text).to_owned()).collect()
 }
 
-/// The values the programs state are the ones the builders once fixed, so these preparations are the pass lists the
-/// builders stated then: each list below is one of them as it was written, compared pass by pass as each pass states
-/// itself.
+/// The pass lists the preparations state, compared pass by pass as each pass states itself: the values the builders
+/// once fixed, with a character's requested form kept first and its parts always assembled (one part is nothing to
+/// relate), held weapons left out by their mark.
 #[test]
 fn the_stated_values_give_the_pass_lists_the_builders_fixed() {
     const CHARACTER_GEOMETRY: &str = "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program}";
@@ -252,35 +253,31 @@ fn the_stated_values_give_the_pass_lists_the_builders_fixed() {
     const RECORDS: &str = "lower-fromsoft-map-records{leave-out=}";
 
     let one_part = texts(&[
+        "select-fromsoft-requested-form",
         CHARACTER_GEOMETRY,
         RESOLVE,
         "lower-fromsoft-materials{layers=preserve,water-colour=48,98,122,190}",
         "bake-fromsoft-materials{max-size=2048,sample-time=0,cache=on}",
         PART_COLLISION,
+        "assemble-character{correspondence=by-name,reference-pose=assembled,tolerance=0.001,unweighted-rests=report,weighted-rests=report,name=assembled}",
         SIMULATIONS,
         "place-assets",
     ]);
     assert_eq!(canonical(&character().texts().unwrap()), canonical(&one_part));
 
-    let held = vec!["parts/wp_a_0300_l".to_owned()];
     let dressed = CharacterPreparation {
         game: Game::EldenRing,
-        parts: 2,
-        select_assets: vec!["wp_a_0300_l".into(), "c0000 animations".into()],
         animations: Some(binding("c0000", "any", "source", "model-space")),
         dressing: true,
         entity_names: true,
-        held: Some(HeldWeapons {
-            held: held.clone(),
-            hold: HoldFromSoftWeapons {
-                grip: Grip::OneHanded,
-            },
+        held: Some(HoldFromSoftWeapons {
+            grip: HoldGrip::Stated(Grip::OneHanded),
         }),
-        assembly: assembly(&held),
+        assembly: assembly(Some(HELD)),
         ..character_with(bake_layers())
     };
     let dressed_was = texts(&[
-        "select-assets{names=wp_a_0300_l;c0000 animations}",
+        "select-fromsoft-requested-form",
         CHARACTER_GEOMETRY,
         "lower-fromsoft-selected-outfit",
         RESOLVE,
@@ -288,7 +285,7 @@ fn the_stated_values_give_the_pass_lists_the_builders_fixed() {
         "lower-fromsoft-materials{water-colour=48,98,122,190}",
         "bake-fromsoft-materials{max-size=2048,sample-time=0,cache=on}",
         PART_COLLISION,
-        "assemble-character{correspondence=by-name,reference-pose=assembled,tolerance=0.001,unweighted-rests=report,weighted-rests=report,name=assembled,leave-out=parts/wp_a_0300_l}",
+        "assemble-character{correspondence=by-name,reference-pose=assembled,tolerance=0.001,unweighted-rests=report,weighted-rests=report,name=assembled,leave-out-marked=fromsoft.held_weapon}",
         "bind-fromsoft-animation{from=c0000 havok skeleton,to=c0000 skeleton,tolerance=0.0001,empty=model-space,absent=neutral,rate=2,root-motion=translation,clips=all,unmapped=drop,parents=any,rests=source,reparented=model-space}",
         SIMULATIONS,
         "lower-fromsoft-display-masks",
@@ -414,7 +411,8 @@ fn the_stated_values_give_the_pass_lists_the_builders_fixed() {
 fn character_preparation_keeps_the_skinned_bind_pose_and_places_the_asset() {
     let prep = character();
     let texts = prep.texts().unwrap();
-    assert_eq!(texts[0], pass_text(&prep.geometry));
+    assert_eq!(texts[0], "select-fromsoft-requested-form");
+    assert_eq!(texts[1], pass_text(&prep.geometry));
     assert!(
         !texts.iter().any(|t| t == "fromsoft-apply-rigid-skinning"),
         "{texts:?}"
@@ -443,13 +441,11 @@ fn character_preparation_keeps_the_skinned_bind_pose_and_places_the_asset() {
     );
 }
 
-/// A character of several parts is assembled before the asset is placed; a character of one part is not assembled.
+/// A character's parts are assembled before the asset is placed, however many the read found (one is nothing to
+/// relate, which the assembly reports).
 #[test]
-fn several_parts_are_assembled_before_they_are_placed() {
-    let prep = CharacterPreparation {
-        parts: 2,
-        ..character()
-    };
+fn the_parts_are_assembled_before_they_are_placed() {
+    let prep = character();
     let texts = prep.texts().unwrap();
     let assemble = texts
         .iter()
@@ -460,31 +456,16 @@ fn several_parts_are_assembled_before_they_are_placed() {
         .position(|t| t == "place-assets")
         .expect("the asset is placed");
     assert!(assemble < place, "{texts:?}");
-    assert!(
-        !character()
-            .texts()
-            .unwrap()
-            .iter()
-            .any(|t| t.starts_with("assemble-character"))
-    );
 }
 
-/// Held weapons are left out of the body's assembly (the program states that leave-out) and held after the assets are
-/// placed, as stated; an assembly whose leave-out is not the held weapons' sources is refused.
+/// Held weapons are left out of the body's assembly by the read's mark (the program states that leave-out) and held
+/// after the assets are placed, as stated; holding weapons the assembly does not leave out is refused.
 #[test]
 fn held_weapons_are_left_out_of_the_assembly_and_held_after_placing() {
-    let held = vec![
-        "parts/wp_a_0300_l".to_owned(),
-        "parts/wp_a_0300_l/wp_a_0300_1_l".to_owned(),
-    ];
     let hold = |grip| HoldFromSoftWeapons { grip };
     let stated = CharacterPreparation {
-        parts: 2,
-        held: Some(HeldWeapons {
-            held: held.clone(),
-            hold: hold(Grip::OneHanded),
-        }),
-        assembly: assembly(&held),
+        held: Some(hold(HoldGrip::Stated(Grip::OneHanded))),
+        assembly: assembly(Some(HELD)),
         ..character()
     };
     let texts = stated.texts().unwrap();
@@ -493,54 +474,40 @@ fn held_weapons_are_left_out_of_the_assembly_and_held_after_placing() {
         .find(|t| t.starts_with("assemble-character"))
         .unwrap();
     assert!(
-        assemble.contains("leave-out=parts/wp_a_0300_l+parts/wp_a_0300_l/wp_a_0300_1_l"),
+        assemble.contains("leave-out-marked=fromsoft.held_weapon"),
         "{assemble}"
     );
     let place = texts.iter().position(|t| t == "place-assets").unwrap();
     assert_eq!(texts[place + 1], "hold-fromsoft-weapons{grip=one-handed}");
     parses_and_orders(&texts);
 
-    // the assembly's leave-out is the program's to state: one that is not the held weapons' is refused, either way
-    let unstated = CharacterPreparation {
-        assembly: assembly(&[]),
+    // the assembly's leave-out is the program's to state: holding weapons it does not leave out is refused
+    for assembly in [assembly(None), assembly(Some("core.name"))] {
+        let refusal = CharacterPreparation {
+            assembly,
+            ..stated.clone()
+        }
+        .texts()
+        .unwrap_err();
+        assert!(
+            refusal.contains("hold-fromsoft-weapons") && refusal.contains("assemble-character"),
+            "{refusal}"
+        );
+    }
+    // the save's grip, stated as such
+    let saved = CharacterPreparation {
+        held: Some(hold(HoldGrip::Saved)),
         ..stated.clone()
-    };
-    let refusal = unstated.texts().unwrap_err();
-    assert!(
-        refusal.contains("held weapons") && refusal.contains("assemble-character"),
-        "{refusal}"
-    );
-    let unheld = CharacterPreparation {
-        held: None,
-        ..stated.clone()
-    };
-    assert!(unheld.texts().is_err());
-
-    // one part is not assembled: the weapons are held after it is placed
-    let one = CharacterPreparation {
-        parts: 1,
-        held: Some(HeldWeapons {
-            held: held.clone(),
-            hold: hold(Grip::TwoHandedRight),
-        }),
-        ..character()
     };
     assert_eq!(
-        one.texts().unwrap().last().unwrap(),
-        "hold-fromsoft-weapons{grip=two-handed-right}"
+        saved.texts().unwrap().last().unwrap(),
+        "hold-fromsoft-weapons{grip=saved}"
     );
-    // no weapon, no hold
-    let none = CharacterPreparation {
-        held: Some(HeldWeapons {
-            held: Vec::new(),
-            hold: hold(Grip::OneHanded),
-        }),
-        assembly: assembly(&[]),
-        ..stated
-    };
+    parses_and_orders(&saved.texts().unwrap());
+    // no hold: nothing is held after placing
+    let none = CharacterPreparation { held: None, ..stated };
     let texts = none.texts().unwrap();
     assert!(!texts.iter().any(|t| t.starts_with("hold-fromsoft-weapons")));
-    assert!(!texts.iter().any(|t| t.contains("leave-out=parts/")), "{texts:?}");
 }
 
 #[test]
@@ -561,11 +528,11 @@ fn no_row_is_the_hidden_masks_form_of_the_outfit_pass() {
 #[test]
 fn the_outfit_passes_follow_the_geometry_lowering() {
     let mut texts = character().texts().unwrap();
-    texts.splice(1..1, outfit_passes("c3000", Some(30000000)));
-    assert!(texts[0].starts_with("lower-fromsoft-geometry"), "{texts:?}");
-    assert_eq!(texts[1], "raise-fromsoft-display-masks");
-    assert_eq!(texts[2], "select-fromsoft-outfit{chr=c3000,npc=30000000}");
-    assert_eq!(texts[3], "resolve-state");
+    texts.splice(2..2, outfit_passes("c3000", Some(30000000)));
+    assert!(texts[1].starts_with("lower-fromsoft-geometry"), "{texts:?}");
+    assert_eq!(texts[2], "raise-fromsoft-display-masks");
+    assert_eq!(texts[3], "select-fromsoft-outfit{chr=c3000,npc=30000000}");
+    assert_eq!(texts[4], "resolve-state");
     assert_eq!(texts.last().map(String::as_str), Some("place-assets"));
     parses_and_orders(&texts);
 }
@@ -591,20 +558,19 @@ fn the_animation_passes_run_after_the_model_is_lowered_and_before_it_is_placed()
     parses_and_orders(&texts);
 }
 
-/// A dressed character's preparation: the outfit resolved right after the geometry, and the display masks, material
-/// events and names right before the asset is placed; a form of a part keeps only its names.
+/// A dressed character's preparation: the requested form kept first, the outfit resolved right after the geometry,
+/// and the display masks, material events and names right before the asset is placed.
 #[test]
 fn a_dressed_character_states_its_outfit_after_the_geometry_and_its_events_before_placing() {
     let texts = CharacterPreparation {
         game: Game::EldenRing,
         dressing: true,
         entity_names: true,
-        select_assets: vec!["wp_a_0761_l".into(), "c0000 animations".into()],
         ..character()
     }
     .texts()
     .unwrap();
-    assert_eq!(texts[0], "select-assets{names=wp_a_0761_l;c0000 animations}");
+    assert_eq!(texts[0], "select-fromsoft-requested-form");
     assert!(texts[1].starts_with("lower-fromsoft-geometry"), "{texts:?}");
     assert_eq!(texts[2], "lower-fromsoft-selected-outfit");
     let n = texts.len();

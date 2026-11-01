@@ -75,6 +75,115 @@ pub enum StandaloneAsset {
         form: String,
     },
 }
+/// A character read as a program states it in text (`read-fromsoft-character{id=c0000,role=player,weapons=false,...}`):
+/// the character, where the text names one (its id and role, both or neither), and what the read reads at all: the
+/// weapon inventory and the held weapons' models (`weapons`), the character's animations (`animations`), and the
+/// effects a loaded clip's events start (`clip-effects`, which takes the animations). Which weapons, clips, NPC row,
+/// initializer or save are the user's picks, not the text's; a text that reads no weapons (or no animations) refuses
+/// a pick of one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CharacterReadText {
+    /// The character's model id and role, or none: the program running the text names the asset.
+    pub character: Option<(String, CharacterRole)>,
+    pub weapons: bool,
+    pub animations: bool,
+    pub clip_effects: bool,
+}
+
+impl primase_core::pass::Choice for CharacterRole {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("player", CharacterRole::Player), ("npc", CharacterRole::Npc)];
+}
+
+impl primase_core::pass::TextForm for CharacterReadText {
+    const NAME: &'static str = "read-fromsoft-character";
+    const OPTIONS: &'static [primase_core::pass::OptionSpec] = &[
+        primase_core::pass::OptionSpec::optional(
+            "id",
+            "c0000",
+            "the character's model id, with its role",
+            "the program running the text names the asset",
+        ),
+        primase_core::pass::OptionSpec::optional_choice::<CharacterRole>(
+            "role",
+            "what the model is read as, with its id",
+            "the program running the text names the asset",
+        ),
+        primase_core::pass::OptionSpec::choice::<bool>(
+            "weapons",
+            "whether the weapon inventory and the held weapons' models are read",
+        ),
+        primase_core::pass::OptionSpec::choice::<bool>(
+            "animations",
+            "whether the character's animations are read",
+        ),
+        primase_core::pass::OptionSpec::choice::<bool>(
+            "clip-effects",
+            "whether the effects a loaded clip's events start are read (with the animations)",
+        ),
+    ];
+
+    fn make(given: &primase_core::pass::Given) -> std::result::Result<Self, String> {
+        use primase_core::pass::Choice;
+        let character = match (
+            given.optional("id"),
+            given.optional_choice::<CharacterRole>("role"),
+        ) {
+            (Some(id), _) if id.trim().is_empty() => {
+                return Err("id is empty: name the model or leave id and role out".into());
+            }
+            (Some(id), Some(role)) => Some((id.to_owned(), role)),
+            (None, None) => None,
+            (Some(id), None) => {
+                return Err(format!("id={id} states no role: id and role are stated together"));
+            }
+            (None, Some(role)) => {
+                return Err(format!(
+                    "role={} names no id: id and role are stated together",
+                    role.text()
+                ));
+            }
+        };
+        let animations: bool = given.choice("animations");
+        let clip_effects: bool = given.choice("clip-effects");
+        if clip_effects && !animations {
+            return Err(
+                "clip-effects=true with animations=false: a clip's effects are read with the animations"
+                    .into(),
+            );
+        }
+        Ok(CharacterReadText {
+            character,
+            weapons: given.choice("weapons"),
+            animations,
+            clip_effects,
+        })
+    }
+
+    fn options(&self) -> primase_core::pass::Options {
+        use primase_core::pass::Choice;
+        let mut options = primase_core::pass::Options::from([
+            ("weapons".to_owned(), self.weapons.text().to_owned()),
+            ("animations".to_owned(), self.animations.text().to_owned()),
+            ("clip-effects".to_owned(), self.clip_effects.text().to_owned()),
+        ]);
+        if let Some((id, role)) = &self.character {
+            options.insert("id".into(), id.clone());
+            options.insert("role".into(), role.text().into());
+        }
+        options
+    }
+}
+
+impl CharacterReadText {
+    /// The asset the text names, if it names one.
+    pub fn asset(&self) -> Option<StandaloneAsset> {
+        self.character
+            .clone()
+            .map(|(id, role)| StandaloneAsset::Character { id, role })
+    }
+}
+
 /// What a character model is read as. The id does not decide it: the player's model (`c0000`) is also the model of
 /// the human NPCs the maps place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -504,20 +613,19 @@ pub fn read_inventory(
     }
     Ok(world)
 }
-/// Explicit user choices accompanying a selected inventory; no source default is synthesized.
+/// Explicit user choices accompanying a selected inventory; no source default is synthesized. How held weapons are
+/// held is `hold-fromsoft-weapons`' (`grip=`, or the saved hold's, which the read carries to the lowering).
 #[derive(Debug)]
 pub struct SelectedModelRequest {
     pub asset: StandaloneAsset,
     pub animations: Option<AnimationScope>,
     pub weapons: crate::sekiro::effect_data::EquippedWeapons,
-    pub grip: Option<String>,
     pub clip_effects: bool,
 }
 #[derive(Debug)]
 pub struct SelectedModelRead<'a> {
     pub models: ModelRead<'a>,
     pub details: serde_json::Value,
-    pub grip: Option<String>,
 }
 pub fn read_selected_models<'a>(
     install: Install,
@@ -532,16 +640,6 @@ pub fn read_selected_models<'a>(
     }
     let saved = selected.resource::<SelectedSavedHold>();
     let weapons = saved.map_or(request.weapons, |saved| saved.state.held());
-    let grip = saved
-        .map(|saved| {
-            match saved.state.grip() {
-                crate::sekiro::passes::weapons::Grip::OneHanded => "one-handed",
-                crate::sekiro::passes::weapons::Grip::TwoHandedRight => "two-handed-right",
-                crate::sekiro::passes::weapons::Grip::TwoHandedLeft => "two-handed-left",
-            }
-            .to_owned()
-        })
-        .or(request.grip);
     let parts = if weapons.is_empty() {
         vec![]
     } else {
@@ -610,6 +708,10 @@ pub fn read_selected_models<'a>(
     if let Some(suggestions) = selected.resource::<primase_core::opening::OpeningSuggestions>() {
         models.world.insert_resource(suggestions.clone());
     }
+    // the saved hold's grip is hold-fromsoft-weapons{grip=saved}'s to read
+    if let Some(saved) = saved {
+        models.world.insert_resource(saved.clone());
+    }
     if let Some(saved) = saved {
         let mut report = selected
             .resource::<AttackSelection>()
@@ -618,21 +720,14 @@ pub fn read_selected_models<'a>(
             .flatten()
             .unwrap_or_else(|| serde_json::json!({}));
         let mut saved_report = saved.report.clone();
-        saved_report["grip"] = serde_json::json!(grip);
+        saved_report["grip"] = serde_json::json!(primase_core::pass::Choice::text(saved.state.grip()));
         report["save"] = saved_report;
         details["player"] = report;
     }
     if !models.held.is_empty() {
-        let grip = grip
-            .as_ref()
-            .ok_or("held weapons require an explicit hold-fromsoft-weapons grip choice")?;
-        details["weapons"] = serde_json::json!({"held":models.held,"grip":grip});
+        details["weapons"] = serde_json::json!({ "held": models.held });
     }
-    Ok(SelectedModelRead {
-        models,
-        details,
-        grip,
-    })
+    Ok(SelectedModelRead { models, details })
 }
 
 /// Raw FLVER mesh availability and material display-group markers, without material/texture lowering.
@@ -727,46 +822,8 @@ pub fn game_key(game: fromsoft_formats::Game) -> &'static str {
     crate::sekiro::program::game_key(game)
 }
 
-/// Public loading scope. Sampling, absent-track interpretation and root motion are pass settings, not read defaults.
-pub static CHARACTER_SCOPE: primase_core::read_scope::ReadScopeSpec =
-    primase_core::read_scope::ReadScopeSpec {
-        name: "fromsoft-character",
-        options: &[
-            primase_core::pass::OptionSpec::optional_choice::<bool>(
-                "animations",
-                "list animation plans without decoding tracks",
-                "no animation family requested",
-            ),
-            primase_core::pass::OptionSpec::optional_choice::<bool>(
-                "effects",
-                "read event-referenced effects when a selected clip is loaded",
-                "no effect payloads requested",
-            ),
-        ],
-    };
-/// Caller-selected part forms and animation family; absent family means no animations, never the player by default.
-pub static PARTS_SCOPE: primase_core::read_scope::ReadScopeSpec = primase_core::read_scope::ReadScopeSpec {
-    name: "fromsoft-parts",
-    options: &[
-        primase_core::pass::OptionSpec::optional(
-            "animations_of",
-            "c0000",
-            "the explicitly named animation family",
-            "no animation family requested",
-        ),
-        primase_core::pass::OptionSpec::optional(
-            "form",
-            "wp_a_0761_l",
-            "one explicitly requested form",
-            "all forms remain candidates",
-        ),
-        primase_core::pass::OptionSpec::optional_choice::<bool>(
-            "effects",
-            "read event-referenced effects when a selected clip is loaded",
-            "no effect payloads requested",
-        ),
-    ],
-};
+/// The scopes a character's and a set of parts' reads record (declarations, in the components).
+pub use crate::sekiro::components::standalone::{CHARACTER_SCOPE, PARTS_SCOPE};
 
 fn loading_scope(
     asset: &StandaloneAsset,
@@ -791,4 +848,83 @@ fn loading_scope(
         }
     };
     spec.resolve(options).map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use primase_core::pass::{TextForm, parse_text_form, text_form, validate_text_form};
+
+    /// The text reads back as the read it was printed from, every field: two reads that differ in each, the second
+    /// naming no character.
+    #[test]
+    fn a_character_read_reads_back_from_its_text() {
+        validate_text_form::<CharacterReadText>();
+        let one = CharacterReadText {
+            character: Some(("c0000".into(), CharacterRole::Player)),
+            weapons: false,
+            animations: true,
+            clip_effects: true,
+        };
+        let other = CharacterReadText {
+            character: None,
+            weapons: true,
+            animations: false,
+            clip_effects: false,
+        };
+        for read in [&one, &other] {
+            let text = text_form(read);
+            assert_eq!(
+                &parse_text_form::<CharacterReadText>(&text).unwrap(),
+                read,
+                "{text}"
+            );
+        }
+        assert_eq!(
+            text_form(&one),
+            "read-fromsoft-character{animations=true,clip-effects=true,id=c0000,role=player,weapons=false}"
+        );
+        let (a, b) = (one.options(), other.options());
+        for key in ["weapons", "animations", "clip-effects"] {
+            assert_ne!(a[key], b[key], "{key}");
+        }
+        assert_eq!(a.len(), CharacterReadText::OPTIONS.len());
+        assert!(matches!(
+            one.asset(),
+            Some(StandaloneAsset::Character { id, role: CharacterRole::Player }) if id == "c0000"
+        ));
+        assert!(other.asset().is_none());
+    }
+
+    /// Nothing is defaulted, id and role come together, and a clip's effects take the animations: each refusal names
+    /// the option.
+    #[test]
+    fn a_character_read_text_refuses_naming_the_option() {
+        let refusal = |text: &str| {
+            parse_text_form::<CharacterReadText>(text)
+                .unwrap_err()
+                .to_string()
+        };
+        let base = "animations=true,clip-effects=false,weapons=false";
+        assert!(
+            refusal("read-fromsoft-character{animations=true,clip-effects=false}")
+                .contains("weapons is required")
+        );
+        assert!(
+            refusal(&format!("read-fromsoft-character{{{base},id=c0000}}"))
+                .contains("id=c0000 states no role")
+        );
+        assert!(
+            refusal(&format!("read-fromsoft-character{{{base},role=npc}}")).contains("role=npc names no id")
+        );
+        assert!(
+            refusal(&format!("read-fromsoft-character{{{base},id=c1010,role=boss}}"))
+                .contains("role=boss is none of player or npc")
+        );
+        assert!(
+            refusal("read-fromsoft-character{animations=false,clip-effects=true,weapons=false}")
+                .contains("a clip's effects are read with the animations")
+        );
+        assert!(refusal(&format!("read-fromsoft-character{{{base},npc=1}}")).contains("unknown option npc"));
+    }
 }

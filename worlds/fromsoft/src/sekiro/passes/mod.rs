@@ -102,6 +102,7 @@ pub fn register(registry: &mut PassRegistry) {
         &standalone::SELECT_FROMSOFT_DRESSING,
         &standalone::BIND_FROMSOFT_ANIMATION,
         &standalone::SELECT_FROMSOFT_WEAPON_FORMS,
+        &standalone::SELECT_FROMSOFT_REQUESTED_FORM,
         &standalone::SELECT_FROMSOFT_SAVED_HOLD,
         &standalone::SELECT_FROMSOFT_CHARACTER_READ,
         &standalone::LOWER_FROMSOFT_SELECTED_OUTFIT,

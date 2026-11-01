@@ -284,43 +284,55 @@ impl Pass for SelectAssets {
         true
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let roots: Vec<Entity> = w.iter::<Asset>().map(|(e, _)| e).collect();
-        let mut selected = BTreeSet::new();
-        for value in &self.values {
-            let matched: Vec<Entity> = roots
-                .iter()
-                .copied()
-                .filter(|&r| self.field.of(w, r) == Some(value.as_str()))
-                .collect();
-            if matched.is_empty() {
-                let mut there: Vec<&str> = roots.iter().filter_map(|&r| self.field.of(w, r)).collect();
-                there.sort_unstable();
-                let shown = there.iter().take(20).copied().collect::<Vec<_>>().join(", ");
-                let more = there.len().saturating_sub(20);
-                return Err(format!(
-                    "no asset whose {} is {value} (the world's: {shown}{})",
-                    match self.field {
-                        AssetField::Key => "core.source",
-                        AssetField::Name => "core.name",
-                    },
-                    if more > 0 {
-                        format!(" and {more} more")
-                    } else {
-                        String::new()
-                    }
-                ));
-            }
-            selected.extend(matched);
-        }
-        let keep = w.closure(selected.iter().copied());
-        let gone: Vec<Entity> = w.entities().filter(|e| !keep.contains(e)).collect();
-        log.count("assets selected", selected.len() as u64);
-        log.count("assets left out", (roots.len() - selected.len()) as u64);
-        for e in gone {
-            crate::ledger::despawn(w, e, log, "not in a selected asset");
-        }
-        Ok(())
+        keep_assets(w, self.field, &self.values, log)
     }
+}
+
+/// What `select-assets` does, for a pass that keeps assets it finds named elsewhere (what a read was asked for): the
+/// assets whose roots' `field` is one of `values` kept with everything they reach, every other entity despawned and
+/// counted as left out; a value matching no asset refused, naming the assets there are.
+pub fn keep_assets(
+    w: &mut World,
+    field: AssetField,
+    values: &[String],
+    log: &mut PassLog,
+) -> Result<(), String> {
+    let roots: Vec<Entity> = w.iter::<Asset>().map(|(e, _)| e).collect();
+    let mut selected = BTreeSet::new();
+    for value in values {
+        let matched: Vec<Entity> = roots
+            .iter()
+            .copied()
+            .filter(|&r| field.of(w, r) == Some(value.as_str()))
+            .collect();
+        if matched.is_empty() {
+            let mut there: Vec<&str> = roots.iter().filter_map(|&r| field.of(w, r)).collect();
+            there.sort_unstable();
+            let shown = there.iter().take(20).copied().collect::<Vec<_>>().join(", ");
+            let more = there.len().saturating_sub(20);
+            return Err(format!(
+                "no asset whose {} is {value} (the world's: {shown}{})",
+                match field {
+                    AssetField::Key => "core.source",
+                    AssetField::Name => "core.name",
+                },
+                if more > 0 {
+                    format!(" and {more} more")
+                } else {
+                    String::new()
+                }
+            ));
+        }
+        selected.extend(matched);
+    }
+    let keep = w.closure(selected.iter().copied());
+    let gone: Vec<Entity> = w.entities().filter(|e| !keep.contains(e)).collect();
+    log.count("assets selected", selected.len() as u64);
+    log.count("assets left out", (roots.len() - selected.len()) as u64);
+    for e in gone {
+        crate::ledger::despawn(w, e, log, "not in a selected asset");
+    }
+    Ok(())
 }
 
 /// `partition-by-asset` (no options): a [`PartitionPlan`] of one part per asset, so a conversion writes each asset

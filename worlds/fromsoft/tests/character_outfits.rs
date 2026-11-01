@@ -16,11 +16,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 /// joint name at the assembled rest, within 1 mm (0.1 mm for a reparented joint), disagreements reported; simulations
 /// at 30 Hz with 30 steps of pre-roll and at most 8 steps a frame. `dressed`: the outfit's display masks resolved and
 /// the entities named.
-fn preparation(
-    game: Game,
-    parts: usize,
-    dressed: bool,
-) -> primase_fromsoft::sekiro::program::CharacterPreparation {
+fn preparation(game: Game, dressed: bool) -> primase_fromsoft::sekiro::program::CharacterPreparation {
     use primase_animation::simulation_schedule::{ConfigureSimulations, SimulationSchedule};
     use primase_animation::{
         AssembleCharacter, Correspondence, ReferencePose, UnweightedRests, WeightedRests,
@@ -39,8 +35,6 @@ fn preparation(
     CharacterPreparation {
         game,
         materials: Materials::Preserve,
-        parts,
-        select_assets: Vec::new(),
         animations: None,
         dressing: dressed,
         entity_names: dressed,
@@ -76,7 +70,7 @@ fn preparation(
             unweighted_rests: UnweightedRests::Report,
             weighted_rests: WeightedRests::Report,
             name: "assembled".into(),
-            leave_out: Vec::new(),
+            leave_out_marked: None,
         },
         simulations: ConfigureSimulations(SimulationSchedule::new(1. / 30., 30, 8).expect("a schedule")),
     }
@@ -350,7 +344,6 @@ fn an_outfit_read_without_animations_assembles_against_the_players_skeleton() ->
             asset,
             animations: None,
             weapons: Default::default(),
-            grip: None,
             clip_effects: false,
         },
     )
@@ -390,7 +383,7 @@ fn an_outfit_read_without_animations_assembles_against_the_players_skeleton() ->
     }
 
     // the example's lowering assembles them
-    let texts = preparation(Game::EldenRing, parts, true).texts()?;
+    let texts = preparation(Game::EldenRing, true).texts()?;
     let mut report = RunReport::default();
     // texture baking is not what assembly depends on, and decoding the textures of four parts takes minutes
     let lowering: Vec<_> = texts
@@ -513,7 +506,6 @@ fn an_installed_npc_outfit_of_several_parts_assembles_without_a_reference() -> R
                 asset: asset.clone(),
                 animations: None,
                 weapons: Default::default(),
-                grip: None,
                 clip_effects: false,
             },
         )
@@ -528,7 +520,7 @@ fn an_installed_npc_outfit_of_several_parts_assembles_without_a_reference() -> R
                 );
             }
         }
-        let texts = preparation(game, parts.len(), false).texts()?;
+        let texts = preparation(game, false).texts()?;
         let mut report = RunReport::default();
         // texture baking is not what assembly depends on, and decoding the textures of four parts takes minutes
         let lowering: Vec<_> = texts

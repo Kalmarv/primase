@@ -84,12 +84,14 @@
 //! within `tolerance=`) that is counted; where they do not, the first part's (in part order) is kept and the others are
 //! reported by part with how many, never dropped silently.
 //!
-//! **Held objects** (`leave-out=`, optional): an asset whose `core.source` is one given, or under one
-//! (`parts/wp_a_0300_l` takes `parts/wp_a_0300_l/wp_a_0300_1_l`), `+` between, is not a part: an object the character
-//! holds (a weapon) keeps its own rig, and what attaches it to the character (`core.attachment`) is the program's. Each
-//! one left out is counted.
+//! **Held objects** (`leave-out-marked=`, optional): an asset whose root carries the component named (what a read marks
+//! as an object a character holds, a weapon) is not a part: an object the character holds keeps its own rig, and what
+//! attaches it to the character (`core.attachment`) is the program's. Each one left out is counted.
 //!
-//! The six original options are required; `leave-out=` and `reference-tolerance=` are optional. Approximations, reported: joints whose rests differ within the
+//! **One part** is nothing to relate: the world is left as it is, the part its own character, and the report says so.
+//! No part at all is refused: nothing was read to assemble.
+//!
+//! The six original options are required; `leave-out-marked=` and `reference-tolerance=` are optional. Approximations, reported: joints whose rests differ within the
 //! tolerance, the vertex displacement measure of `own`, the inverse binds `assembled` moves, and sockets of one name two
 //! parts place differently.
 
@@ -145,8 +147,8 @@ pub enum WeightedRests {
 }
 
 /// `assemble-character{correspondence=by-name|table, reference-pose=own|assembled, tolerance=<number>,
-/// unweighted-rests=report|refuse, weighted-rests=refuse|report, name=<word>[, leave-out=<source>+...]}` (see the module
-/// documentation).
+/// unweighted-rests=report|refuse, weighted-rests=refuse|report, name=<word>[, leave-out-marked=<component>]}` (see the
+/// module documentation).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AssembleCharacter {
     pub correspondence: Correspondence,
@@ -159,8 +161,8 @@ pub struct AssembleCharacter {
     pub weighted_rests: WeightedRests,
     /// The assembled asset's name.
     pub name: String,
-    /// The `core.source` of each asset that is a held object, not a part (`leave-out=`).
-    pub leave_out: Vec<String>,
+    /// The component whose presence on an asset's root makes it a held object, not a part (`leave-out-marked=`).
+    pub leave_out_marked: Option<String>,
 }
 
 impl Choice for Correspondence {
@@ -224,10 +226,10 @@ pub const ASSEMBLE_CHARACTER: PassSpec = PassSpec {
         ),
         OptionSpec::required("name", "character", "the assembled character's name, not empty"),
         OptionSpec::optional(
-            "leave-out",
-            "parts/wp_a_0300_l",
-            "the core.source of each asset that is an object the character holds, not a part of it (with the assets \
-             under it), `+` between",
+            "leave-out-marked",
+            "example.held",
+            "the name of the component that marks an asset (on its root) as an object the character holds, not a part \
+             of it",
             "every asset that holds a rig is a part",
         ),
     ],
@@ -259,27 +261,11 @@ fn assemble_character(g: &Given) -> Result<Box<dyn Pass>, String> {
         unweighted_rests: g.choice::<UnweightedRests>("unweighted-rests"),
         weighted_rests: g.choice::<WeightedRests>("weighted-rests"),
         name: name.to_owned(),
-        leave_out: match g.optional("leave-out") {
-            Some(list) => {
-                let sources: Vec<String> = list.split('+').map(str::to_owned).collect();
-                if sources.iter().any(String::is_empty) {
-                    return Err(format!("leave-out={list}: an empty source"));
-                }
-                sources
-            }
-            None => Vec::new(),
+        leave_out_marked: match g.optional("leave-out-marked") {
+            Some(name) if name.trim().is_empty() => return Err("leave-out-marked= names no component".into()),
+            name => name.map(str::to_owned),
         },
     }))
-}
-
-/// Whether `source` is one of `held` or under one (`parts/x` holds `parts/x/y`).
-fn is_held(source: &str, held: &[String]) -> bool {
-    held.iter().any(|h| {
-        source == h
-            || source
-                .strip_prefix(h.as_str())
-                .is_some_and(|rest| rest.starts_with('/'))
-    })
 }
 
 /// One asset that holds a rig.
@@ -316,8 +302,9 @@ fn gap(a: &Affine, b: &Affine) -> f64 {
         .fold(0.0, f64::max)
 }
 
-/// The assets that hold a rig and are parts (not held objects, [`is_held`]), and how many held objects were left out.
-fn gather(w: &World, held: &[String]) -> Result<(Vec<Part>, u64), String> {
+/// The assets that hold a rig and are parts (not held objects: their root carries the component `marked` names), and
+/// how many held objects were left out. None is refused.
+fn gather(w: &World, marked: Option<&str>) -> Result<(Vec<Part>, u64), String> {
     let mut parts = Vec::new();
     let mut left_out = 0u64;
     // the part asset that holds each entity: one entity cannot belong to two parts (it would be held twice by the
@@ -338,7 +325,7 @@ fn gather(w: &World, held: &[String]) -> Result<(Vec<Part>, u64), String> {
             [rig] => *rig,
             _ => return Err(format!("asset {label} has {} rigs: a part has one", rigs.len())),
         };
-        if w.get::<Source>(root).is_some_and(|s| is_held(&s.0, held)) {
+        if marked.is_some_and(|marked| w.entity_has_named(root, marked)) {
             left_out += 1;
             continue;
         }
@@ -390,11 +377,8 @@ fn gather(w: &World, held: &[String]) -> Result<(Vec<Part>, u64), String> {
                 .collect(),
         });
     }
-    if parts.len() < 2 {
-        return Err(format!(
-            "{} asset(s) with a rig: assembling takes at least two",
-            parts.len()
-        ));
+    if parts.is_empty() {
+        return Err("no asset with a rig: nothing was read to assemble".into());
     }
     Ok((parts, left_out))
 }
@@ -917,8 +901,8 @@ impl Pass for AssembleCharacter {
             ("weighted-rests".to_owned(), self.weighted_rests.text().to_owned()),
             ("name".to_owned(), self.name.clone()),
         ]);
-        if !self.leave_out.is_empty() {
-            options.insert("leave-out".to_owned(), self.leave_out.join("+"));
+        if let Some(marked) = &self.leave_out_marked {
+            options.insert("leave-out-marked".to_owned(), marked.clone());
         }
         options
     }
@@ -945,7 +929,12 @@ impl Pass for AssembleCharacter {
         "parts whose rests for a joint differ within the tolerance related as one joint (with weighted-rests=report, beyond it too); with reference-pose=assembled, inverse binds moved to the assembled rest; of sockets two parts give one name and place otherwise, the first part's kept"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let (mut parts, left_out) = gather(w, &self.leave_out)?;
+        let (mut parts, left_out) = gather(w, self.leave_out_marked.as_deref())?;
+        if let [part] = parts.as_slice() {
+            log.count(&format!("parts: 1 ({}), nothing to relate", part.label), 1);
+            log.count("held objects left out (leave-out-marked=)", left_out);
+            return Ok(());
+        }
         let reference = add_reference(&mut parts, w)?;
         // every entity whose skin binds to a part's rig (its prototypes and their level-of-detail forms), and the
         // joints of the part that carry weight in each
@@ -1250,7 +1239,7 @@ impl Pass for AssembleCharacter {
             "parts assembled",
             parts.iter().filter(|p| p.root.is_some()).count() as u64,
         );
-        log.count("held objects left out (leave-out=)", left_out);
+        log.count("held objects left out (leave-out-marked=)", left_out);
         log.count("assembled joints", asm.names.len() as u64);
         log.count(
             "assembled joints held by more than one part",
@@ -2241,8 +2230,9 @@ mod tests {
         );
     }
 
-    /// An asset whose source is one `leave-out=` names, or under one, is not a part: it keeps its own rig and members, and
-    /// the parts are assembled without it (here the body and the head; the held sword's asset and its form stay as read).
+    /// An asset whose root carries the component `leave-out-marked=` names is not a part: it keeps its own rig and
+    /// members, and the parts are assembled without it (here the body and the head; the held sword's asset and its form
+    /// stay as read).
     #[test]
     fn held_objects_are_left_out_of_the_assembly() {
         let (mut w, ..) = world(None, [0.0, 0.5, 0.0]);
@@ -2258,21 +2248,18 @@ mod tests {
             &[("Blade", None, [0.0; 3])],
             &[([0.0, 0.3, 0.0], 0)],
         );
-        for (label, source) in [
-            ("sword", "parts/wp_a_0300_l"),
-            ("scabbard", "parts/wp_a_0300_l/wp_a_0300_1_l"),
-        ] {
+        for label in ["sword", "scabbard"] {
             let root = w
                 .iter::<Asset>()
                 .find(|(r, _)| w.get::<Name>(*r).is_some_and(|n| n.0 == label))
                 .unwrap()
                 .0;
-            w.insert(root, Source(source.to_owned()));
+            w.insert(root, Held);
         }
-        let held = OWN.replace("name=hero}", "name=hero,leave-out=parts/wp_a_0300_l}");
+        let held = OWN.replace("name=hero}", "name=hero,leave-out-marked=test.held}");
         let report = run(&mut w, &held).unwrap();
         let log = &report.steps[0].log;
-        assert_eq!(log.counts["held objects left out (leave-out=)"], 2);
+        assert_eq!(log.counts["held objects left out (leave-out-marked=)"], 2);
         assert_eq!(log.counts["parts assembled"], 2);
         // the two held assets and the character
         assert_eq!(w.iter::<Asset>().count(), 3);
@@ -2289,20 +2276,57 @@ mod tests {
                 .iter()
                 .all(|j| j.name != "Blade")
         );
-        // a source that only begins like one given is not under it
-        assert!(!is_held("parts/wp_a_0300_lx", &["parts/wp_a_0300_l".to_owned()]));
-        assert!(is_held("parts/wp_a_0300_l/a", &["parts/wp_a_0300_l".to_owned()]));
-        // the option prints back as given, and an empty source is refused
+        // the option prints back as given, and an empty one is refused
         let mut r = PassRegistry::new();
         crate::register(&mut r);
         let pipeline = r.parse(&held).unwrap();
-        assert_eq!(pipeline.passes[0].options()["leave-out"], "parts/wp_a_0300_l");
-        let empty = OWN.replace("name=hero}", "name=hero,leave-out=parts/a+}");
+        assert_eq!(pipeline.passes[0].options()["leave-out-marked"], "test.held");
+        let empty = OWN.replace("name=hero}", "name=hero,leave-out-marked=}");
         assert!(
             r.parse(&empty)
                 .unwrap_err()
                 .to_string()
-                .contains("an empty source")
+                .contains("names no component")
+        );
+    }
+
+    /// A component that marks a held object, for the test above.
+    #[derive(Clone, Debug, PartialEq)]
+    struct Held;
+
+    impl Component for Held {
+        const NAME: &'static str = "test.held";
+        const GEOMETRY: primase_core::world::Geometry = primase_core::world::Geometry::None;
+        fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
+            primase_core::world::Linearity::Invariant
+        }
+    }
+
+    /// One part is nothing to relate: the world is left as it was, and the report says so; a world with no part (here
+    /// every one held) is refused.
+    #[test]
+    fn one_part_is_nothing_to_relate() {
+        let mut w = World::new();
+        part(
+            &mut w,
+            "body",
+            &[("Root", None, [0.0; 3]), ("Spine", Some(0), [0.0, 1.0, 0.0])],
+            &[([0.0, 1.0, 0.0], 1)],
+        );
+        let before = (w.entities().count(), assembled(&w));
+        let report = run(&mut w, OWN).unwrap();
+        assert_eq!(
+            report.steps[0].log.counts["parts: 1 (body), nothing to relate"],
+            1
+        );
+        assert_eq!((w.entities().count(), assembled(&w)), before);
+        let root = w.iter::<Asset>().next().unwrap().0;
+        w.insert(root, Held);
+        let held = OWN.replace("name=hero}", "name=hero,leave-out-marked=test.held}");
+        assert!(
+            run(&mut w, &held)
+                .unwrap_err()
+                .contains("nothing was read to assemble")
         );
     }
 }

@@ -1,4 +1,4 @@
-//! `hold-fromsoft-weapons{grip=one-handed|two-handed-right|two-handed-left}`: the weapons a character holds, where the
+//! `hold-fromsoft-weapons{grip=one-handed|two-handed-right|two-handed-left|saved}`: the weapons a character holds, where the
 //! game holds them. The read keeps, on the root of each weapon model's asset (a form of the weapon's part: the katana
 //! `wp_a_0300_l`, its scabbard `wp_a_0300_1_l`), which hand slot it is in, which weapon row it is and the character's dummy
 //! polygon each way of holding puts it at (`fromsoft.held_weapon`, from `WepAbsorpPosParam`). This pass, after
@@ -8,7 +8,9 @@
 //!
 //! - `one-handed`: each weapon in its own hand (`right_<n>`, `left_<n>`);
 //! - `two-handed-right`: the right hand's weapons in both hands (`both_<n>`), the left's hung (`leftHang_<n>`);
-//! - `two-handed-left`: the left's in both hands (`leftBoth_<n>`), the right's hung (`rightHang_<n>`).
+//! - `two-handed-left`: the left's in both hands (`leftBoth_<n>`), the right's hung (`rightHang_<n>`);
+//! - `saved`: as the selected saved hold holds them (`select-fromsoft-saved-hold`, its arm style). A grip stated with a
+//!   saved hold whose grip is another is refused, naming both: the program states `saved` or the save's.
 //!
 //! The character's rig is the one rig (not a held weapon's) whose skeleton has the socket (`dummy <id>`, the player's
 //! dummy polygons carried onto the assembled skeleton by `assemble-character`). Elden Ring's hold rows name a body part's
@@ -86,25 +88,64 @@ pub const HOLD_TURN: Transform = Transform {
     ],
 };
 
+/// The grip `hold-fromsoft-weapons` holds the weapons in: one the program states, or the selected saved hold's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HoldGrip {
+    Stated(Grip),
+    Saved,
+}
+
+impl Choice for HoldGrip {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("one-handed", HoldGrip::Stated(Grip::OneHanded)),
+        ("two-handed-right", HoldGrip::Stated(Grip::TwoHandedRight)),
+        ("two-handed-left", HoldGrip::Stated(Grip::TwoHandedLeft)),
+        ("saved", HoldGrip::Saved),
+    ];
+}
+
 /// `hold-fromsoft-weapons` (see the module documentation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HoldFromSoftWeapons {
-    pub grip: Grip,
+    pub grip: HoldGrip,
 }
 
 /// `hold-fromsoft-weapons`' declaration ([`primase_core::pass::PassRegistry::add`]).
 pub const HOLD_FROMSOFT_WEAPONS: PassSpec = PassSpec {
     name: "hold-fromsoft-weapons",
-    options: &[OptionSpec::choice::<Grip>(
+    options: &[OptionSpec::choice::<HoldGrip>(
         "grip",
-        "how the weapons are held: each in its hand, the right hand's in both hands, or the left's",
+        "how the weapons are held: each in its hand, the right hand's in both hands, the left's, or as the selected saved \
+         hold holds them",
     )],
     make: |g: &Given| {
         Ok(Box::new(HoldFromSoftWeapons {
-            grip: g.choice::<Grip>("grip"),
+            grip: g.choice::<HoldGrip>("grip"),
         }))
     },
 };
+
+impl HoldFromSoftWeapons {
+    /// The grip the weapons are held in: the stated one, or the selected saved hold's (`saved`, in `w`); a stated grip
+    /// that is not the saved hold's is refused, naming both.
+    fn grip(&self, w: &World) -> Result<Grip, String> {
+        let saved = w
+            .resource::<crate::sekiro::components::standalone::SelectedSavedHold>()
+            .map(|saved| saved.state.grip());
+        match (self.grip, saved) {
+            (HoldGrip::Saved, Some(grip)) => Ok(grip),
+            (HoldGrip::Saved, None) => {
+                Err("grip=saved: no saved hold was selected (select-fromsoft-saved-hold)".into())
+            }
+            (HoldGrip::Stated(grip), Some(saved)) if grip != saved => Err(format!(
+                "grip={} but the selected saved hold holds the weapons {}: state grip=saved or the save's",
+                grip.text(),
+                saved.text()
+            )),
+            (HoldGrip::Stated(grip), _) => Ok(grip),
+        }
+    }
+}
 
 /// Leave the held model whose asset's root is `root` (its rig instance `rig`) out of the scene: what only its asset reaches,
 /// its rig instance and what refers to them alone (the placements `place-assets` made of its parts), despawned and
@@ -184,6 +225,11 @@ impl Pass for HoldFromSoftWeapons {
                 .ok_or_else(|| format!("{label}: a held weapon's asset with no rig"))?;
             held.push((root, label, *h, skeleton));
         }
+        if held.is_empty() {
+            log.count("no weapon held: nothing to hold", 1);
+            return Ok(());
+        }
+        let grip = self.grip(w)?;
         let held_skeletons: BTreeSet<Entity> = held.iter().map(|(_, _, _, s)| *s).collect();
         let held_slots: BTreeSet<HandSlot> = held.iter().map(|(_, _, h, _)| h.slot).collect();
         let all = rigs(w);
@@ -201,7 +247,7 @@ impl Pass for HoldFromSoftWeapons {
                 [] => return Err(format!("{label}: its rig is not placed (run place-assets first)")),
                 more => return Err(format!("{label}: {} rigs pose its skeleton", more.len())),
             };
-            let Some(Hold { dummy, shown }) = h.holds.in_grip(h.slot.left, self.grip) else {
+            let Some(Hold { dummy, shown }) = h.holds.in_grip(h.slot.left, grip) else {
                 log.omit(
                     "held weapon models the grip puts at no dummy polygon, left where they are",
                     1,
@@ -536,11 +582,61 @@ mod tests {
         );
         assert_eq!(
             HoldFromSoftWeapons {
-                grip: Grip::TwoHandedRight
+                grip: HoldGrip::Stated(Grip::TwoHandedRight)
             }
             .options()["grip"],
             "two-handed-right"
         );
+    }
+
+    /// `grip=saved` holds the weapons as the selected saved hold does (here both hands on the right: as
+    /// `two-handed-right`); a stated grip that is another is refused, naming both, and `saved` with no saved hold is
+    /// refused; a world with no held weapon is left as it is whatever the grip.
+    #[test]
+    fn the_saved_grip_is_the_saved_holds_and_a_stated_one_must_agree() {
+        use crate::sekiro::components::attack_clip::PlayerState;
+        use crate::sekiro::components::standalone::SelectedSavedHold;
+        let saved = |w: &mut World| {
+            w.insert_resource(SelectedSavedHold {
+                state: PlayerState {
+                    weapons: Default::default(),
+                    active_right: 0,
+                    active_left: 0,
+                    arm_style: fromsoft_formats::save::ArmStyle::RightBoth,
+                },
+                report: serde_json::json!({}),
+            })
+        };
+        let held = |w: &World, models: [Entity; 2]| {
+            models.map(|m| {
+                let a = w.get::<Attachment>(m).unwrap();
+                (a.socket, a.offset, *w.get::<Transform>(m).unwrap())
+            })
+        };
+        let (mut stated, [_, katana, scabbard, _]) = world();
+        run(&mut stated, "hold-fromsoft-weapons{grip=two-handed-right}").unwrap();
+        let (mut w, [_, saved_katana, saved_scabbard, _]) = world();
+        saved(&mut w);
+        run(&mut w, "hold-fromsoft-weapons{grip=saved}").unwrap();
+        assert_eq!(
+            held(&w, [saved_katana, saved_scabbard]),
+            held(&stated, [katana, scabbard])
+        );
+        let (mut w, _) = world();
+        saved(&mut w);
+        assert_eq!(
+            run(&mut w, "hold-fromsoft-weapons{grip=one-handed}").unwrap_err(),
+            "pass hold-fromsoft-weapons{grip=one-handed} failed: grip=one-handed but the selected saved hold holds the weapons \
+             two-handed-right: state grip=saved or the save's"
+        );
+        let (mut w, _) = world();
+        assert!(
+            run(&mut w, "hold-fromsoft-weapons{grip=saved}")
+                .unwrap_err()
+                .contains("no saved hold was selected")
+        );
+        let mut empty = World::new();
+        run(&mut empty, "hold-fromsoft-weapons{grip=saved}").unwrap();
     }
 
     /// Elden Ring's scabbard with the sword drawn hangs at a body part's polygon (`2069`: the body part's polygon 69, named
