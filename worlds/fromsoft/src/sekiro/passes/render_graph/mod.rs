@@ -77,8 +77,10 @@ fn describe(
 ) -> Result<LightingPipeline, String> {
     let selected_names: &[&str] = if game == Game::EldenRing {
         &[
+            "local light shadow casters",
             "GXLightAcc_DDirLightShadowed1",
             "GXRend_TileBasedLighting",
+            "GXLightAcc_DPointLightShadowed1",
             "GXLightCmbAlbedo",
             "GXLightComposite",
         ]
@@ -94,13 +96,22 @@ fn describe(
             .ok_or_else(|| format!("lighting graph has no {name}"))?;
         passes.push(index as u32);
     }
+    // the targets the selected steps draw: their clears before the last of them are selected with them
     let mut output_views = Vec::new();
     for index in &passes {
-        let PassWork::Screen { outputs, .. } = &graph.passes[*index as usize].work else {
-            return Err("lighting stage is not a screen draw".into());
-        };
-        output_views.extend(outputs.colour.iter().map(|(_, view)| *view));
+        match &graph.passes[*index as usize].work {
+            PassWork::Screen { outputs, .. } => {
+                output_views.extend(outputs.colour.iter().map(|(_, view)| *view))
+            }
+            PassWork::Scene {
+                bucket: DrawBucket::ShadowCaster,
+                outputs,
+                ..
+            } => output_views.extend(outputs.depth.iter().map(|d| d.view)),
+            _ => return Err("lighting stage is neither a screen draw nor a shadow caster step".into()),
+        }
     }
+    let atlas = graph.local_shadow_atlas.as_ref().map(|a| a.target);
     let last = *passes.last().ok_or("no lighting stage")? as usize;
     for (index, pass) in graph.passes.iter().enumerate() {
         if let PassWork::Clear { target, .. } = &pass.work
@@ -226,6 +237,10 @@ fn describe(
                 let TextureSource::Target { view } = texture.source else {
                     continue;
                 };
+                if Some(view.target) == atlas {
+                    // the local lights' shadow atlas: drawn by the selected caster step
+                    continue;
+                }
                 if graph.targets[view.target as usize].format.is_depth() {
                     if !imports.iter().any(|(_, v)| *v == view) {
                         imports.push((LightingPort::SceneDepth, view));
@@ -269,12 +284,13 @@ fn describe(
     }
     let mut notices = vec!["light lists conservatively include every light in every tile and depth slice; native culling is not reproduced".into(),
         "native environment, ambient occlusion and shadow producer stages remain unexecuted".into(),
-        "local lights that cast shadows are lit by the tile pass without them: no local-light shadow atlas or shadowed per-light pass is selected, so every light packs unshadowed (LightType 0) and the packing names each shadow-casting one".into(),
         "full-screen vertex inputs are reconstructed from the native lighting vertex program's clip-position and UV reads, not captured vertex-buffer bytes".into()];
     if game == Game::EldenRing {
+        notices.push("local lights' shadows: the consumer chooses which shadow-casting lights to shadow and draws their faces' casters into the atlas; the lights it does not shadow are lit by the tile pass without one, and the packing names each".into());
         notices.push(sun::NOTICE.into());
         notices.push("sun shadows: one generic cascade fitted to the view, all opaque geometry casts; native casters and cascade splits not traced".into());
     } else {
+        notices.push("local lights that cast shadows are lit by the tile pass without them: no local-light shadow atlas or shadowed per-light pass is selected, so every light packs unshadowed (LightType 0) and the packing names each shadow-casting one".into());
         notices.push("native directional lighting is not yet selected for this source".into());
     }
     let pipeline = LightingPipeline {

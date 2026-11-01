@@ -268,6 +268,21 @@ fn dependencies(
                 dependencies(step, images, buffers, imports)?;
             }
         }
+        // a local light's shadow casters: the consumer draws the scene's casters from each face into the atlas
+        PassWork::Scene {
+            view: super::SceneView::LocalShadow,
+            outputs,
+            frame,
+            ..
+        } => {
+            for (_, view) in frame {
+                image_read(*view, images, &pass.name)?;
+            }
+            writes.extend(outputs.colour.iter().map(|(_, v)| *v));
+            if let Some(depth) = &outputs.depth {
+                writes.push(depth.view);
+            }
+        }
         PassWork::Scene { .. } | PassWork::Slot { .. } => {
             return Err(format!(
                 "{} requires scene draws inside the lighting subgraph",

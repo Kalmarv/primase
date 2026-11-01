@@ -40,8 +40,9 @@ use primase_core::render_graph::{
     ScenePlacements, SceneView, TargetFormat, TargetShape, TargetSize, TargetView, Trigger,
 };
 use primase_core::shader::{
-    BufferBinding, BufferSource, ConstantBinding, ConstantRole, InputBinding, InputRole, LightValue,
-    OutputBinding, OutputRole, SamplerBinding, ScreenTriangleValue, Shader, StageBinding, TextureBinding,
+    BufferBinding, BufferSource, ConstantBinding, ConstantRole, FrameParameter, InputBinding, InputRole,
+    ItemParameter, LightTableKind, LightValue, LocalShadowAtlas, OutputBinding, OutputRole, SamplerBinding,
+    ScreenTriangleValue, Shader, ShadowDepth, ShadowDepthTerm, ShadowFace, StageBinding, TextureBinding,
     TextureSource, VariantKey, ViewParameter,
 };
 use primase_core::{Name, World};
@@ -331,12 +332,19 @@ pub(crate) fn read(
                 .map_err(|e| invalid(FORMAT, 0, format!("step {}: {e}", s.name)))?,
         );
     }
+    let local_shadow_atlas = t
+        .local_shadow_atlas
+        .as_ref()
+        .map(|a| shadow_atlas(a, &targets))
+        .transpose()
+        .map_err(|e| invalid(FORMAT, 0, e))?;
     let graph = RenderGraph {
         targets,
         buffers,
         passes,
         picture: t.picture,
         lighting: None,
+        local_shadow_atlas,
         left_out: Vec::new(),
     };
     graph.check().map_err(|e| invalid(FORMAT, 0, e))?;
@@ -688,8 +696,83 @@ fn render_state(s: &table::State, targets: usize) -> std::result::Result<iri::Re
         None => None,
     };
     out.front_counter_clockwise = s.front_ccw;
+    out.depth_bias = s
+        .depth_bias
+        .map(|[constant, slope_scaled, clamp]| iri::DepthBias {
+            constant,
+            slope_scaled,
+            clamp,
+        });
     out.verify()?;
     Ok(out)
+}
+
+/// The table's shadow atlas as `core`'s layout: the grid's cells in the table's order, as many as fit the target.
+fn shadow_atlas(
+    a: &table::ShadowAtlas,
+    targets: &[RenderTarget],
+) -> std::result::Result<LocalShadowAtlas, String> {
+    let target = targets
+        .get(a.target as usize)
+        .ok_or_else(|| format!("the shadow atlas names target {}", a.target))?;
+    let TargetSize::Fixed { width, height, .. } = target.size else {
+        return Err(format!("the shadow atlas {} has no fixed size", target.name));
+    };
+    if a.spacing < a.region || a.spacing == 0 {
+        return Err(format!(
+            "shadow atlas regions of {} texels {} apart",
+            a.region, a.spacing
+        ));
+    }
+    let (columns, rows) = (width / a.spacing, height / a.spacing);
+    let regions = match a.order {
+        // Morton order: column from the even bits, row from the odd; the cells of the grid in that order
+        table::CellOrder::ZOrder => {
+            let side = columns.max(rows).next_power_of_two();
+            (0..side * side)
+                .map(|i| {
+                    let bits = |shift: u32| (0..16).fold(0, |v, b| v | (((i >> (2 * b + shift)) & 1) << b));
+                    (bits(0), bits(1))
+                })
+                .filter(|(c, r)| *c < columns && *r < rows)
+                .map(|(c, r)| [c * a.spacing, r * a.spacing])
+                .collect()
+        }
+    };
+    Ok(LocalShadowAtlas {
+        target: a.target,
+        size: [width, height],
+        region: a.region,
+        covered: a.covered,
+        regions,
+        faces: a
+            .faces
+            .iter()
+            .map(|f| ShadowFace {
+                forward: f.forward,
+                right: f.right,
+                up: f.up,
+            })
+            .collect(),
+        near_over_range: a.near_over_range,
+        depth: match a.depth {
+            table::ShadowDepth::Reversed => ShadowDepth::Reversed,
+            table::ShadowDepth::Standard => ShadowDepth::Standard,
+        },
+        projection: a
+            .projection
+            .iter()
+            .map(|t| match t {
+                table::ShadowTerm::FarOverDepthRange => ShadowDepthTerm::FarOverDepthRange,
+                table::ShadowTerm::NegatedNearFarOverDepthRange => {
+                    ShadowDepthTerm::NegatedNearFarOverDepthRange
+                }
+                table::ShadowTerm::Constant(v) => ShadowDepthTerm::Constant(*v),
+            })
+            .collect(),
+        caster_state: render_state(&a.casters, 0)?,
+        why: a.why.clone(),
+    })
 }
 
 /// The engine's named constants `core` has a role for, as the materials' bindings name them
@@ -705,6 +788,9 @@ fn constant_role(buffer: &str, name: &str) -> Option<ConstantRole> {
         // cbLightAccParam's world-to-view matrix (three lines): the light-organize program turns each light's
         // position by it before testing it against the tiles
         (_, "g_ViewMatrix") => Some(ConstantRole::View(ViewParameter::View)),
+        // the shadowed point light's pass reads the light it runs for as one whole record of the point lights' table
+        // (its 208 bytes from PositionAndRadius to ViewportScaleOffset[5])
+        ("cbLightAccLightParam", "g_aPointLight") => Some(ConstantRole::Item(ItemParameter::LightRecord)),
         (_, name) => crate::layer_bake::resolve::engine_role(name),
     }
 }
@@ -747,8 +833,18 @@ impl Lower<'_> {
         };
         let runs = match &s.runs {
             table::Runs::Once => Runs::Once,
-            table::Runs::Each { why, seen } => Runs::Each {
-                items: Items::Unknown { why: why.clone() },
+            table::Runs::Each { why, seen, items } => Runs::Each {
+                items: match items {
+                    None => Items::Unknown { why: why.clone() },
+                    Some(table::Items::LocalShadowFaces) => Items::LocalShadowFaces,
+                    Some(table::Items::ShadowedLights { table }) => Items::ShadowedLights {
+                        table: match table.as_str() {
+                            "point" => LightTableKind::Point,
+                            "spot" => LightTableKind::Spot,
+                            other => return Err(format!("a shadowed light of the {other} table")),
+                        },
+                    },
+                },
                 seen: seen.clone(),
             },
         };
@@ -1224,11 +1320,21 @@ impl Lower<'_> {
                 let Some(size) = c.ty.size().filter(|s| *s > 0) else {
                     continue;
                 };
-                if c.name == "FC_ScreenSize" && size == 16 {
-                    for (at, role) in [
-                        (0, ConstantRole::View(ViewParameter::ViewportSize)),
-                        (8, ConstantRole::View(ViewParameter::InverseViewportSize)),
-                    ] {
+                let pairs = match (r.provenance.name.as_str(), c.name.as_str(), size) {
+                    (_, "FC_ScreenSize", 16) => Some([
+                        ConstantRole::View(ViewParameter::ViewportSize),
+                        ConstantRole::View(ViewParameter::InverseViewportSize),
+                    ]),
+                    // the shadowed point light's atlas: its size and its texel's step (4096, 4096, 1/4096, 1/4096 in
+                    // the recorded Stormveil frame)
+                    ("cbLightAccShadowInfo", "g_aShadowMapInfo", 16) => Some([
+                        ConstantRole::Frame(FrameParameter::LocalShadowAtlasSize),
+                        ConstantRole::Frame(FrameParameter::InverseLocalShadowAtlasSize),
+                    ]),
+                    _ => None,
+                };
+                if let Some([size_role, step_role]) = pairs {
+                    for (at, role) in [(0, size_role), (8, step_role)] {
                         out.push(ConstantBinding {
                             resource: r.id,
                             offset: c.offset + at,

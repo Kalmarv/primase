@@ -45,6 +45,12 @@ pub struct RenderGraph {
     /// A source-described lighting subgraph's imports, selected passes and linear HDR handoff.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lighting: Option<LightingPipeline>,
+    /// The layout of the frame's local-light shadow atlas, where the source has one: the target the steps that run per
+    /// face ([`Items::LocalShadowFaces`]) draw into and the shadowed lights' steps ([`Items::ShadowedLights`]) read,
+    /// its regions, faces and projection. Which lights a frame shadows is the consumer's choice
+    /// ([`crate::shader::LocalShadowAtlas::place`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_shadow_atlas: Option<crate::shader::LocalShadowAtlas>,
     /// What the source's frame draws that the graph holds no step for, each named with why (its post-processing,
     /// where that is not traced: the picture is then the image before it). Empty where the graph holds every step.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -237,6 +243,15 @@ pub enum Items {
     /// Not identified: the source's recorded frames run the step a varying number of times, and what one run draws
     /// for is not established; `why` says what was examined.
     Unknown { why: String },
+    /// One run per face of each light the consumer shadows this frame, light by light in the order it chose them and
+    /// each light's faces in the order of the graph's [`RenderGraph::local_shadow_atlas`]
+    /// ([`crate::shader::ShadowPlacement::faces`]): a run draws the step's scene work from that face's camera (the run's
+    /// view roles are the face's view and projection) into the face's region of the atlas (the run's viewport).
+    LocalShadowFaces,
+    /// One run per light the consumer shadows this frame, in the order it chose them: a run's
+    /// [`crate::shader::ConstantRole::Item`] constants are that light's, its record the one the frame's light table of
+    /// `table` packs for it with its shadow ([`crate::shader::LightTable::pack`]).
+    ShadowedLights { table: crate::shader::LightTableKind },
 }
 
 /// What a step does.
@@ -552,6 +567,29 @@ impl RenderGraph {
         }
         Ok(())
     }
+    /// A step run once per face of the shadowed lights: the scene's draws from a local light's view
+    /// ([`SceneView::LocalShadow`]) into the depth of the graph's local shadow atlas, and no colour.
+    fn face_step_ok(&self, p: &RenderPass, what: &str) -> Result<(), String> {
+        let atlas = self.local_shadow_atlas.as_ref().ok_or_else(|| {
+            format!("{what} runs once per local shadow face in a graph with no local shadow atlas")
+        })?;
+        let PassWork::Scene {
+            view: SceneView::LocalShadow,
+            outputs,
+            ..
+        } = &p.work
+        else {
+            return Err(format!(
+                "{what} runs once per local shadow face and is not a scene step from a local light's view"
+            ));
+        };
+        if outputs.depth.as_ref().map(|d| d.view.target) != Some(atlas.target) || !outputs.colour.is_empty() {
+            return Err(format!(
+                "{what} draws local shadow faces into other than the atlas's depth alone"
+            ));
+        }
+        Ok(())
+    }
     fn buffer_ok(&self, b: BufferId, what: &str) -> Result<(), String> {
         if b as usize >= self.buffers.len() {
             return Err(format!("{what} names buffer {b} of {}", self.buffers.len()));
@@ -592,11 +630,20 @@ impl RenderGraph {
                     "{what} runs once per item and states no count it was seen with"
                 ));
             }
-            let Items::Unknown { why } = items;
-            if why.trim().is_empty() {
-                return Err(format!(
-                    "{what} runs once per item of an unknown kind with no why"
-                ));
+            match items {
+                Items::Unknown { why } if why.trim().is_empty() => {
+                    return Err(format!(
+                        "{what} runs once per item of an unknown kind with no why"
+                    ));
+                }
+                Items::Unknown { .. } => {}
+                Items::LocalShadowFaces => self.face_step_ok(p, &what)?,
+                Items::ShadowedLights { .. } if self.local_shadow_atlas.is_none() => {
+                    return Err(format!(
+                        "{what} runs once per shadowed light in a graph with no local shadow atlas"
+                    ));
+                }
+                Items::ShadowedLights { .. } => {}
             }
         }
         match &p.work {
@@ -788,6 +835,44 @@ impl RenderGraph {
         }
         for p in &self.passes {
             self.pass_ok(p)?;
+            // a shadowed light's values are a run's of a step run once per shadowed light (its group's steps included)
+            if !matches!(
+                p.runs,
+                Runs::Each {
+                    items: Items::ShadowedLights { .. },
+                    ..
+                }
+            ) && let Some(c) = item_constant(p)
+            {
+                return Err(format!(
+                    "pass {} binds {} to a shadowed light's value, and does not run once per shadowed light",
+                    p.name,
+                    c.name.as_deref().unwrap_or("a constant")
+                ));
+            }
+        }
+        if let Some(atlas) = &self.local_shadow_atlas {
+            atlas.verify()?;
+            let t = self.targets.get(atlas.target as usize).ok_or_else(|| {
+                format!(
+                    "the local shadow atlas names target {} of {}",
+                    atlas.target,
+                    self.targets.len()
+                )
+            })?;
+            match t.size {
+                TargetSize::Fixed {
+                    width,
+                    height,
+                    depth: 1,
+                } if t.format.is_depth() && [width, height] == atlas.size => {}
+                _ => {
+                    return Err(format!(
+                        "the local shadow atlas is {} x {} of depth, and its target {} is not",
+                        atlas.size[0], atlas.size[1], t.name
+                    ));
+                }
+            }
         }
         let draws = self.scene_draws();
         for (i, (draw, members)) in draws.iter().enumerate() {
@@ -908,6 +993,21 @@ impl RenderGraph {
         }
         Ok(())
     }
+}
+
+/// A constant of a step's programs (its group's steps' included) bound to a shadowed light's value
+/// ([`crate::shader::ConstantRole::Item`]).
+fn item_constant(p: &RenderPass) -> Option<&crate::shader::ConstantBinding> {
+    let stages: Vec<&StageBinding> = match &p.work {
+        PassWork::Screen { stages, .. } | PassWork::Geometry { stages, .. } => stages.iter().collect(),
+        PassWork::Compute { stage, .. } => vec![stage],
+        PassWork::Group { steps } => return steps.iter().find_map(item_constant),
+        _ => Vec::new(),
+    };
+    stages
+        .into_iter()
+        .flat_map(|s| &s.constants)
+        .find(|c| matches!(c.role, crate::shader::ConstantRole::Item(_)))
 }
 
 impl Resource for RenderGraph {
@@ -1053,6 +1153,7 @@ mod tests {
             }],
             picture: Some(0),
             lighting: None,
+            local_shadow_atlas: None,
             left_out: Vec::new(),
         };
         assert_eq!(g.check(), Ok(()));
@@ -1140,6 +1241,7 @@ mod tests {
             )],
             picture: Some(0),
             lighting: None,
+            local_shadow_atlas: None,
             left_out: vec!["post-processing: not traced".into()],
         };
         assert_eq!(g.check(), Ok(()));
@@ -1253,6 +1355,7 @@ mod tests {
             passes: vec![cascade(quarter)],
             picture: None,
             lighting: None,
+            local_shadow_atlas: None,
             left_out: Vec::new(),
         };
         assert_eq!(g.check(), Ok(()));
@@ -1288,6 +1391,7 @@ mod tests {
             passes: vec![clear("a")],
             picture: Some(0),
             lighting: None,
+            local_shadow_atlas: None,
             left_out: Vec::new(),
         };
         g.passes[0].presence = Presence::Unknown { frames: Vec::new() };
@@ -1376,6 +1480,7 @@ mod tests {
             passes: vec![screen(1, 0)],
             picture: Some(0),
             lighting: None,
+            local_shadow_atlas: None,
             left_out: Vec::new(),
         };
         assert_eq!(g.check(), Ok(()));
@@ -1433,6 +1538,7 @@ mod tests {
             passes: vec![copy(None), copy(Some(quarter))],
             picture: None,
             lighting: None,
+            local_shadow_atlas: None,
             left_out: Vec::new(),
         };
         assert_eq!(g.check(), Ok(()));
@@ -1504,6 +1610,7 @@ mod tests {
             ],
             picture: None,
             lighting: None,
+            local_shadow_atlas: None,
             left_out: Vec::new(),
         };
         assert_eq!(g.check(), Ok(()));

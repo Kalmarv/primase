@@ -27,6 +27,60 @@ pub(crate) struct Table {
     /// The order in which the frames drew their sky, forward and effect draws in each sorted run, and how many runs had
     /// it (the table states the sky, the forward draws and the effects as steps of their own).
     pub forward_phase: BTreeMap<String, u64>,
+    /// The local lights' shadow atlas, where the frames draw one.
+    #[serde(default)]
+    pub local_shadow_atlas: Option<ShadowAtlas>,
+}
+
+/// The layout of the local lights' shadow atlas: its depth target; square regions of `region` texels whose top-left
+/// corners lie on a grid of `spacing` texels, filled in `order`; the `covered` texels of a region that span a face's 90
+/// degrees; a light's faces in its record's order; its faces' near plane over its range; the depth they write; the
+/// projection terms of its record; the casters' state; and what the values rest on.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ShadowAtlas {
+    pub target: u32,
+    pub region: u32,
+    pub spacing: u32,
+    pub order: CellOrder,
+    pub covered: u32,
+    pub faces: Vec<ShadowFace>,
+    pub near_over_range: f32,
+    pub depth: ShadowDepth,
+    pub projection: Vec<ShadowTerm>,
+    pub casters: State,
+    pub why: String,
+}
+
+/// The order a grid's cells are filled in.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CellOrder {
+    /// Morton order: cell `i`'s column is the even bits of `i`, its row the odd bits.
+    ZOrder,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ShadowFace {
+    pub forward: [f32; 3],
+    pub right: [f32; 3],
+    pub up: [f32; 3],
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ShadowDepth {
+    Reversed,
+    Standard,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ShadowTerm {
+    FarOverDepthRange,
+    NegatedNearFarOverDepthRange,
+    Constant(f32),
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,7 +179,23 @@ pub(crate) enum Trigger {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Runs {
     Once,
-    Each { why: String, seen: Vec<u32> },
+    /// Once per item: what an item is where it is established (`items`), else why it is not.
+    Each {
+        why: String,
+        seen: Vec<u32>,
+        #[serde(default)]
+        items: Option<Items>,
+    },
+}
+
+/// What one run of a repeated step is for.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Items {
+    /// A face of a shadowed light: the run draws the casters into that face's region of the atlas.
+    LocalShadowFaces,
+    /// A shadowed light, its record in the light table of `table` (`point` or `spot`).
+    ShadowedLights { table: String },
 }
 
 /// A view of a target: `target` indexes [`Table::targets`].
@@ -317,6 +387,9 @@ pub(crate) struct State {
     pub cull: Option<u32>,
     pub fill: Option<u32>,
     pub front_ccw: Option<bool>,
+    /// The depth bias: constant, slope-scaled and clamp, as D3D's rasterizer state stores them. Unstated in older tables.
+    #[serde(default)]
+    pub depth_bias: Option<[f32; 3]>,
 }
 
 #[derive(Debug, Deserialize)]

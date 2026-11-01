@@ -277,6 +277,7 @@ mod tests {
                 .collect(),
             picture: None,
             lighting: None,
+            local_shadow_atlas: None,
             left_out: Vec::new(),
         }
     }

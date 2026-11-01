@@ -358,6 +358,21 @@ pub enum FrameParameter {
     /// How many light-list tiles a row of the screen holds: one unsigned 32-bit integer, the render target's width over
     /// [`FrameParameter::LightTileSize`], rounded up.
     LightTilesPerRow,
+    /// The size of the frame's local-light shadow atlas in texels as two values, its width then its height
+    /// ([`crate::render_graph::RenderGraph::local_shadow_atlas`]).
+    LocalShadowAtlasSize,
+    /// The reciprocals of [`FrameParameter::LocalShadowAtlasSize`]: `1 / width`, then `1 / height`, the step of one of
+    /// its texels in its texture coordinates.
+    InverseLocalShadowAtlasSize,
+}
+/// A value of the item one run of a repeated step is for ([`crate::render_graph::Items`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ItemParameter {
+    /// The record of the shadowed light the run is for ([`crate::render_graph::Items::ShadowedLights`]): the bytes the
+    /// frame's light table of the step's kind packs for it with its shadow, the whole record, so the constant's size is
+    /// the table's stride.
+    LightRecord,
 }
 /// What a constant of a buffer stands for.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -372,6 +387,8 @@ pub enum ConstantRole {
     Object(ObjectParameter),
     /// A value of the frame.
     Frame(FrameParameter),
+    /// A value of the item the run of a repeated step is for ([`crate::render_graph::Items`]).
+    Item(ItemParameter),
     /// A reference confirmed by the program's discard graph. `compared` states whether a portable cutoff on output
     /// alpha is the same test or an approximation. A baking consumer freezes the reference below the alpha's range, and must
     /// also neutralize any stated dither perturbation; the draw uses the material's original `value`.
@@ -446,6 +463,7 @@ impl ConstantRole {
             ),
             ConstantRole::Material(_)
             | ConstantRole::Frame(_)
+            | ConstantRole::Item(_)
             | ConstantRole::AlphaReference { .. }
             | ConstantRole::Unknown { .. }
             | ConstantRole::Default { .. } => false,

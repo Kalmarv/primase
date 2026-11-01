@@ -27,6 +27,11 @@
 //! unshadowed. Packed with its shadow (the place its own records state), its record is the recorded one word for word
 //! from `LightType` on, and the light lists leave its entry out of the tile pass (bit 31 clear) and out of the lookup's
 //! count copy. The shadow fields of an unshadowed record hold what the buffer held before, so they are not compared.
+//! Placed by the render graph's own local shadow atlas (`core.render_graph`'s layout, given the light's centre in the
+//! drawing frame and its range), its record is the recorded one from `LightType` on as well, and so is the shadowed
+//! pass's `cbLightAccLightParam` at frame 6990 of session `er3`; that pass's `cbLightAccShadowInfo` is the atlas's size
+//! and texel step, and the atlas's first face's camera is the one the frame drew that face's casters with (its view word
+//! for word, its projection to 1e-6).
 //!
 //! Needs `installs.elden`, `keys.elden`, `tools.oodle6` and `oracles.scripts.elden/frames`.
 #![allow(clippy::unwrap_used)]
@@ -37,7 +42,7 @@ use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::render_graph::RenderGraph;
 use primase_core::shader::{
     BufferSource, ConstantRole, FrameParameter, LightListPart, LightTableKind, LocalShadow, LocalShadows,
-    ShaderBinding, pack_light_lists,
+    ShaderBinding, ShadowedLight, pack_light_lists,
 };
 use primase_core::{Light, Transform, World};
 use primase_fromsoft::game::ParamKey;
@@ -535,5 +540,102 @@ fn eldens_light_tables_pack_the_read_back_records() -> Result<(), Box<dyn std::e
             .collect();
         assert_eq!(list_words(&lists.indices), want);
     }
+
+    // light 32 placed by the graph's own local shadow atlas, given its centre in the drawing frame (its stored position
+    // less the capture's origin) and its range: its record is the game's word for word from LightType on
+    let atlas = graph
+        .local_shadow_atlas
+        .as_ref()
+        .ok_or("the render graph states no local shadow atlas")?;
+    let range = world
+        .get::<Light>(light_32)
+        .and_then(|l| l.range)
+        .ok_or("light 32 has no range")?;
+    let map = [at_32[0], at_32[1], -at_32[2]];
+    let centre = [0, 1, 2].map(|k| map[k] - translation[k] as f32);
+    let placed = atlas.place(&[ShadowedLight {
+        light: light_32,
+        centre,
+        range,
+    }])?;
+    assert_eq!(placed.faces.len(), 6);
+    for (d, _, recorded, _) in &game_shadowed {
+        let mut view = [[0.0, 0.0, 0.0, 1.0]; 4];
+        for (row, v) in view.iter_mut().zip(d.view) {
+            let moved = (0..3).map(|k| f64::from(v[k]) * translation[k]).sum::<f64>();
+            *row = [v[0], v[1], -v[2], (f64::from(v[3]) - moved) as f32];
+        }
+        let packed = points.pack(&world, &view, &placed.shadows)?;
+        let at = packed
+            .lights
+            .iter()
+            .position(|e| *e == light_32)
+            .ok_or("light 32 not packed")?;
+        let ours = floats(&packed.bytes[208 * at..208 * (at + 1)]);
+        let words = |f: &[f32]| f.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(
+            words(&ours[16..52]),
+            words(&recorded[16..52]),
+            "light 32's record from LightType on, placed by the atlas"
+        );
+    }
+
+    // its first face's camera is the one the game drew the face's casters with (er3 frame 6990's cbSceneParam of the
+    // casters: FC_MatrixView's rows at +80, FC_MatrixProj at +256): the view word for word, the projection to 1e-6 (the
+    // game's far plane is 8.0000057, not the range's 8, so its depth row differs in the last bits)
+    let scene = blob(&frames.join("er3"), "9a2574ee8926b3f5")?;
+    let face = &placed.faces[0];
+    let game_view: Vec<f32> = scene[20..32].to_vec();
+    let our_view: Vec<f32> = face.view[..3].iter().flatten().copied().collect();
+    assert_eq!(
+        our_view.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+        game_view.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+        "the +X face's view: ours {our_view:?}, the game's {game_view:?}"
+    );
+    let game_projection = &scene[64..80];
+    for (k, (ours, game)) in face.projection.iter().flatten().zip(game_projection).enumerate() {
+        assert!(
+            (ours - game).abs() <= 1e-6,
+            "the +X face's projection element {k}: ours {ours}, the game's {game}"
+        );
+    }
+    assert_eq!(face.near, 0.008);
+
+    // the shadowed pass's own constants at er3 frame 6990: cb1 (cbLightAccLightParam) is light 32's record, and from
+    // LightType on it is the one the atlas places (the frame's origin is the capture's, (-88, 16, 16), too); cb2
+    // (cbLightAccShadowInfo) is the atlas's size and its texel's step
+    let cb1 = blob(&frames.join("er3"), "433e9a61961462c2")?;
+    let shadow = &placed.shadows.0[&light_32];
+    let mut place = vec![1.0f32, 0.0, 0.0, 0.0];
+    place.extend(&shadow.projection);
+    place.extend(shadow.centre);
+    place.extend(shadow.faces.iter().flatten());
+    assert_eq!(
+        place.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+        cb1[16..52].iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+        "frame 6990's cb1 from LightType on"
+    );
+    let cb2 = blob(&frames.join("er3"), "a602b39fb6b42f83")?;
+    let [w, h] = atlas.size.map(|s| s as f32);
+    assert_eq!(cb2[..4], [w, h, 1.0 / w, 1.0 / h]);
     Ok(())
+}
+
+/// A constant buffer a session's capture holds, as floats: the blob of `hash`.
+fn blob(session: &std::path::Path, hash: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+    for line in std::fs::read_to_string(session.join("cap").join("capture.jsonl"))?.lines() {
+        if !line.contains("\"event\":\"blob\"") || !line.contains(hash) {
+            continue;
+        }
+        let e: serde_json::Value = serde_json::from_str(line)?;
+        if e["hash"].as_str() != Some(hash) {
+            continue;
+        }
+        let hex = e["hex"].as_str().ok_or("a blob with no contents")?;
+        let bytes = (0..hex.len() / 2)
+            .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16))
+            .collect::<Result<Vec<u8>, _>>()?;
+        return Ok(floats(&bytes));
+    }
+    Err(format!("no blob {hash} in {}", session.display()).into())
 }

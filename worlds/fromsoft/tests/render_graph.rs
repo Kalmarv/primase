@@ -642,7 +642,40 @@ fn lighting_boundary(graph: &RenderGraph, game: FsGame) {
     let mut expected = vec!["GXRend_TileBasedLighting", "GXLightCmbAlbedo", "GXLightComposite"];
     if game == FsGame::EldenRing {
         expected.insert(0, "GXLightAcc_DDirLightShadowed1");
+        // the shadowed point lights, one run each, after the tiled pass that leaves them out
+        expected.insert(2, "GXLightAcc_DPointLightShadowed1");
         assert!(pipeline.notices.iter().any(|notice| notice == "sun shadows: one generic cascade fitted to the view, all opaque geometry casts; native casters and cascade splits not traced"));
+        // and their casters, one run per face, into the atlas the graph states
+        use primase_core::render_graph::{Items, Runs};
+        let atlas = graph
+            .local_shadow_atlas
+            .as_ref()
+            .expect("Elden Ring's local shadow atlas");
+        assert_eq!(
+            (atlas.size, atlas.region, atlas.covered, atlas.faces.len()),
+            ([4096, 4096], 64, 58, 6)
+        );
+        assert_eq!(atlas.capacity(), 1024 / 6);
+        let runs: Vec<_> = pipeline
+            .passes
+            .iter()
+            .filter_map(|i| match &graph.passes[*i as usize].runs {
+                Runs::Each { items, .. } => Some((graph.passes[*i as usize].name.as_str(), items.clone())),
+                Runs::Once => None,
+            })
+            .collect();
+        assert_eq!(
+            runs,
+            [
+                ("local light shadow casters", Items::LocalShadowFaces),
+                (
+                    "GXLightAcc_DPointLightShadowed1",
+                    Items::ShadowedLights {
+                        table: primase_core::shader::LightTableKind::Point
+                    }
+                ),
+            ]
+        );
     }
     assert_eq!(stages, expected);
     assert!(

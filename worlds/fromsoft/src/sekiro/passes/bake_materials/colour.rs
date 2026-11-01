@@ -57,9 +57,10 @@ pub(super) fn refusal(program: &Program, stage: &StageBinding) -> &'static str {
                         ConstantRole::Material(_)
                         | ConstantRole::AlphaReference { .. }
                         | ConstantRole::Default { .. } => {}
-                        ConstantRole::View(_) | ConstantRole::Frame(_) | ConstantRole::Object(_) => {
-                            scene = true
-                        }
+                        ConstantRole::View(_)
+                        | ConstantRole::Frame(_)
+                        | ConstantRole::Object(_)
+                        | ConstantRole::Item(_) => scene = true,
                         ConstantRole::Unknown { .. } => unknown = true,
                     }
                 }
