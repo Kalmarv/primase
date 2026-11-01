@@ -16,7 +16,9 @@ use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
 use primase_forzatech::read::placements::Scope;
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_image::{Beyond, CapMode, CapTextures, MissingLevels, NormalDownscale, NormalizeNormals, OrmSize, PackOrm};
+use primase_image::{
+    BakeLayerChannels, Beyond, CapMode, CapTextures, MissingLevels, NormalDownscale, NormalizeNormals, OrmSize, PackOrm,
+};
 use primase_meshops::{
     BakeNonrigid, FirstTexcoordSet, Mirrors, OmitUnshadedPrimitives, SpecializeMaterialVariants, UnusedVariants,
 };
@@ -101,6 +103,9 @@ fn main() -> Result<()> {
                 LightCalibration::Standard,
                 Unclassified::Surface("concrete".into()),
             )?)),
+            // skate blends by vertex weights: a road's blend mask and layer heights are evaluated at its vertices and
+            // interpolated between them (counted)
+            Box::new(BakeLayerChannels),
             // a road of two or three layers (core.layered) is drawn as its base layer with each other layer a decal
             // overlay over it, as the writer takes blends
             Box::new(LowerLayeredReskate::new(OverlayLimit::All)),
