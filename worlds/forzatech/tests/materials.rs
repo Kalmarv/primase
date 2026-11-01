@@ -996,10 +996,14 @@ fn a_flat_signed_normal_map_is_no_normal_map() {
     let (world, e, _, log) = signed_normal([64, 64, 127, 127]);
     assert!(world.get::<PbrMaterial>(e).unwrap().normal_texture.is_none());
     assert_eq!(log.counts["flat default normal map: no normal map"], 1);
+    // dropping it is an approximation that names the map's largest tilt: the decoded byte 192 is v = 0.5059, 2 v - 1 = 0.012
+    let why = "flat default normal map left out: no normal map (largest tilt 0.012, within the 0.02 bound)";
+    assert_eq!(log.approximations[why], 1);
+    assert!(log.approximations.contains_key(&format!("{why}: triangles")));
     assert!(
         !log.approximations
             .keys()
-            .any(|k| k.contains("normal map") || k.contains("normal maps")),
+            .any(|k| k.contains("not lowered") || k.contains("re-encoded")),
         "{:?}",
         log.approximations
     );

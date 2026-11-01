@@ -307,10 +307,10 @@ impl Lowering {
                 pbr.metallic_roughness_texture = Some(slot(rough));
                 pbr.roughness = 1.0;
             }
-            if let Binding::Texture(t) = p.texture("FrameGlassNormalTexture") {
-                if let Some(map) = self.normal_slot(w, e, t, triangles, log, slot)? {
-                    pbr.normal_texture = Some(map);
-                }
+            if let Binding::Texture(t) = p.texture("FrameGlassNormalTexture")
+                && let Some(map) = self.normal_slot(w, e, t, triangles, log, slot)?
+            {
+                pbr.normal_texture = Some(map);
             }
         } else {
             approximate(

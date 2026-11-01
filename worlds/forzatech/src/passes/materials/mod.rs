@@ -66,8 +66,11 @@
 //! (`STEP=1`) four such textures are read as normal maps, and none has a negative texel: a 32 x 32 default whose every
 //! texel is the neutral normal (bytes 191 and 192, `|2 v - 1|` at most 0.012), a 16 x 16 default with bytes 184 to 198
 //! (up to 0.11) and a 128 x 128 one with bytes 151 to 231 (up to 0.63), and a terrain map no lowered slot reads. A map whose
-//! every texel has `|2 v - 1|` within 0.02 (about 1.1 degrees) is flat and perturbs no normal, so the material takes no
-//! normal map: 778 slots, counted as `flat default normal map: no normal map` (not as a loss). Any other is re-encoded as the
+//! every texel has `|2 v - 1|` within 0.02 (about 1.1 degrees) is flat, so the material takes no normal map: 778 slots,
+//! counted as `flat default normal map: no normal map` and, per material and triangle, as an approximation that names the
+//! map's largest tilt (0.012 for the 32 x 32 default: the dropped map is not exactly flat). The bound is a little over two
+//! steps of the 8-bit byte the map would be re-encoded to (a step is 2 / 255 = 0.0078 of a component), and the next map up the
+//! observed tilts is 0.11, nine times the default's. Any other is re-encoded as the
 //! unsigned map glTF reads (the byte is `v`, so glTF's `2 b - 1` is the shader's `2 v - 1`; the rebuilt `z` in blue; a
 //! negative `v` is clamped and counted by texel): 1 texture. `normal map not lowered` now means a texture with no
 //! pixels, and the box has none.
@@ -269,8 +272,8 @@ struct Lowering {
     rooms: BTreeMap<(Entity, [u32; 2]), RoomMeans>,
     /// Whether an emission texture holds any light (a texel with a colour other than black), by texture.
     lit: BTreeMap<Entity, bool>,
-    /// Whether a signed normal map is flat (see [`FLAT_TILT`]), by texture.
-    flat: BTreeMap<Entity, bool>,
+    /// The largest tilt of a signed normal map that is flat (see [`FLAT_TILT`]), by texture; `None` for one that is not.
+    flat: BTreeMap<Entity, Option<f64>>,
 }
 
 impl Lowering {
@@ -316,16 +319,18 @@ enum Derived {
 }
 
 /// The tilt below which a signed normal map is flat: every texel of both channels has `|2 v - 1|` at most this, about
-/// 1.1 degrees, under the 8-bit resolution of a normal map twice over. A flat map perturbs no normal.
+/// 1.1 degrees. The bound is a little over two steps of the 8-bit byte the map would be re-encoded to (a step is 2 / 255
+/// = 0.0078 of a component), so a map inside it differs from the flat one by about the quantisation of the lowered map.
+/// Dropping such a map is still an approximation, counted with the largest tilt the dropped map has.
 const FLAT_TILT: f64 = 0.02;
 
 /// What a normal-map slot makes of its texture.
 enum NormalMap {
     /// The slot's normal map: the texture itself, or the map re-encoded from it.
     Map(Entity),
-    /// A flat default map (a signed texture holding the neutral normal everywhere): it perturbs nothing, so the
-    /// material takes no normal map.
-    Flat,
+    /// A flat default map (a signed texture holding the neutral normal everywhere, within [`FLAT_TILT`]) with its
+    /// largest tilt: it perturbs next to nothing, so the material takes no normal map.
+    Flat(f64),
     /// The texture has no pixels.
     Missing,
 }
@@ -605,10 +610,10 @@ impl Lowering {
         Ok(Some(e))
     }
 
-    /// Whether the signed normal map `texture` is flat: a texel of level 0 with a channel whose `|2 v - 1|` is above
-    /// [`FLAT_TILT`] (or whose `v` is negative, which the shader's `2 v - 1` cannot read as a unit-length normal) makes it
-    /// not. Read once per texture; a texture that cannot be read is not flat.
-    fn signed_flat(&mut self, w: &World, texture: Entity) -> bool {
+    /// The largest tilt `|2 v - 1|` of the signed normal map `texture` when it is flat, `None` otherwise: a texel of level
+    /// 0 with a channel above [`FLAT_TILT`] (or whose `v` is negative, which the shader's `2 v - 1` cannot read as a
+    /// unit-length normal) makes it not. Read once per texture; a texture that cannot be read is not flat.
+    fn signed_flat(&mut self, w: &World, texture: Entity) -> Option<f64> {
         if let Some(&flat) = self.flat.get(&texture) {
             return flat;
         }
@@ -632,13 +637,14 @@ impl Lowering {
             )
             .is_ok();
         }
-        let flat = read && tilt <= FLAT_TILT;
+        let flat = (read && tilt <= FLAT_TILT).then_some(tilt);
         self.flat.insert(texture, flat);
         flat
     }
 
     /// The normal-map slot of material `e` for `texture` (`slot` makes it of the map), or none: a flat default map takes
-    /// no slot, a texture with no pixels is counted as a normal map not lowered.
+    /// no slot (an approximation, named with its largest tilt), a texture with no pixels is counted as a normal map not
+    /// lowered.
     fn normal_slot(
         &mut self,
         w: &mut World,
@@ -650,7 +656,17 @@ impl Lowering {
     ) -> Result<Option<TextureRef>, String> {
         Ok(match self.normal_map(w, texture, log)? {
             NormalMap::Map(map) => Some(slot(map)),
-            NormalMap::Flat => None,
+            NormalMap::Flat(tilt) => {
+                approximate(
+                    log,
+                    e,
+                    &format!(
+                        "flat default normal map left out: no normal map (largest tilt {tilt:.3}, within the {FLAT_TILT} bound)"
+                    ),
+                    triangles,
+                );
+                None
+            }
             NormalMap::Missing => {
                 approximate(
                     log,
@@ -679,9 +695,9 @@ impl Lowering {
                 log.count("normal maps left out: no pixels", 1);
                 return Ok(NormalMap::Missing);
             }
-            if self.signed_flat(w, texture) {
+            if let Some(tilt) = self.signed_flat(w, texture) {
                 log.count("flat default normal map: no normal map", 1);
-                return Ok(NormalMap::Flat);
+                return Ok(NormalMap::Flat(tilt));
             }
             match self.derive(w, texture, Derived::SignedNormal, log)? {
                 Some(made) => made,
