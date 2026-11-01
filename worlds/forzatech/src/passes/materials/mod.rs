@@ -59,6 +59,11 @@
 //! view-selected atlas of directions has no static material form). The normal maps are made in `NormalZ::Rebuild`:
 //! `normalize-normals` converts them to glTF's before a writer.
 //!
+//! A base colour factor above 1 (the flipbook panel's brightness of 10 in the whole box: 8 materials, 16 triangles) is
+//! stored as 1 and counted: no shader of the surface families saturates the albedo it writes, and the albedo target's
+//! format is pipeline state in no shipped file, so that the target holds 0 to 1 is inferred. What was brighter is the
+//! emission, which the rules put in `emissive` and `emissive_strength`.
+//!
 //! The ground families are in the whole box (`tests/shibuya_ground.rs`, every prototype) and all are lowered (materials,
 //! triangles): `environment_plot` 286, 91,811; `terr_mega` 12, 14,462; `terr_distant` 13, 10,481;
 //! `uber_road` 140, 66,426, of which 52, 9,157 are a `core.layered` of two or three layers. The terrain families and
@@ -571,7 +576,7 @@ impl Pass for LowerForzaMaterials {
                 Some("environmentdeferreddecal") => lowering.environmentdeferreddecal(world, *e, m, log)?,
                 _ => None,
             };
-            let Some(pbr) = lowered else {
+            let Some(mut pbr) = lowered else {
                 let name = match family {
                     Some("uber_foliage") => "uber_foliage billboard or impostor",
                     Some("uber_branch") => "uber_branch with a second set of maps",
@@ -583,6 +588,18 @@ impl Pass for LowerForzaMaterials {
                 entry.1 += lowering.triangles.get(e).copied().unwrap_or(0);
                 continue;
             };
+            // the G-buffer stores the albedo in a target of 0..1 (no shader of the lowered families saturates it, so
+            // the target's format, run-time state, is what clamps it): a factor above 1 is stored as 1, and what
+            // was brighter is emission, which the rules put in `emissive` and `emissive_strength`
+            if pbr.base_color.iter().any(|x| *x > 1.0) {
+                pbr.base_color = pbr.base_color.map(|x| x.min(1.0));
+                approximate(
+                    log,
+                    *e,
+                    "base colour factor above 1 stored as 1 (the albedo target holds 0 to 1)",
+                    lowering.triangles.get(e).copied().unwrap_or(0),
+                );
+            }
             world.insert(*e, pbr);
             log.count(&format!("{} materials lowered", family.unwrap_or_default()), 1);
         }

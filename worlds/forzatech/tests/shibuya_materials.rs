@@ -16,7 +16,7 @@ use inputs::{Game, install_file};
 use primase_core::Component;
 use primase_core::convert::Reader;
 use primase_core::pass::{Pass, PassLog};
-use primase_core::pbr::PbrMaterial;
+use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::{ColorSpace, DrawLayer, DrawOrder, Entity, Instance, Mesh, TexFormat, TexRole, Texture};
 use primase_forzatech::components::{ForzaMaterial, MaterialTextures, Value};
 use primase_forzatech::passes::LowerForzaMaterials;
@@ -114,6 +114,36 @@ fn shibuya_materials() {
     // every lowered material holds the ranges and references `pbr.material` documents
     for (e, pbr) in part.iter::<PbrMaterial>() {
         pbr.verify(e, &part).unwrap();
+    }
+
+    // and the ranges the raise to skate's scene checks before it converts anything: a factor of 0 to 1, an emission
+    // finite and not negative, a normal map at scale 1
+    let unit = |name: &str, e: Entity, v: f32| {
+        assert!(
+            v.is_finite() && (0.0..=1.0).contains(&v),
+            "{name} {v} of {e:?} is not in 0..1"
+        );
+    };
+    for (e, pbr) in part.iter::<PbrMaterial>() {
+        unit("metallic factor", e, pbr.metallic);
+        unit("roughness factor", e, pbr.roughness);
+        unit("occlusion strength", e, pbr.occlusion_strength);
+        for v in pbr.base_color {
+            unit("base colour factor", e, v);
+        }
+        if let AlphaMode::Mask { cutoff } = pbr.alpha_mode {
+            unit("alpha cutoff", e, cutoff);
+        }
+        assert!(
+            pbr.emissive_strength.is_finite()
+                && pbr.emissive_strength >= 0.0
+                && pbr.emissive.iter().all(|v| v.is_finite() && *v >= 0.0),
+            "emission of {e:?} is not finite and nonnegative"
+        );
+        assert!(
+            pbr.normal_texture.is_none() || pbr.normal_scale == 1.0,
+            "normal scale of {e:?} is not 1"
+        );
     }
 
     // the decal families draw in the decal layer, without writing depth; no other family has a draw order

@@ -281,6 +281,73 @@ fn pylon_cables_are_their_colour() {
     assert_eq!(pbr.alpha_mode, AlphaMode::Opaque);
 }
 
+/// The albedo target holds 0 to 1: a colour factor above 1 is stored as 1, counted, and what was brighter stays emission.
+#[test]
+fn colour_factors_above_one_are_stored_as_one_and_the_excess_is_emission() {
+    let mut world = World::new();
+    let cable = world.spawn();
+    world.insert(
+        cable,
+        material(
+            "pylon_cables",
+            [1, 0],
+            vec![parameter("Color", 1, colour([4.0, 0.5, 1.0, 1.0]))],
+        ),
+    );
+    let lamp = world.spawn();
+    world.insert(
+        lamp,
+        material(
+            "emissiveonly",
+            [0, 0],
+            vec![
+                parameter("Color", 1, colour([3.0, 1.5, 0.5, 1.0])),
+                parameter("EmissiveMultiplier", 2, Value::Float(2.0)),
+            ],
+        ),
+    );
+    let panel_texture = texture(&mut world, "panel", ColorSpace::Srgb, 1, &[[200, 100, 50, 255]]);
+    let panel = world.spawn();
+    world.insert(
+        panel,
+        material(
+            "anim_ledflipbookpanel",
+            [0, 0],
+            vec![
+                tex("FlipbookTexture", 1),
+                parameter("Brightness", 2, Value::Float(10.0)),
+                parameter("XFrames", 3, Value::Float(1.0)),
+                parameter("YFrames", 4, Value::Float(1.0)),
+            ],
+        ),
+    );
+    world.insert(panel, MaterialTextures(vec![bound(1, panel_texture)]));
+    let log = run(&mut world);
+    for e in [cable, lamp, panel] {
+        let pbr = world.get::<PbrMaterial>(e).unwrap();
+        assert!(
+            pbr.base_color.iter().all(|x| (0.0..=1.0).contains(x)),
+            "{:?}",
+            pbr.base_color
+        );
+    }
+    assert_eq!(
+        world.get::<PbrMaterial>(cable).unwrap().base_color,
+        [1.0, 0.5, 1.0, 1.0]
+    );
+    // the lamp's emission is its colour times the multiplier, normalised: the brightness is in the strength
+    let lamp = world.get::<PbrMaterial>(lamp).unwrap();
+    assert_eq!(lamp.base_color, [1.0, 1.0, 0.5, 1.0]);
+    assert_eq!(lamp.emissive_strength, 6.0);
+    assert_eq!(lamp.emissive, [1.0, 0.5, 1.0 / 6.0]);
+    let panel = world.get::<PbrMaterial>(panel).unwrap();
+    assert_eq!(panel.emissive_strength, 10.0);
+    assert_eq!(
+        log.approximations["base colour factor above 1 stored as 1 (the albedo target holds 0 to 1)"],
+        3
+    );
+}
+
 /// The glass transmittance `1 - k * tint` becomes an opacity: `k` times the tint's luminance.
 #[test]
 fn glass_opacity_is_the_tints_luminance_times_k() {
