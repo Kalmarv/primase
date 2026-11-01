@@ -12,6 +12,10 @@
 //! - `saved`: as the selected saved hold holds them (`select-fromsoft-saved-hold`, its arm style). A grip stated with a
 //!   saved hold whose grip is another is refused, naming both: the program states `saved` or the save's.
 //!
+//! The grip is only asked where something is held and someone holds it: a world with no held model ("no weapon held:
+//! nothing to hold") or with no rig but the held models' own (weapons read with no character: "no one to hold the
+//! weapons", counting the models) is left as it is, whatever the grip says.
+//!
 //! The character's rig is the one rig (not a held weapon's) whose skeleton has the socket (`dummy <id>`, the player's
 //! dummy polygons carried onto the assembled skeleton by `assemble-character`). Elden Ring's hold rows name a body part's
 //! polygon `n` as `2000 + n` (its sockets are so named, [`crate::sekiro::effect_data::BODY_PART_DUMMIES`]), and say how
@@ -189,7 +193,7 @@ impl Pass for HoldFromSoftWeapons {
     fn requires(&self) -> &[&'static str] {
         &[]
     }
-    /// A world with no held weapon is left as it is.
+    /// A world with no held weapon, or no one to hold them, is left as it is.
     fn may_lack_inputs(&self) -> bool {
         true
     }
@@ -229,8 +233,20 @@ impl Pass for HoldFromSoftWeapons {
             log.count("no weapon held: nothing to hold", 1);
             return Ok(());
         }
-        let grip = self.grip(w)?;
         let held_skeletons: BTreeSet<Entity> = held.iter().map(|(_, _, _, s)| *s).collect();
+        // holding needs a holder: where no rig poses anything but the held models (weapons read with no character),
+        // they stand where the read placed them, whatever the grip says
+        if rigs(w)
+            .iter()
+            .all(|(_, skeleton)| held_skeletons.contains(skeleton))
+        {
+            log.count(
+                "no one to hold the weapons: held models left where they stand",
+                held.len() as u64,
+            );
+            return Ok(());
+        }
+        let grip = self.grip(w)?;
         let held_slots: BTreeSet<HandSlot> = held.iter().map(|(_, _, h, _)| h.slot).collect();
         let all = rigs(w);
         let mut attached = 0u64;
@@ -768,6 +784,25 @@ mod tests {
         scabbard_at(&mut w, 2069, Shown::Other(2));
         let err = run(&mut w, "hold-fromsoft-weapons{grip=one-handed}").unwrap_err();
         assert!(err.contains("shown as 2"), "{err}");
+    }
+
+    /// Holding needs a holder: weapons read with no character (no rig but their own) stand where the read placed them,
+    /// whatever the grip says (here `saved`, with no saved hold), and the log says how many.
+    #[test]
+    fn weapons_with_no_one_to_hold_them_stand_where_they_are() {
+        let (mut w, [holder, katana, scabbard, third]) = world();
+        w.despawn(holder);
+        let models = [katana, scabbard, third];
+        let before = models.map(|m| w.get::<Transform>(m).copied());
+        let report = run(&mut w, "hold-fromsoft-weapons{grip=saved}").unwrap();
+        assert_eq!(
+            report.steps[0].log.counts["no one to hold the weapons: held models left where they stand"],
+            3
+        );
+        for (m, t) in models.into_iter().zip(before) {
+            assert!(w.get::<Attachment>(m).is_none());
+            assert_eq!(w.get::<Transform>(m).copied(), t);
+        }
     }
 
     #[test]
