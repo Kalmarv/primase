@@ -575,10 +575,6 @@ impl Pass for LowerUnityAnimator {
     fn provides(&self) -> &[&'static str] {
         &["core.controller", "core.controller_binding"]
     }
-    /// It lowers Unity Animators and keeps them, and the controllers they name as stored.
-    fn legalizes(&self) -> &[&'static str] {
-        &["unity.animator"]
-    }
     /// A second run replaces the `core.controller` it wrote on its own entity in place.
     fn modifies(&self) -> &[&'static str] {
         &["core.controller"]

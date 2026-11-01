@@ -197,10 +197,6 @@ impl Pass for LowerGtaSurfaces {
     fn modifies(&self) -> &[&'static str] {
         &["core.surfaces"]
     }
-    /// It classifies the surfaces in place (a target's "every surface classified" rule plans it).
-    fn legalizes(&self) -> &[&'static str] {
-        &["core.surfaces"]
-    }
     /// A pass after it that provides surfaces would add unclassified ones.
     fn settles(&self) -> &[&'static str] {
         &["core.surfaces"]

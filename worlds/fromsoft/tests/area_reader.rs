@@ -15,7 +15,7 @@ use std::rc::Rc;
 use fromsoft_formats::dcx::Decoder;
 use primase_core::convert::{Finished, Reader, Result, WholeWorld, Writer, check_emits, convert_parts};
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, Target};
-use primase_core::{Instance, World};
+use primase_core::{Component, Instance, World};
 use primase_fromsoft::rigid::SourceModel;
 use primase_fromsoft::sekiro::convert::AreaReader;
 use primase_fromsoft::sekiro::{self, world_bounds};
@@ -25,7 +25,7 @@ mod common;
 struct Placements(Rc<RefCell<Vec<usize>>>);
 impl Writer for Placements {
     fn target(&self) -> Target {
-        Target::new("placements").carry_unknown()
+        Target::new("placements").legal(Instance::NAME)
     }
     fn write(&mut self, part: &World) -> Result<()> {
         self.0.borrow_mut().push(part.iter::<Instance>().count());

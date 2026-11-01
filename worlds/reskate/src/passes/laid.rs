@@ -451,10 +451,6 @@ impl Pass for PrepareReskateLaidLayers {
     fn removes(&self) -> &[&'static str] {
         &[MeshFile::NAME]
     }
-    /// The file links it removes are a side effect: the split meshes no longer match their files.
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn approximates(&self) -> &'static str {
         "layers are found by where they are placed (laid on an opaque surface within the gap), not by a stored field, \
          and drawn as decals; alpha-tested ones are drawn blended by their texture alpha instead of cut at their cutoff"

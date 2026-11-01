@@ -120,10 +120,6 @@ impl Pass for LowerTexturesRgba8 {
     fn removes(&self) -> &[&'static str] {
         &[TextureFile::NAME]
     }
-    /// Only the textures: the file links go as a side effect.
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn approximates(&self) -> &'static str {
         "textures converted to 8-bit RGBA: wider values rounded, floating point clamped to 0-1, signed normal maps in \
          glTF's unsigned encoding"

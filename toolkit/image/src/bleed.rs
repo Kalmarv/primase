@@ -141,10 +141,6 @@ impl Pass for BleedAlphaColors {
     fn removes(&self) -> &[&'static str] {
         &[TextureFile::NAME]
     }
-    /// The file links it removes are a side effect: the changed textures no longer match their files.
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn approximates(&self) -> &'static str {
         "mip levels rebuilt from the changed first level by a box filter on the stored values; levels decoded to RGBA8"
     }

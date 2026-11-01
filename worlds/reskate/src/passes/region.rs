@@ -116,9 +116,6 @@ impl Pass for ClipReskateRegion {
     fn removes(&self) -> &[&'static str] {
         &["core.collision", "skate.rock"]
     }
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         // local: each placement is marked by its own position, each soup cut by its own triangles, and the region
         // recorded is the program's, the same in every part; a map in parts clips each part as the whole would

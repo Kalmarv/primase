@@ -163,9 +163,6 @@ impl Pass for LowerShaunwhiteVertexAlpha {
     fn removes(&self) -> &[&'static str] {
         &[MeshFile::NAME]
     }
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn approximates(&self) -> &'static str {
         "COLOR_0 of blended or alpha-tested materials becomes its alpha alone, as the shader reads it; the tint multiplies the texture whole, which is exact only where the shader's vertex red is 1 or the tint white (all-zero red drops the tint); a tint with a red between is applied in full"
     }

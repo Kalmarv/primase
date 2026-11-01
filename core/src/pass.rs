@@ -1,5 +1,5 @@
-//! The pass manager (DESIGN.md §4): passes that transform the world, the targets writers declare, a search for a
-//! pipeline from what the world has to what a target accepts, and the verifier that runs between every step.
+//! The pass manager (DESIGN.md §4): passes that transform the world, the pipelines a program states, the targets
+//! writers declare, and the verifier that runs between every step.
 //!
 //! - A [`Pass`] has a stable name, text options, and declares the component and resource names it **requires**,
 //!   **provides**, **removes** and **modifies** (in place), plus what it approximates (a name is a component's or a
@@ -7,20 +7,16 @@
 //!   appeared and disappeared must be among those it declared. A pass that declares it **despawns entities** (leaves
 //!   placements out, discards forms) may also make a name disappear that only despawned entities held: no
 //!   surviving entity lost it. A pass that **removes by log** may make a component name disappear that it recorded
-//!   as removed ([`PassLog::removed`]: what a hook dropped, known only when it runs). The planner counts on neither;
-//!   it plans by the declared removals alone. A pass
-//!   also declares the names it **legalizes** (lowers: removed, rewritten in place, or lowered into what it provides
-//!   while kept), by default what it removes.
+//!   as removed ([`PassLog::removed`]: what a hook dropped, known only when it runs).
+//! - A [`Pipeline`] is the program's: it states every pass, in order, with its options (`load-meshes,
+//!   lower-pbr{normals=rebuild}`, [`PassRegistry::parse`]), and runs as written. The manager never chooses, adds or
+//!   reorders a pass.
 //! - A [`Target`] (a writer's declaration) gives each component name a [`Legality`]: legal, dynamic (a predicate on
-//!   the entity's value), illegal, carried through untouched, or carried and lowered too. [`Mode::Partial`] keeps
-//!   names the target does not list; [`Mode::Full`] requires every name to be legal or carried.
-//! - [`PassManager::plan`] chooses passes by MLIR's legalization-depth model (`DialectConversion.cpp`
-//!   `computeOpLegalizationDepth`): each name to lower gets the pass that lowers it with the smallest depth (1 + the
-//!   depth of what it provides and of what it requires that the world lacks), ties broken by priority, then by name.
-//!   Which passes may lower a name depends on its rule: an illegal name must be removed, a dynamic one's failing values
-//!   removed or rewritten in place, a carried-and-lowered one only lowered ([`Legality`]). No greedy rewriting and no
-//!   rollback: the plan is an explicit textual pipeline (`load-meshes, lower-pbr{normals=rebuild}`), made with
-//!   the caller's [`PassOptions`], recorded in the [`RunReport`], and runs as written.
+//!   the entity's value), covered (written through another component) or illegal. A name it does not list is not
+//!   written: [`Mode::Partial`] keeps it and reports it, [`Mode::Full`] refuses it. A target never carries a name it
+//!   does not write (CONTRIBUTING.md, law 4).
+//! - [`PassManager::convert`] runs a stated pipeline and checks the world it leaves against a target: a name the
+//!   target still refuses is an error that says whether any pass of the pipeline removes or rewrites it.
 //! - The verifier ([`Component::verify`] on every component, [`crate::Resource::verify`] on every resource, plus the
 //!   manager's world [`Validator`]s) runs on a conversion's reader output and before its writer in every build, and
 //!   after every pass only with the pass checks ([`PassManager::with_pass_checks`]): on in debug builds, off by
@@ -29,7 +25,7 @@
 //!   [`crate::print`]). [`PassManager::run`] and [`PassManager::convert`] are [`PassManager::run_instrumented`] and
 //!   [`PassManager::convert_instrumented`] with an instrument that does nothing.
 //!
-//! Everything is deterministic: passes, names and candidates are walked in sorted order.
+//! Everything is deterministic: passes and names are walked in sorted order.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -44,11 +40,6 @@ use crate::world::{Component, Entity, Resource, World};
 
 /// A pass's text options (`name{key=value,...}`), sorted by key.
 pub type Options = BTreeMap<String, String>;
-
-/// The options of the passes a plan may choose, by pass name; a pass not listed is made with no options. A plan holds
-/// one instance of a pass, so a pipeline that runs one pass twice with different options is written as text
-/// ([`PassRegistry::parse`]).
-pub type PassOptions = BTreeMap<String, Options>;
 
 /// Counts a pass logs while it runs: what it changed, what it approximated and what it left out, and the entities it
 /// placed.
@@ -218,28 +209,17 @@ pub trait Pass: Send + Sync {
     /// or borrowed with [`World::resource_mut`]). The pass manager checks the resources; an in-place edit of a
     /// component's value on an entity that keeps it (`get_mut`, or [`World::insert`] over the value) is declared here
     /// and not checked: seeing it would take a controlled editing interface, later work. What the gap costs: a pass that
-    /// edits a value in place without declaring it here is never named, in any build, and its edit can make a plan's
-    /// reasoning about that name wrong; one that leaves an invalid value there is named at the pass in a build with the
+    /// edits a value in place without declaring it here is never named, in any build, and its edit can make what the
+    /// declarations say about that name wrong ([`Pipeline::unfed`], [`Pipeline::check`]); one that leaves an invalid value there is named at the pass in a build with the
     /// pass checks, and in a release build without them only by the verifier that runs before the writer, which names the
     /// entity but not the pass. Adding a name to an entity, taking one away and despawning are checked entity by entity
     /// against [`Pass::provides`], [`Pass::removes`] and [`Pass::despawns_entities`].
     fn modifies(&self) -> &[&'static str] {
         &[]
     }
-    /// Names it lowers: after it runs their values are in a form a target accepts, because it removed them, rewrote
-    /// them in place (also in [`Pass::modifies`]) or lowered them into what it provides and kept them. The planner
-    /// chooses passes by it ([`PassManager::plan`]). By default what it removes; a pass whose removals are side effects
-    /// (the file link of a value it rewrote) or that keeps its source declares its own.
-    fn legalizes(&self) -> &[&'static str] {
-        self.removes()
-    }
     /// What it approximates, in words (empty when it is exact).
     fn approximates(&self) -> &'static str {
         ""
-    }
-    /// Preference among passes of equal depth: higher first.
-    fn priority(&self) -> i32 {
-        0
     }
     /// Whether it despawns entities. If so, a component name it does not declare in [`Pass::removes`] may disappear
     /// when every entity that held the name before the pass was despawned by it (a dropped placement's
@@ -257,9 +237,8 @@ pub trait Pass: Send + Sync {
     }
     /// Names whose values it brings to their final form (a classifier: every surface classified). A later pass in a
     /// pipeline that provides one of them adds values that never went through this pass: unless a pass after it settles
-    /// the name again, [`PassManager::run`] refuses such a pipeline before it runs ([`Error::SettledThenChanged`]), and
-    /// the planner orders this pass after every
-    /// chosen pass that provides what it settles. Modifying settled values later is allowed. A modifier must not add
+    /// the name again, [`PassManager::run`] refuses such a pipeline before it runs ([`Error::SettledThenChanged`]).
+    /// Modifying settled values later is allowed. A modifier must not add
     /// values without declaring them in [`Pass::provides`]; the target's value rules check the result.
     fn settles(&self) -> &[&'static str] {
         &[]
@@ -286,12 +265,10 @@ impl PassRegistry {
 
     /// Register a pass by its declaration: the registry checks every pipeline's options against it before the pass is
     /// made ([`PassSpec::check`]), makes it from the examples to read its declarations ([`PassSpec::example`]; a pass
-    /// with a required option is never run so: a pipeline that leaves the option out fails to parse, and a plan that
-    /// chooses the pass without the caller's options for it is an error), and says what it takes
-    /// ([`PassRegistry::describe`]). Panics when the name is taken, the declaration is wrong ([`PassSpec`]: a key
+    /// with a required option is never run so: a pipeline that leaves the option out fails to parse), and says what it
+    /// takes ([`PassRegistry::describe`]). Panics when the name is taken, the declaration is wrong ([`PassSpec`]: a key
     /// twice, a group of one, a choice with no values, an optional option that says nothing of its absence), the pass
-    /// is not made from its examples or is not the pass named, it legalizes a name it neither requires, removes nor
-    /// modifies, or what it prints back ([`Pass::options`]) holds an undeclared key, leaves out a required option or a
+    /// is not made from its examples or is not the pass named, or what it prints back ([`Pass::options`]) holds an undeclared key, leaves out a required option or a
     /// group, or does not make a pass that prints the same.
     pub fn add(&mut self, spec: &'static PassSpec) {
         let name = spec.name;
@@ -300,7 +277,12 @@ impl PassRegistry {
         let made = spec
             .instance(&example)
             .unwrap_or_else(|e| panic!("pass {name} with its example options {example:?}: {e}"));
-        declarations_hold(name, &*made);
+        assert_eq!(
+            made.name(),
+            name,
+            "factory registered as {name} makes {}",
+            made.name()
+        );
         let printed = made.options();
         if let Err(e) = spec.check(&printed) {
             panic!("pass {name} prints {printed:?}, which its declaration refuses: {e}");
@@ -396,38 +378,6 @@ impl PassRegistry {
             runnable,
             unfed,
         }
-    }
-
-    /// Every registered pass, by name, made with its options in `options` (its registered example when it is not
-    /// listed there). Options for a pass that is not registered are an error.
-    fn instances(&self, options: &PassOptions) -> Result<Vec<Box<dyn Pass>>, Error> {
-        if let Some(name) = options.keys().find(|n| !self.specs.contains_key(n.as_str())) {
-            return Err(Error::UnknownPass(name.clone()));
-        }
-        self.specs
-            .iter()
-            .map(|(name, spec)| match options.get(*name) {
-                Some(given) => self.make(name, given),
-                None => self.make(name, &spec.example()),
-            })
-            .collect()
-    }
-}
-
-/// The registration checks of a pass made under `name`: it is that pass, and it legalizes only names it requires,
-/// removes or modifies.
-fn declarations_hold(name: &str, made: &dyn Pass) {
-    assert_eq!(
-        made.name(),
-        name,
-        "factory registered as {name} makes {}",
-        made.name()
-    );
-    for n in made.legalizes() {
-        assert!(
-            made.requires().contains(n) || made.removes().contains(n) || made.modifies().contains(n),
-            "pass {name} legalizes {n}, which it neither requires, removes nor modifies"
-        );
     }
 }
 
@@ -603,7 +553,9 @@ pub fn pass_text(p: &dyn Pass) -> String {
 /// A predicate deciding whether one entity's component is legal for a target (e.g. a texture format it writes).
 pub type LegalityCheck = Arc<dyn Fn(&World, Entity) -> bool + Send + Sync>;
 
-/// What a target does with one component name.
+/// What a target does with one component name. A name it gives no rule is not written: kept and reported in
+/// [`Mode::Partial`], refused in [`Mode::Full`]. A writer's target never carries a name through untouched: it writes its
+/// format's meaning and reports the rest (CONTRIBUTING.md, law 4).
 #[derive(Clone)]
 pub enum Legality {
     /// The writer writes it.
@@ -612,18 +564,10 @@ pub enum Legality {
     Dynamic(LegalityCheck),
     /// Written through another component: legal on the entities the check accepts (a `core.light` with the
     /// destination's `light` it was raised to); on the rest as an unlisted name (kept and reported as not written in
-    /// [`Mode::Partial`], illegal in [`Mode::Full`], unless the target carries unknown names). See
-    /// [`Target::covered`].
+    /// [`Mode::Partial`], illegal in [`Mode::Full`]). See [`Target::covered`].
     Covered(fn(&World, Entity) -> bool),
     /// Must be lowered before writing.
     Illegal,
-    /// Not interpreted, passed through untouched. Core's own serialisation only (v2 opaque tables): a format writer's
-    /// target never carries, it writes its format's meaning and reports the rest (CONTRIBUTING.md, law 4).
-    Carry,
-    /// Passed through untouched as [`Legality::Carry`], and lowered too: the writer carries it but draws only what a
-    /// pass lowers it to (a dialect material kept beside the PBR material lowered from it). A pass that legalizes it
-    /// must run; the name may stay. Core's own serialisation only.
-    LowerAndCarry,
 }
 
 /// The kind of a target's rule for a name, without its checks ([`Target::rules`]).
@@ -637,10 +581,6 @@ pub enum Rule {
     Covered,
     /// [`Legality::Illegal`].
     Illegal,
-    /// [`Legality::Carry`].
-    Carry,
-    /// [`Legality::LowerAndCarry`].
-    LowerAndCarry,
 }
 
 impl fmt::Debug for Legality {
@@ -650,8 +590,6 @@ impl fmt::Debug for Legality {
             Legality::Dynamic(_) => "Dynamic",
             Legality::Covered(_) => "Covered",
             Legality::Illegal => "Illegal",
-            Legality::Carry => "Carry",
-            Legality::LowerAndCarry => "LowerAndCarry",
         })
     }
 }
@@ -659,9 +597,9 @@ impl fmt::Debug for Legality {
 /// How strict a conversion is about names the target does not list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
-    /// Only illegal (and failing dynamic) names must go; unlisted names stay.
+    /// Only illegal (and failing dynamic) names must go; unlisted names stay, not written.
     Partial,
-    /// Every name must be legal or carried; unlisted names are illegal unless the target carries unknown names.
+    /// Every name must be legal; unlisted names are illegal.
     Full,
 }
 
@@ -687,7 +625,6 @@ pub struct Target {
     rule_words: BTreeMap<String, String>,
     /// Value rules on resources ([`Target::check_resource`]), by resource name.
     resource_rules: BTreeMap<String, ResourceRule>,
-    carry_unknown: bool,
 }
 
 impl Target {
@@ -697,7 +634,6 @@ impl Target {
             rules: BTreeMap::new(),
             rule_words: BTreeMap::new(),
             resource_rules: BTreeMap::new(),
-            carry_unknown: false,
         }
     }
 
@@ -712,14 +648,6 @@ impl Target {
 
     pub fn illegal(self, name: &str) -> Self {
         self.rule(name, Legality::Illegal)
-    }
-
-    pub fn carry(self, name: &str) -> Self {
-        self.rule(name, Legality::Carry)
-    }
-
-    pub fn lower_and_carry(self, name: &str) -> Self {
-        self.rule(name, Legality::LowerAndCarry)
     }
 
     pub fn dynamic(self, name: &str, check: impl Fn(&World, Entity) -> bool + Send + Sync + 'static) -> Self {
@@ -750,8 +678,7 @@ impl Target {
     }
 
     /// A named value rule on a resource: the target refuses the world while the resource is there and `check` refuses
-    /// it (`"every surface classified"`). The planner lowers a refused resource like a refused component value, with a
-    /// pass that legalizes the resource's name and modifies or removes it.
+    /// it (`"every surface classified"`). A pass of the stated pipeline that modifies or removes the resource fixes it.
     pub fn check_resource<R: Resource>(
         mut self,
         what: &str,
@@ -785,12 +712,6 @@ impl Target {
             .collect()
     }
 
-    /// Pass every unlisted name through (also in [`Mode::Full`]).
-    pub fn carry_unknown(mut self) -> Self {
-        self.carry_unknown = true;
-        self
-    }
-
     pub fn legality(&self, name: &str) -> Option<&Legality> {
         self.rules.get(name)
     }
@@ -806,17 +727,10 @@ impl Target {
                     Legality::Dynamic(_) => Rule::Dynamic,
                     Legality::Covered(_) => Rule::Covered,
                     Legality::Illegal => Rule::Illegal,
-                    Legality::Carry => Rule::Carry,
-                    Legality::LowerAndCarry => Rule::LowerAndCarry,
                 };
                 (name.as_str(), rule)
             })
             .collect()
-    }
-
-    /// Whether it passes every name it states no rule for through ([`Target::carry_unknown`]).
-    pub fn carries_unknown(&self) -> bool {
-        self.carry_unknown
     }
 
     /// The resources it checks the values of ([`Target::check_resource`]), by name.
@@ -824,10 +738,9 @@ impl Target {
         self.resource_rules.keys().map(String::as_str).collect()
     }
 
-    /// Check a prepared world against the target without changing it: what the writer won't write (an illegal or,
-    /// unless carried, an unlisted name, and a covered name's uncovered entities: [`Prepared::unsupported`], entity
-    /// counts by name; a resource it neither
-    /// lists, rules on nor carries: [`Prepared::unsupported_resources`]; the conversion's own resources,
+    /// Check a prepared world against the target without changing it: what the writer won't write (an illegal or an
+    /// unlisted name, and a covered name's uncovered entities: [`Prepared::unsupported`], entity counts by name; a
+    /// resource it neither lists nor rules on: [`Prepared::unsupported_resources`]; the conversion's own resources,
     /// [`crate::convert::OPERATIONAL_RESOURCES`], aside), and values of names it writes that its value rule refuses
     /// ([`Prepared::invalid`], by name with the rule's words) or resources it refuses ([`Prepared::invalid_resources`]).
     /// A resource is listed like a component ([`Target::legal`], [`Target::illegal`]).
@@ -836,7 +749,7 @@ impl Target {
         for name in w.component_names() {
             let all = w.entities_named(name);
             match self.rules.get(name) {
-                Some(Legality::Legal | Legality::Carry | Legality::LowerAndCarry) => {}
+                Some(Legality::Legal) => {}
                 Some(Legality::Dynamic(f)) => {
                     let bad: Vec<Entity> = all.into_iter().filter(|&e| !f(w, e)).collect();
                     if !bad.is_empty() {
@@ -844,10 +757,9 @@ impl Target {
                         out.invalid.push((name.to_owned(), words, bad));
                     }
                 }
-                None if self.carry_unknown => {}
                 Some(Legality::Covered(f)) => {
                     let uncovered = all.iter().filter(|&&e| !f(w, e)).count();
-                    if uncovered > 0 && !self.carry_unknown {
+                    if uncovered > 0 {
                         let words = self.rule_words(name).unwrap_or_default();
                         out.unsupported
                             .push((format!("{name} not {words}"), uncovered as u64));
@@ -860,11 +772,10 @@ impl Target {
         for name in w.resource_names() {
             let written = crate::convert::OPERATIONAL_RESOURCES.contains(&name)
                 || self.resource_rules.contains_key(name)
-                || match self.rules.get(name) {
-                    Some(Legality::Illegal) => false,
-                    Some(_) => true,
-                    None => self.carry_unknown,
-                };
+                || self
+                    .rules
+                    .get(name)
+                    .is_some_and(|rule| !matches!(rule, Legality::Illegal));
             if !written {
                 out.unsupported_resources.push(name.to_owned());
             }
@@ -876,45 +787,13 @@ impl Target {
     pub fn illegal_entities(&self, w: &World, name: &str, mode: Mode) -> Vec<Entity> {
         let all = w.entities_named(name);
         match self.rules.get(name) {
-            Some(Legality::Legal | Legality::Carry | Legality::LowerAndCarry) => Vec::new(),
+            Some(Legality::Legal) => Vec::new(),
             Some(Legality::Illegal) => all,
             Some(Legality::Dynamic(f)) => all.into_iter().filter(|&e| !f(w, e)).collect(),
-            Some(Legality::Covered(_)) if mode == Mode::Partial || self.carry_unknown => Vec::new(),
+            Some(Legality::Covered(_)) if mode == Mode::Partial => Vec::new(),
             Some(Legality::Covered(f)) => all.into_iter().filter(|&e| !f(w, e)).collect(),
-            None if mode == Mode::Partial || self.carry_unknown => Vec::new(),
+            None if mode == Mode::Partial => Vec::new(),
             None => all,
-        }
-    }
-
-    /// What a plan must do about `name`, which `w` has or a pass will provide. A dynamic name needs lowering only for
-    /// the values `w` has that its check refuses; values a pass will provide count as legal (the check before the
-    /// writer sees them).
-    fn need(&self, w: &World, name: &str, mode: Mode) -> Need {
-        if let Some(r) = self.resource_rules.get(name) {
-            return if (r.check)(w) { Need::Nothing } else { Need::Fix };
-        }
-        match self.rules.get(name) {
-            Some(Legality::Legal | Legality::Carry) => Need::Nothing,
-            Some(Legality::LowerAndCarry) => Need::Lower,
-            Some(Legality::Illegal) => Need::Remove,
-            Some(Legality::Dynamic(f)) => {
-                if w.entities_named(name).into_iter().all(|e| f(w, e)) {
-                    Need::Nothing
-                } else {
-                    Need::Fix
-                }
-            }
-            // the uncovered entities, as an unlisted name's
-            Some(Legality::Covered(_)) if mode == Mode::Partial || self.carry_unknown => Need::Nothing,
-            Some(Legality::Covered(f)) => {
-                if w.entities_named(name).into_iter().all(|e| f(w, e)) {
-                    Need::Nothing
-                } else {
-                    Need::Remove
-                }
-            }
-            None if mode == Mode::Partial || self.carry_unknown => Need::Nothing,
-            None => Need::Remove,
         }
     }
 }
@@ -931,32 +810,6 @@ pub struct Prepared {
     pub invalid_resources: Vec<String>,
     /// Resources the writer doesn't write.
     pub unsupported_resources: Vec<String>,
-}
-
-/// What a plan must do about one name, by the target's rule for it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Need {
-    /// Legal or carried as it is.
-    Nothing,
-    /// Illegal: a pass that legalizes and removes it.
-    Remove,
-    /// Dynamic with values the check refuses: a pass that legalizes it and removes it or rewrites it in place.
-    Fix,
-    /// Carried and lowered: a pass that legalizes it; the name may stay.
-    Lower,
-}
-
-impl Need {
-    /// Whether `p` lowers a name with this need.
-    fn met_by(self, p: &dyn Pass, name: &str) -> bool {
-        let legalizes = p.legalizes().contains(&name);
-        match self {
-            Need::Nothing => false,
-            Need::Remove => legalizes && p.removes().contains(&name),
-            Need::Fix => legalizes && (p.removes().contains(&name) || p.modifies().contains(&name)),
-            Need::Lower => legalizes,
-        }
-    }
 }
 
 /// A world-wide rule (one name -> one payload, frame sanity); returns its failures.
@@ -998,14 +851,6 @@ pub enum Error {
     UnknownPass(String),
     #[error("pass {pass}: {message}")]
     Options { pass: String, message: String },
-    #[error("no pass lowers `{name}` to anything `{target}` accepts{detail}")]
-    NoLowering {
-        name: String,
-        target: String,
-        detail: String,
-    },
-    #[error("cannot order passes {0:?}: they depend on each other")]
-    Cycle(Vec<String>),
     #[error("pass {pass} requires `{name}`, which the world does not have")]
     Missing { pass: String, name: String },
     #[error("pass {pass} failed: {message}")]
@@ -1023,7 +868,7 @@ pub enum Error {
     },
     #[error("instrument at {step}: {message}")]
     Instrument { step: String, message: String },
-    #[error("{}", illegal_text(.target, .name, .entities, .rule))]
+    #[error("{}", illegal_text(.target, .name, .entities, .rule, .lowered_by))]
     Illegal {
         target: String,
         name: String,
@@ -1031,6 +876,9 @@ pub enum Error {
         entities: Vec<Entity>,
         /// The words naming the rule refused, empty when it has none.
         rule: String,
+        /// The passes of the stated pipeline that remove or rewrite the name, as pipeline text; empty when nothing in
+        /// it does (the pipeline is missing a lowering).
+        lowered_by: Vec<String>,
     },
     #[error("{changed_by} provides `{name}` after {settled_by} settled it: its values would not be settled")]
     SettledThenChanged {
@@ -1042,17 +890,23 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-fn illegal_text(target: &str, name: &str, entities: &[Entity], rule: &str) -> String {
+fn illegal_text(target: &str, name: &str, entities: &[Entity], rule: &str, lowered_by: &[String]) -> String {
     let rule = if rule.is_empty() {
         String::new()
     } else {
         format!(" ({rule})")
     };
-    if entities.is_empty() {
-        format!("`{target}` does not accept `{name}`{rule} after the pipeline")
+    let on = if entities.is_empty() {
+        String::new()
     } else {
-        format!("`{target}` does not accept `{name}`{rule} on {entities:?} after the pipeline")
-    }
+        format!(" on {entities:?}")
+    };
+    let why = if lowered_by.is_empty() {
+        "nothing in the stated pipeline removes or rewrites it".to_owned()
+    } else {
+        format!("{} left it", lowered_by.join(", "))
+    };
+    format!("`{target}` does not accept `{name}`{rule}{on} after the pipeline: {why}")
 }
 
 /// A pipeline in which a pass provides a name an earlier pass settles ([`Pass::settles`]) and no pass after it settles
@@ -1178,36 +1032,20 @@ pub enum MissingInputs {
     Skip,
 }
 
-/// Why the planner chose a pass: the name to lower (or the missing required name) and the chain depth.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PlanChoice {
-    pub name: String,
-    /// The pass with its options, as in the pipeline text.
-    pub pass: String,
-    pub depth: u32,
-}
-
 /// What a conversion did. Its equality is the determinism comparison: every field, the steps compared without their
 /// times ([`StepReport`]'s equality).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunReport {
+    /// The target a conversion checked the world against ([`PassManager::convert`]); empty for a bare run.
     pub target: String,
+    /// The stated pipeline a conversion ran, as text; empty for a bare run.
     pub pipeline: String,
-    pub plan: Vec<PlanChoice>,
-    /// Passes the caller gave options for that the plan did not choose, by name.
-    pub unused_options: Vec<String>,
     pub steps: Vec<StepReport>,
 }
 
 impl fmt::Display for RunReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "target {}: pipeline [{}]", self.target, self.pipeline)?;
-        for c in &self.plan {
-            writeln!(f, "  plan: `{}` by {} (depth {})", c.name, c.pass, c.depth)?;
-        }
-        if !self.unused_options.is_empty() {
-            writeln!(f, "  options for passes not planned: {:?}", self.unused_options)?;
-        }
         for s in &self.steps {
             write!(f, "  {}: +{:?} -{:?}", s.pass, s.added, s.removed)?;
             for (k, n) in &s.log.counts {
@@ -1280,9 +1118,7 @@ pub trait Instrument {
 struct NoInstrument;
 impl Instrument for NoInstrument {}
 
-const INF: u32 = u32::MAX;
-
-/// Runs pipelines, plans them, and verifies the world between steps.
+/// Runs the pipelines a program states and verifies the world between steps.
 #[derive(Default)]
 pub struct PassManager {
     pub registry: PassRegistry,
@@ -1798,549 +1634,66 @@ impl PassManager {
         undeclared("written (resources)", written)
     }
 
-    /// Choose the passes that take the world to what `target` accepts (see the module docs), in run order, each made
-    /// with its options in `options`. A dynamic check is decided on the values the world has: values a planned pass
-    /// produces are checked by [`PassManager::convert`], which plans again for those the target refuses.
-    pub fn plan(
-        &self,
-        w: &World,
-        target: &Target,
-        mode: Mode,
-        options: &PassOptions,
-        report: &mut RunReport,
-    ) -> Result<Pipeline> {
-        self.plan_round(w, target, mode, options, &BTreeSet::new(), report)
-            .map(|(pipeline, _)| pipeline)
-    }
-
-    /// [`PassManager::plan`] for one round of a conversion: carried-and-lowered names in `lowered_before` were lowered
-    /// by an earlier round and need no lowering again unless a pass of this round provides more of them. Returns the
-    /// pipeline and the carried-and-lowered names lowered once it has run.
-    fn plan_round(
-        &self,
-        w: &World,
-        target: &Target,
-        mode: Mode,
-        options: &PassOptions,
-        lowered_before: &BTreeSet<String>,
-        report: &mut RunReport,
-    ) -> Result<(Pipeline, BTreeSet<String>)> {
-        let planned = self.plan_round_unchecked(w, target, mode, options, lowered_before, report)?;
-        // a pass with required options runs only with the caller's: the planner doesn't choose them
-        if let Some(p) = planned
-            .0
-            .passes
-            .iter()
-            .find(|p| self.registry.requires_options(p.name()) && !options.contains_key(p.name()))
-        {
-            return Err(Error::Options {
-                pass: p.name().to_owned(),
-                message: "the plan needs it and it has required options: give them (PassOptions)".into(),
-            });
-        }
-        Ok(planned)
-    }
-
-    fn plan_round_unchecked(
-        &self,
-        w: &World,
-        target: &Target,
-        mode: Mode,
-        options: &PassOptions,
-        lowered_before: &BTreeSet<String>,
-        report: &mut RunReport,
-    ) -> Result<(Pipeline, BTreeSet<String>)> {
-        let passes = self.registry.instances(options)?;
-        let present: BTreeSet<&str> = w.component_names().into_iter().collect();
-        let resources: BTreeSet<&str> = w.resource_names().into_iter().collect();
-        let have = |n: &str| present.contains(n) || resources.contains(n);
-        // what each name the world has, or a pass provides or lowers, needs
-        let mut needs: BTreeMap<&str, Need> = BTreeMap::new();
-        let declared = passes
-            .iter()
-            .flat_map(|p| p.provides().iter().chain(p.legalizes()).copied());
-        // resources the target has a value rule for are planned like components
-        let ruled: BTreeSet<&str> = resources
-            .iter()
-            .copied()
-            .filter(|n| target.resource_rules.contains_key(*n))
-            .collect();
-        for n in present.iter().chain(&ruled).copied().chain(declared) {
-            needs.entry(n).or_insert_with(|| target.need(w, n, mode));
-        }
-        let need = |n: &str| needs.get(n).copied().unwrap_or_else(|| target.need(w, n, mode));
-        // what a pass provides needs nothing more when it is legal, a root of its own (failing values the world
-        // already has), or lowered by the pass itself
-        let settled = |p: &dyn Pass, n: &str| {
-            let need = need(n);
-            matches!(need, Need::Nothing | Need::Fix) || need.met_by(p, n)
-        };
-
-        // depth[name]: chain depth to lower a name; supply[name]: to provide a missing required name. A pass has a
-        // cost as a provider (`cost`) and one as the lowering of each name it lowers (`lowering`): as a lowering it
-        // does not pay for the name it lowers, which is there whenever it is to be lowered (whoever provides it pays)
-        let mut depth: BTreeMap<&str, u32> = BTreeMap::new();
-        let mut supply: BTreeMap<&str, u32> = BTreeMap::new();
-        let mut cost = vec![INF; passes.len()];
-        let mut lowering: BTreeMap<(usize, &str), u32> = BTreeMap::new();
-        let plus_one = |worst: u32| if worst == INF { INF } else { worst + 1 };
-        loop {
-            let mut changed = false;
-            for (i, p) in passes.iter().enumerate() {
-                let p = p.as_ref();
-                let provided = p
-                    .provides()
-                    .iter()
-                    .map(|&n| {
-                        if settled(p, n) {
-                            0
-                        } else {
-                            *depth.get(n).unwrap_or(&INF)
-                        }
-                    })
-                    .max()
-                    .unwrap_or(0);
-                let required = |except: Option<&str>| {
-                    p.requires()
-                        .iter()
-                        .filter(|&&r| Some(r) != except)
-                        .map(|&r| {
-                            if have(r) {
-                                0
-                            } else {
-                                *supply.get(r).unwrap_or(&INF)
-                            }
-                        })
-                        .max()
-                        .unwrap_or(0)
-                };
-                let c = plus_one(provided.max(required(None)));
-                let lowers: Vec<(&str, u32)> = p
-                    .legalizes()
-                    .iter()
-                    .filter(|&&n| need(n).met_by(p, n))
-                    .map(|&n| (n, plus_one(provided.max(required(Some(n))))))
-                    .collect();
-                if c < cost[i] {
-                    cost[i] = c;
-                    changed = true;
-                    for &n in p.provides() {
-                        if c < *supply.get(n).unwrap_or(&INF) {
-                            supply.insert(n, c);
-                        }
-                    }
-                }
-                for (n, c) in lowers {
-                    if c < *lowering.get(&(i, n)).unwrap_or(&INF) {
-                        lowering.insert((i, n), c);
-                        changed = true;
-                        if c < *depth.get(n).unwrap_or(&INF) {
-                            depth.insert(n, c);
-                        }
-                    }
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-
-        // pass i's depth as the lowering of `name` (lowering) or as its provider (supply); INF when it is neither
-        let depth_as = |i: usize, name: &str, lowering_it: bool| -> u32 {
-            if lowering_it {
-                *lowering.get(&(i, name)).unwrap_or(&INF)
-            } else if passes[i].provides().contains(&name) {
-                cost[i]
-            } else {
-                INF
-            }
-        };
-        // the cheapest pass for a name: smallest depth, then highest priority, then name
-        let best = |name: &str, lowering_it: bool| -> Option<usize> {
-            (0..passes.len())
-                .filter(|&i| depth_as(i, name, lowering_it) != INF)
-                .min_by_key(|&i| {
-                    (
-                        depth_as(i, name, lowering_it),
-                        -passes[i].priority(),
-                        passes[i].name(),
-                    )
-                })
-        };
-        // whether pass i lowers `name` (lowering) or provides it (supply)
-        let serves = |i: usize, name: &str, lowering_it: bool| {
-            if lowering_it {
-                need(name).met_by(passes[i].as_ref(), name)
-            } else {
-                passes[i].provides().contains(&name)
-            }
-        };
-
-        // the names the world has that must be lowered
-        let roots: Vec<&str> = present
-            .iter()
-            .chain(&ruled)
-            .copied()
-            .filter(|&n| match need(n) {
-                Need::Nothing => false,
-                Need::Lower => !lowered_before.contains(n),
-                Need::Remove | Need::Fix => true,
-            })
-            .collect();
-        let mut chosen: BTreeSet<usize> = BTreeSet::new();
-        // the obligations that made a choice, in choice order
-        let mut choices: Vec<(&str, bool)> = Vec::new();
-        let mut todo: Vec<(&str, bool)> = roots.iter().rev().map(|&n| (n, true)).collect();
-        while let Some((name, lowering_it)) = todo.pop() {
-            if chosen.iter().any(|&i| serves(i, name, lowering_it)) {
-                continue;
-            }
-            let Some(i) = best(name, lowering_it) else {
-                return Err(Error::NoLowering {
-                    detail: self.why_not(&passes, name, lowering_it, need(name), &have),
-                    name: name.to_owned(),
-                    target: target.name.clone(),
-                });
-            };
-            let p = passes[i].as_ref();
-            choices.push((name, lowering_it));
-            chosen.insert(i);
-            for &r in p.requires().iter().rev() {
-                if !have(r) {
-                    todo.push((r, false));
-                }
-            }
-            for &n in p.provides().iter().rev() {
-                if !settled(p, n) {
-                    todo.push((n, true));
-                }
-            }
-        }
-
-        // what a set of passes must provide or lower: the roots, the requirements the world lacks, and what they
-        // provide that is not settled
-        let obligations = |set: &BTreeSet<usize>| -> BTreeSet<(&str, bool)> {
-            let mut out: BTreeSet<(&str, bool)> = roots.iter().map(|&n| (n, true)).collect();
-            for &i in set {
-                let p = passes[i].as_ref();
-                out.extend(p.requires().iter().filter(|&&r| !have(r)).map(|&r| (r, false)));
-                out.extend(
-                    p.provides()
-                        .iter()
-                        .filter(|&&n| !settled(p, n))
-                        .map(|&n| (n, true)),
-                );
-            }
-            out
-        };
-        let covered = |set: &BTreeSet<usize>| {
-            obligations(set)
-                .iter()
-                .all(|&(n, lowering_it)| set.iter().any(|&i| serves(i, n, lowering_it)))
-        };
-        // a chosen pass whose work the others cover is left out, the least preferred first, until none is
-        // redundant (a pass chosen for one name may turn out to be covered by one chosen later for another)
-        loop {
-            let mut worst_first: Vec<usize> = chosen.iter().copied().collect();
-            worst_first.sort_by_key(|&i| (cost[i], -passes[i].priority(), passes[i].name()));
-            worst_first.reverse();
-            let redundant = worst_first.into_iter().find(|&i| {
-                let mut rest = chosen.clone();
-                rest.remove(&i);
-                covered(&rest)
-            });
-            match redundant {
-                Some(i) => {
-                    chosen.remove(&i);
-                }
-                None => break,
-            }
-        }
-        // why each pass is in the plan: the obligations that made a choice, each with the pass that meets it now
-        let left_to_meet = obligations(&chosen);
-        for (name, lowering_it) in choices {
-            if !left_to_meet.contains(&(name, lowering_it)) {
-                continue;
-            }
-            let by = chosen
-                .iter()
-                .copied()
-                .filter(|&i| serves(i, name, lowering_it))
-                .min_by_key(|&i| {
-                    (
-                        depth_as(i, name, lowering_it),
-                        -passes[i].priority(),
-                        passes[i].name(),
-                    )
-                })
-                .expect("every obligation is met");
-            report.plan.push(PlanChoice {
-                name: name.to_owned(),
-                pass: pass_text(passes[by].as_ref()),
-                depth: depth_as(by, name, lowering_it),
-            });
-        }
-
-        let order = order_passes(&passes, &chosen)?;
-        // check the order by simulating the declarations: what is required is there, what must go has gone, and
-        // what must be lowered was lowered after the last pass that provided more of it
-        let mut names: BTreeSet<&str> = present.iter().chain(&ruled).copied().collect();
-        let mut lowered: BTreeSet<&str> = present
-            .iter()
-            .copied()
-            .filter(|n| lowered_before.contains(*n))
-            .collect();
-        for &i in &order {
-            let p = passes[i].as_ref();
-            if let Some(r) = p
-                .requires()
-                .iter()
-                .find(|r| !names.contains(*r) && !resources.contains(*r))
-            {
-                return Err(Error::Missing {
-                    pass: p.name().to_owned(),
-                    name: (*r).to_owned(),
-                });
-            }
-            for n in p.removes() {
-                names.remove(n);
-            }
-            for &n in p.provides() {
-                names.insert(n);
-                if need(n) == Need::Lower {
-                    lowered.remove(n);
-                }
-            }
-            for &n in p.legalizes() {
-                if need(n).met_by(p, n) {
-                    lowered.insert(n);
-                }
-            }
-        }
-        let left = names.iter().find(|&&n| match need(n) {
-            Need::Nothing => false,
-            Need::Remove => true,
-            Need::Fix | Need::Lower => !lowered.contains(n),
-        });
-        if let Some(n) = left {
-            return Err(Error::NoLowering {
-                name: (*n).to_owned(),
-                target: target.name.clone(),
-                detail: " (the planned pipeline leaves it)".to_owned(),
-            });
-        }
-        report.unused_options = options
-            .keys()
-            .filter(|n| !chosen.iter().any(|&i| passes[i].name() == n.as_str()))
-            .cloned()
-            .collect();
-        let mut made: Vec<Option<Box<dyn Pass>>> = passes.into_iter().map(Some).collect();
-        let pipeline = Pipeline {
-            passes: order
-                .into_iter()
-                .map(|i| made[i].take().expect("each pass is ordered once"))
-                .collect(),
-        };
-        report.target = target.name.clone();
-        report.pipeline = pipeline.to_string();
-        let lowered = lowered
-            .into_iter()
-            .filter(|n| need(n) == Need::Lower)
-            .map(str::to_owned)
-            .collect();
-        Ok((pipeline, lowered))
-    }
-
-    /// The missing link behind a failed plan, for the error message.
-    fn why_not(
-        &self,
-        passes: &[Box<dyn Pass>],
-        name: &str,
-        lowering: bool,
-        need: Need,
-        have: &dyn Fn(&str) -> bool,
-    ) -> String {
-        let candidates: Vec<String> = passes
-            .iter()
-            .map(|p| p.as_ref())
-            .filter(|p| {
-                if lowering {
-                    p.legalizes().contains(&name)
-                } else {
-                    p.provides().contains(&name)
-                }
-            })
-            .map(|p| {
-                if lowering && !need.met_by(p, name) {
-                    return match need {
-                        Need::Remove => format!("{} lowers it and keeps it", p.name()),
-                        _ => format!("{} lowers it but neither removes nor rewrites it", p.name()),
-                    };
-                }
-                let missing: Vec<&str> = p.requires().iter().copied().filter(|r| !have(r)).collect();
-                if missing.is_empty() {
-                    format!("{} leaves something illegal", p.name())
-                } else {
-                    format!("{} needs {missing:?}", p.name())
-                }
-            })
-            .collect();
-        let what = if lowering {
-            ""
-        } else {
-            " (required, nothing provides it)"
-        };
-        if candidates.is_empty() {
-            what.to_owned()
-        } else {
-            format!("{what}: {}", candidates.join("; "))
-        }
-    }
-
-    /// Plan (with `options` for the passes it chooses), run and check: verify the reader's world, run the planned
-    /// pipeline (verifying after every pass), then check that the target accepts every component and verify once more
-    /// before the writer. A dynamic check sees values only once they exist: while the target refuses values the
-    /// pipeline produced, convert plans again on the world as it is and runs that too. A round that plans a pipeline
-    /// an earlier round ran makes no progress, and the refused values are an error. The report holds every round: its
-    /// pipeline is what ran, in order.
+    /// Run the stated `pipeline` and check the world it leaves against `target`: verify the reader's world, run the
+    /// pipeline as written (verifying after every pass with the pass checks), then check that the target accepts every
+    /// component and resource in `mode`, and verify once more before the writer. A name the target still refuses is
+    /// [`Error::Illegal`], naming the passes of the pipeline that remove or rewrite it, or none: the manager never adds a
+    /// pass to lower it.
     pub fn convert(
         &self,
         w: &mut World,
+        pipeline: &Pipeline,
         target: &Target,
         mode: Mode,
-        options: &PassOptions,
     ) -> Result<RunReport> {
-        self.convert_instrumented(w, target, mode, options, &mut NoInstrument)
+        self.convert_instrumented(w, pipeline, target, mode, &mut NoInstrument)
     }
 
-    /// [`PassManager::convert`], calling `instrument` around every pass of the planned pipeline.
+    /// [`PassManager::convert`], calling `instrument` around every pass of the pipeline.
     pub fn convert_instrumented(
         &self,
         w: &mut World,
+        pipeline: &Pipeline,
         target: &Target,
         mode: Mode,
-        options: &PassOptions,
         instrument: &mut dyn Instrument,
     ) -> Result<RunReport> {
         self.verify(w, "the reader")?;
-        let mut report = RunReport::default();
-        let mut ran: Vec<String> = Vec::new();
-        let mut lowered = BTreeSet::new();
-        let mut used: BTreeSet<String> = BTreeSet::new();
-        let refused = |w: &World| {
-            w.component_names()
-                .into_iter()
-                .map(|name| (name.to_owned(), target.illegal_entities(w, name, mode)))
-                .find(|(_, bad)| !bad.is_empty())
-                .or_else(|| {
-                    target
-                        .refused_resources(w)
-                        .first()
-                        .map(|n| ((*n).to_owned(), Vec::new()))
-                })
+        let mut report = RunReport {
+            target: target.name.clone(),
+            pipeline: pipeline.to_string(),
+            steps: Vec::new(),
         };
-        loop {
-            let mut round = RunReport::default();
-            let (pipeline, now_lowered) = self.plan_round(w, target, mode, options, &lowered, &mut round)?;
-            let text = pipeline.to_string();
-            // a round planning a pipeline an earlier round ran makes no progress (and rounds cannot cycle)
-            if pipeline.passes.is_empty() || ran.contains(&text) {
-                break;
-            }
-            used.extend(pipeline.passes.iter().map(|p| p.name().to_owned()));
-            report.plan.extend(round.plan);
-            self.run_instrumented(w, &pipeline, &mut report, instrument)?;
-            ran.push(text);
-            lowered = now_lowered;
-            if refused(w).is_none() {
-                break;
-            }
-        }
-        report.target = target.name.clone();
-        report.pipeline = ran.join(", ");
-        report.unused_options = options.keys().filter(|n| !used.contains(*n)).cloned().collect();
-        if let Some((name, bad)) = refused(w) {
+        self.run_instrumented(w, pipeline, &mut report, instrument)?;
+        let refused = w
+            .component_names()
+            .into_iter()
+            .map(|name| (name.to_owned(), target.illegal_entities(w, name, mode)))
+            .find(|(_, bad)| !bad.is_empty())
+            .or_else(|| {
+                target
+                    .refused_resources(w)
+                    .first()
+                    .map(|n| ((*n).to_owned(), Vec::new()))
+            });
+        if let Some((name, bad)) = refused {
+            let lowered_by = pipeline
+                .passes
+                .iter()
+                .filter(|p| p.removes().contains(&name.as_str()) || p.modifies().contains(&name.as_str()))
+                .map(|p| pass_text(p.as_ref()))
+                .collect();
             return Err(Error::Illegal {
                 target: target.name.clone(),
                 rule: target.rule_words(&name).unwrap_or_default().to_owned(),
                 name,
                 entities: bad.into_iter().take(10).collect(),
+                lowered_by,
             });
         }
         self.verify(w, &format!("the pipeline, before {}", target.name))?;
         Ok(report)
     }
-}
-
-/// Run order of the chosen passes. A pass reads the names it requires and those it legalizes but keeps. For each
-/// name: a pass that provides it runs before one that reads, removes or modifies it; one that modifies it (without
-/// providing it) runs before one that takes it as it is (reads or removes it, neither providing nor modifying it); one
-/// that reads it runs before one that only removes it (neither providing nor modifying it). Between two passes that
-/// both provide a name, its edge is weak: it gives way to any edge the other way (two passes that each add to and read
-/// one name have no order between them). Ties by name.
-fn order_passes(passes: &[Box<dyn Pass>], chosen: &BTreeSet<usize>) -> Result<Vec<usize>> {
-    let ids: Vec<usize> = chosen.iter().copied().collect();
-    let reads = |p: &dyn Pass, n: &&str| {
-        p.requires().contains(n) || (p.legalizes().contains(n) && !p.removes().contains(n))
-    };
-    let uses = |p: &dyn Pass, n: &&str| reads(p, n) || p.removes().contains(n) || p.modifies().contains(n);
-    // a provider of a name before a pass that uses it and provides it too
-    let weak = |a: usize, b: usize| -> bool {
-        let (pa, pb) = (passes[a].as_ref(), passes[b].as_ref());
-        pa.provides()
-            .iter()
-            .any(|n| uses(pb, n) && pb.provides().contains(n))
-    };
-    let strong = |a: usize, b: usize| -> bool {
-        let (pa, pb) = (passes[a].as_ref(), passes[b].as_ref());
-        // neither provides nor modifies: what it reads or removes is the value as it is
-        let as_is = |p: &dyn Pass, n: &&str| !p.provides().contains(n) && !p.modifies().contains(n);
-        pa.provides()
-            .iter()
-            .any(|n| uses(pb, n) && !pb.provides().contains(n))
-            || pa
-                .provides()
-                .iter()
-                .any(|n| pb.settles().contains(n) && !pa.settles().contains(n))
-            || pa.modifies().iter().any(|n| {
-                !pa.provides().contains(n) && as_is(pb, n) && (reads(pb, n) || pb.removes().contains(n))
-            })
-            || pa
-                .requires()
-                .iter()
-                .chain(pa.legalizes())
-                .any(|n| reads(pa, n) && pb.removes().contains(n) && as_is(pb, n))
-    };
-    let before = |a: usize, b: usize| strong(a, b) || (weak(a, b) && !strong(b, a) && !weak(b, a));
-    let mut indeg: BTreeMap<usize, usize> = ids.iter().map(|&i| (i, 0)).collect();
-    for &a in &ids {
-        for &b in &ids {
-            if a != b && before(a, b) {
-                *indeg.get_mut(&b).expect("chosen") += 1;
-            }
-        }
-    }
-    let mut out = Vec::new();
-    while !indeg.is_empty() {
-        let next = indeg
-            .iter()
-            .filter(|(_, d)| **d == 0)
-            .map(|(&i, _)| i)
-            .min_by_key(|&i| passes[i].name());
-        let Some(n) = next else {
-            return Err(Error::Cycle(
-                indeg.keys().map(|&i| passes[i].name().to_owned()).collect(),
-            ));
-        };
-        indeg.remove(&n);
-        for (&b, d) in indeg.iter_mut() {
-            if before(n, b) {
-                *d -= 1;
-            }
-        }
-        out.push(n);
-    }
-    Ok(out)
 }
 
 #[cfg(test)]
@@ -2501,36 +1854,6 @@ mod tests {
         },
     };
 
-    /// A cheaper-looking but worse way to drop toy.layered (priority -1): lowers it straight to nothing useful.
-    struct Drop;
-    impl Pass for Drop {
-        fn name(&self) -> &'static str {
-            "drop-layers"
-        }
-        fn removes(&self) -> &[&'static str] {
-            &["toy.layered"]
-        }
-        fn provides(&self) -> &[&'static str] {
-            &["toy.pbr"]
-        }
-        fn priority(&self) -> i32 {
-            -1
-        }
-        fn run(&self, w: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
-            let es: Vec<Entity> = w.iter::<Layered>().map(|(e, _)| e).collect();
-            for e in es {
-                w.remove::<Layered>(e);
-                w.insert(e, Pbr(0));
-            }
-            Ok(())
-        }
-    }
-    const DROP_LAYERS: PassSpec = PassSpec {
-        name: "drop-layers",
-        options: &[],
-        make: |_| Ok(Box::new(Drop)),
-    };
-
     /// Adds a name it does not declare.
     struct Sneaky;
     impl Pass for Sneaky {
@@ -2545,19 +1868,15 @@ mod tests {
     }
     const SNEAKY: PassSpec = PassSpec {
         name: "sneaky",
-        // an option it never reads, for a plan that gives options to a pass it does not choose
-        options: &[OptionSpec::optional("x", "1", "unread", "nothing")],
+        options: &[],
         make: |_| Ok(Box::new(Sneaky)),
     };
 
-    fn registry(with_drop: bool) -> PassRegistry {
+    fn registry() -> PassRegistry {
         let mut r = PassRegistry::new();
         r.add(&LOAD);
         r.add(&BAKE);
         r.add(&SNEAKY);
-        if with_drop {
-            r.add(&DROP_LAYERS);
-        }
         r
     }
 
@@ -2813,24 +2132,19 @@ mod tests {
         assert_ne!(later, report);
     }
 
-    /// A pass taking in a function's log keeps everything it reported: counts, approximations, omissions and drops
-    /// add up, removals, placed entities and their sources join.
-    /// A target's rules read back by kind, its checks left out; carrying unknown names and its checked resources too.
+    /// A target's rules read back by kind, its checks left out; its checked resources too.
     #[test]
     fn a_targets_rules_read_back() {
-        let t = Target::new("t")
-            .legal("toy.pbr")
-            .illegal("toy.layered")
-            .carry_unknown();
+        let t = Target::new("t").legal("toy.pbr").illegal("toy.layered");
         assert_eq!(
             t.rules(),
             [("toy.layered", Rule::Illegal), ("toy.pbr", Rule::Legal)]
         );
-        assert!(t.carries_unknown());
         assert!(t.checked_resources().is_empty());
-        assert!(!Target::new("u").carries_unknown());
     }
 
+    /// A pass taking in a function's log keeps everything it reported: counts, approximations, omissions and drops
+    /// add up, removals, placed entities and their sources join.
     #[test]
     fn absorb_keeps_every_part_of_the_log() {
         let mut w = World::new();
@@ -2877,7 +2191,7 @@ mod tests {
 
     #[test]
     fn pipeline_text_round_trips() {
-        let r = registry(false);
+        let r = registry();
         let p = r.parse(" load , bake{ size = 512 } ,bake").unwrap();
         assert_eq!(p.to_string(), "load, bake{size=512}, bake");
         assert_eq!(r.parse(&p.to_string()).unwrap().to_string(), p.to_string());
@@ -2889,30 +2203,16 @@ mod tests {
         assert!(matches!(r.parse("bake{colour=red}"), Err(Error::Options { .. })));
     }
 
+    /// A conversion runs the stated pipeline as written and checks what it leaves; the report names the target and the
+    /// pipeline. Partial keeps a name the target does not list.
     #[test]
-    fn plan_finds_the_chain_and_orders_it() {
-        let m = PassManager::new(registry(false));
+    fn a_conversion_runs_the_stated_pipeline() {
+        let m = PassManager::new(registry());
         let mut w = world();
-        let report = m
-            .convert(&mut w, &gltf(), Mode::Partial, &PassOptions::new())
-            .unwrap();
-        // bake needs toy.mesh, which only load provides: load runs first
+        let pipeline = m.registry.parse("load, bake").unwrap();
+        let report = m.convert(&mut w, &pipeline, &gltf(), Mode::Partial).unwrap();
+        assert_eq!(report.target, "gltf");
         assert_eq!(report.pipeline, "load, bake");
-        assert_eq!(
-            report.plan,
-            [
-                PlanChoice {
-                    name: "toy.file".into(),
-                    pass: "load".into(),
-                    depth: 1
-                },
-                PlanChoice {
-                    name: "toy.layered".into(),
-                    pass: "bake".into(),
-                    depth: 2
-                },
-            ]
-        );
         assert_eq!(
             report.steps[1].log.approximations,
             BTreeMap::from([("baked".to_owned(), 1)])
@@ -2923,94 +2223,80 @@ mod tests {
             ["game.thing", "toy.mesh", "toy.pbr"],
             "partial keeps game.thing"
         );
-        // the same plan every time
-        for _ in 0..3 {
-            let mut r = RunReport::default();
-            assert_eq!(
-                m.plan(&world(), &gltf(), Mode::Partial, &PassOptions::new(), &mut r)
-                    .unwrap()
-                    .to_string(),
-                "load, bake"
-            );
-        }
-    }
-
-    #[test]
-    fn depth_then_priority_then_name() {
-        // drop-layers has depth 1 (needs nothing) against bake's 2 (needs load): depth wins over priority
-        let m = PassManager::new(registry(true));
-        let mut r = RunReport::default();
-        assert_eq!(
-            m.plan(&world(), &gltf(), Mode::Partial, &PassOptions::new(), &mut r)
-                .unwrap()
-                .to_string(),
-            "drop-layers, load"
-        );
-        // with the mesh already loaded both have depth 1: bake's priority 0 beats drop-layers' -1
-        let mut w = world();
-        let e = w.entities().next().unwrap();
-        w.remove::<File>(e);
-        w.insert(e, Mesh(1));
-        let mut r = RunReport::default();
-        assert_eq!(
-            m.plan(&w, &gltf(), Mode::Partial, &PassOptions::new(), &mut r)
-                .unwrap()
-                .to_string(),
-            "bake"
+        assert!(
+            report
+                .to_string()
+                .starts_with("target gltf: pipeline [load, bake]\n")
         );
     }
 
+    /// What the target still refuses after the stated pipeline is an error that says nothing in the pipeline lowers it:
+    /// the manager adds no pass.
     #[test]
-    fn full_conversion_names_the_missing_link() {
-        let m = PassManager::new(registry(false));
-        let mut w = world();
+    fn a_refused_name_says_the_stated_pipeline_does_not_lower_it() {
+        let m = PassManager::new(registry());
+        let pipeline = m.registry.parse("load, bake").unwrap();
+        // Full refuses a name the target does not list
         let err = m
-            .convert(&mut w, &gltf(), Mode::Full, &PassOptions::new())
+            .convert(&mut world(), &pipeline, &gltf(), Mode::Full)
             .unwrap_err();
         assert_eq!(
             err.to_string(),
-            "no pass lowers `game.thing` to anything `gltf` accepts"
+            "`gltf` does not accept `game.thing` on [e0] after the pipeline: nothing in the stated pipeline removes or \
+             rewrites it"
         );
-        // carrying unknown names makes it pass
-        let mut w = world();
-        m.convert(&mut w, &gltf().carry_unknown(), Mode::Full, &PassOptions::new())
+        // stating what it accepts makes it pass
+        let accepting = gltf().legal("game.thing");
+        m.convert(&mut world(), &pipeline, &accepting, Mode::Full)
             .unwrap();
-        // a lowering whose requirement nothing provides
-        let mut w = World::new();
-        let e = w.spawn();
-        w.insert(e, Layered(1));
+        // a pipeline that leaves an illegal name
+        let mut w = world();
         let err = m
-            .convert(&mut w, &gltf(), Mode::Partial, &PassOptions::new())
+            .convert(&mut w, &m.registry.parse("load").unwrap(), &gltf(), Mode::Partial)
             .unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "no pass lowers `toy.layered` to anything `gltf` accepts: bake needs [\"toy.mesh\"]"
+        assert!(
+            matches!(&err, Error::Illegal { name, lowered_by, .. } if name == "toy.layered" && lowered_by.is_empty()),
+            "{err}"
+        );
+        assert!(
+            w.has_component_named("toy.layered"),
+            "nothing was added to lower it"
         );
     }
 
     #[test]
-    fn dynamic_legality_lowers_only_failing_values() {
-        let m = PassManager::new(registry(false));
+    fn dynamic_legality_refuses_only_failing_values() {
+        let m = PassManager::new(registry());
         let t = Target::new("skate")
             .legal("toy.mesh")
             .legal("toy.layered")
-            .dynamic_typed::<File>(|f| f.0 < 10)
-            .carry_unknown();
+            .legal("game.thing")
+            .dynamic_typed::<File>(|f| f.0 < 10);
+        let none = Pipeline::default();
         let mut w = world(); // File(1): legal as it is
-        let report = m.convert(&mut w, &t, Mode::Full, &PassOptions::new()).unwrap();
+        let report = m.convert(&mut w, &none, &t, Mode::Full).unwrap();
         assert_eq!(report.pipeline, "");
         assert!(w.has_component_named("toy.file"));
-        let mut w = world();
-        let e = w.entities().next().unwrap();
-        w.insert(e, File(99)); // fails the check: lowered
-        let report = m.convert(&mut w, &t, Mode::Full, &PassOptions::new()).unwrap();
+        let failing = || {
+            let mut w = world();
+            let e = w.entities().next().unwrap();
+            w.insert(e, File(99)); // fails the check
+            w
+        };
+        let err = m.convert(&mut failing(), &none, &t, Mode::Full).unwrap_err();
+        assert!(
+            matches!(&err, Error::Illegal { name, .. } if name == "toy.file"),
+            "{err}"
+        );
+        // a stated pass that lowers it
+        let load = m.registry.parse("load").unwrap();
+        let report = m.convert(&mut failing(), &load, &t, Mode::Full).unwrap();
         assert_eq!(report.pipeline, "load");
-        assert_eq!(report.plan[0].name, "toy.file");
     }
 
     #[test]
     fn undeclared_changes_and_verifier_name_the_pass() {
-        let m = PassManager::new(registry(false)).with_pass_checks(true);
+        let m = PassManager::new(registry()).with_pass_checks(true);
         let mut w = world();
         let p = m.registry.parse("sneaky").unwrap();
         let err = m.run(&mut w, &p, &mut RunReport::default()).unwrap_err();
@@ -3424,23 +2710,17 @@ mod tests {
         m.run(&mut w, &needs(), &mut RunReport::default()).unwrap();
     }
 
-    /// Makes odd meshes even in place: the only way to a target whose check wants even meshes. Without `legalizes`
-    /// it only edits meshes (`touch`).
-    struct Evens {
-        legalizes: bool,
-    }
+    /// Makes odd meshes even in place.
+    struct Evens;
     impl Pass for Evens {
         fn name(&self) -> &'static str {
-            if self.legalizes { "evens" } else { "touch" }
+            "evens"
         }
         fn requires(&self) -> &[&'static str] {
             &["toy.mesh"]
         }
         fn modifies(&self) -> &[&'static str] {
             &["toy.mesh"]
-        }
-        fn legalizes(&self) -> &[&'static str] {
-            if self.legalizes { &["toy.mesh"] } else { &[] }
         }
         fn run(&self, w: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
             if let Some(mut c) = w.column_mut::<Mesh>() {
@@ -3451,30 +2731,11 @@ mod tests {
             Ok(())
         }
     }
-
-    /// toy.layered -> toy.pbr, keeping toy.layered (a lowering that keeps its source).
-    struct LowerKeep;
-    impl Pass for LowerKeep {
-        fn name(&self) -> &'static str {
-            "lower-keep"
-        }
-        fn requires(&self) -> &[&'static str] {
-            &["toy.layered"]
-        }
-        fn provides(&self) -> &[&'static str] {
-            &["toy.pbr"]
-        }
-        fn legalizes(&self) -> &[&'static str] {
-            &["toy.layered"]
-        }
-        fn run(&self, w: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
-            let ls: Vec<(Entity, u32)> = w.iter::<Layered>().map(|(e, l)| (e, l.0)).collect();
-            for (e, n) in ls {
-                w.insert(e, Pbr(n));
-            }
-            Ok(())
-        }
-    }
+    const EVENS: PassSpec = PassSpec {
+        name: "evens",
+        options: &[],
+        make: |_| Ok(Box::new(Evens)),
+    };
 
     fn mesh_world(n: u32) -> World {
         let mut w = World::new();
@@ -3484,179 +2745,31 @@ mod tests {
     }
 
     #[test]
-    fn a_pass_that_legalizes_in_place_lowers_failing_values() {
+    fn a_stated_pass_that_rewrites_in_place_fixes_failing_values() {
         let even = Target::new("even").dynamic_typed::<Mesh>(|m| m.0 % 2 == 0);
         let mut r = PassRegistry::new();
-        const EVENS: PassSpec = PassSpec {
-            name: "evens",
-            options: &[],
-            make: |_| Ok(Box::new(Evens { legalizes: true })),
-        };
         r.add(&EVENS);
-        const TOUCH: PassSpec = PassSpec {
-            name: "touch",
-            options: &[],
-            make: |_| Ok(Box::new(Evens { legalizes: false })),
-        };
-        r.add(&TOUCH);
         let m = PassManager::new(r);
+        let evens = m.registry.parse("evens").unwrap();
         let mut w = mesh_world(3);
-        let report = m
-            .convert(&mut w, &even, Mode::Partial, &PassOptions::new())
-            .unwrap();
-        // touch modifies toy.mesh too, but does not say it makes it legal
+        let report = m.convert(&mut w, &evens, &even, Mode::Partial).unwrap();
         assert_eq!(report.pipeline, "evens");
         assert_eq!(w.iter::<Mesh>().map(|(_, m)| m.0).collect::<Vec<_>>(), [4]);
         // legal values need nothing
-        let report = m
-            .convert(&mut mesh_world(2), &even, Mode::Partial, &PassOptions::new())
+        m.convert(&mut mesh_world(2), &Pipeline::default(), &even, Mode::Partial)
             .unwrap();
-        assert_eq!(report.pipeline, "");
-        // a pass that lowers a dynamic name but keeps its values as they are cannot fix them
-        let mut r = PassRegistry::new();
-        const KEEPS: PassSpec = PassSpec {
-            name: "keeps",
-            options: &[],
-            make: |_| {
-                Ok(Box::new(Decl {
-                    name: "keeps",
-                    requires: &["toy.mesh"],
-                    provides: &["toy.pbr"],
-                    removes: &[],
-                    modifies: &[],
-                    legalizes: &["toy.mesh"],
-                }))
-            },
-        };
-        r.add(&KEEPS);
-        let err = PassManager::new(r)
-            .convert(&mut mesh_world(3), &even, Mode::Partial, &PassOptions::new())
+        // without the pass the failing value stays, refused
+        let err = m
+            .convert(&mut mesh_world(3), &Pipeline::default(), &even, Mode::Partial)
             .unwrap_err();
         assert_eq!(
             err.to_string(),
-            "no pass lowers `toy.mesh` to anything `even` accepts: keeps lowers it but neither removes nor \
+            "`even` does not accept `toy.mesh` on [e0] after the pipeline: nothing in the stated pipeline removes or \
              rewrites it"
         );
     }
 
-    #[test]
-    fn a_lowering_that_keeps_its_source() {
-        let mut r = PassRegistry::new();
-        const LOWER_KEEP: PassSpec = PassSpec {
-            name: "lower-keep",
-            options: &[],
-            make: |_| Ok(Box::new(LowerKeep)),
-        };
-        r.add(&LOWER_KEEP);
-        let m = PassManager::new(r);
-        let mut w = World::new();
-        let e = w.spawn();
-        w.insert(e, Layered(4));
-        let gltf = || Target::new("gltf").legal("toy.pbr");
-        // carried and lowered: the lowering runs and the source stays
-        let mut lowered = w.clone();
-        let report = m
-            .convert(
-                &mut lowered,
-                &gltf().lower_and_carry("toy.layered"),
-                Mode::Full,
-                &PassOptions::new(),
-            )
-            .unwrap();
-        assert_eq!(report.pipeline, "lower-keep");
-        assert_eq!(lowered.component_names(), ["toy.layered", "toy.pbr"]);
-        // only carried: nothing to do
-        let report = m
-            .convert(
-                &mut w.clone(),
-                &gltf().carry("toy.layered"),
-                Mode::Full,
-                &PassOptions::new(),
-            )
-            .unwrap();
-        assert_eq!(report.pipeline, "");
-        // illegal: it must go, and the lowering keeps it
-        let err = m
-            .convert(
-                &mut w,
-                &gltf().illegal("toy.layered"),
-                Mode::Full,
-                &PassOptions::new(),
-            )
-            .unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "no pass lowers `toy.layered` to anything `gltf` accepts: lower-keep lowers it and keeps it"
-        );
-    }
-
-    #[test]
-    fn a_name_a_planned_pass_provides_is_lowered_after_it() {
-        // load provides toy.mesh, which the target carries but draws only lowered
-        let mut r = PassRegistry::new();
-        r.add(&LOAD);
-        const LOWER_MESH: PassSpec = PassSpec {
-            name: "lower-mesh",
-            options: &[],
-            make: |_| {
-                Ok(Box::new(Decl {
-                    name: "lower-mesh",
-                    requires: &["toy.mesh"],
-                    provides: &["toy.pbr"],
-                    removes: &[],
-                    modifies: &[],
-                    legalizes: &["toy.mesh"],
-                }))
-            },
-        };
-        r.add(&LOWER_MESH);
-        let t = Target::new("t")
-            .illegal("toy.file")
-            .lower_and_carry("toy.mesh")
-            .legal("toy.pbr");
-        let mut w = World::new();
-        let e = w.spawn();
-        w.insert(e, File(1));
-        let mut report = RunReport::default();
-        let p = PassManager::new(r)
-            .plan(&w, &t, Mode::Full, &PassOptions::new(), &mut report)
-            .unwrap();
-        assert_eq!(p.to_string(), "load, lower-mesh");
-        assert_eq!(report.plan[1].name, "toy.mesh");
-    }
-
-    #[test]
-    fn a_removal_that_is_a_side_effect_is_not_a_lowering() {
-        // a-weld drops the file link of the meshes it rewrites; name order prefers it, but it lowers only toy.mesh
-        let mut r = PassRegistry::new();
-        r.add(&LOAD);
-        const A_WELD: PassSpec = PassSpec {
-            name: "a-weld",
-            options: &[],
-            make: |_| {
-                Ok(Box::new(Decl {
-                    name: "a-weld",
-                    requires: &["toy.mesh"],
-                    provides: &[],
-                    removes: &["toy.file"],
-                    modifies: &["toy.mesh"],
-                    legalizes: &["toy.mesh"],
-                }))
-            },
-        };
-        r.add(&A_WELD);
-        let mut w = world();
-        let e = w.entities().next().unwrap();
-        w.insert(e, Mesh(2));
-        let t = Target::new("t").illegal("toy.file");
-        let mut report = RunReport::default();
-        let p = PassManager::new(r)
-            .plan(&w, &t, Mode::Partial, &PassOptions::new(), &mut report)
-            .unwrap();
-        assert_eq!(p.to_string(), "load");
-    }
-
-    /// Lowers toy.layered only when made with `lowers=true`: its declarations follow its options.
+    /// Removes toy.layered only when made with `lowers=true`: its declarations follow its options.
     struct Optional {
         lowers: bool,
     }
@@ -3675,6 +2788,9 @@ mod tests {
             if self.lowers { &["toy.layered"] } else { &[] }
         }
         fn run(&self, w: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
+            if !self.lowers {
+                return Ok(());
+            }
             let es: Vec<Entity> = w.iter::<Layered>().map(|(e, _)| e).collect();
             for e in es {
                 w.remove::<Layered>(e);
@@ -3683,72 +2799,17 @@ mod tests {
         }
     }
 
+    /// A stated pass is made with the options the pipeline gives it, and its declarations come from that instance.
     #[test]
-    fn plan_makes_passes_with_the_callers_options() {
-        let m = PassManager::new(registry(false));
-        let options = |o: &[(&str, &str, &str)]| -> PassOptions {
-            let mut all = PassOptions::new();
-            for (pass, k, v) in o {
-                all.entry(pass.to_string())
-                    .or_default()
-                    .insert(k.to_string(), v.to_string());
-            }
-            all
-        };
-        let mut w = world();
-        let report = m
-            .convert(
-                &mut w,
-                &gltf(),
-                Mode::Partial,
-                &options(&[("bake", "size", "512")]),
-            )
-            .unwrap();
-        assert_eq!(report.pipeline, "load, bake{size=512}");
-        assert_eq!(report.plan[1].pass, "bake{size=512}");
-        assert!(report.unused_options.is_empty());
-        // options for a pass the plan does not choose are reported
-        let mut report = RunReport::default();
-        let o = options(&[("bake", "size", "512"), ("sneaky", "x", "1")]);
-        // sneaky takes x, which it never reads
-        m.plan(&world(), &gltf(), Mode::Partial, &o, &mut report).unwrap();
-        assert_eq!(report.unused_options, ["sneaky"]);
-        assert!(
-            report
-                .to_string()
-                .contains("options for passes not planned: [\"sneaky\"]")
-        );
-        // options for a pass that is not registered, and bad options, are errors
-        let mut report = RunReport::default();
-        let err = m
-            .plan(
-                &world(),
-                &gltf(),
-                Mode::Partial,
-                &options(&[("nope", "a", "b")]),
-                &mut report,
-            )
-            .unwrap_err();
-        assert!(matches!(err, Error::UnknownPass(n) if n == "nope"));
-        let err = m
-            .plan(
-                &world(),
-                &gltf(),
-                Mode::Partial,
-                &options(&[("bake", "size", "big")]),
-                &mut report,
-            )
-            .unwrap_err();
-        assert!(matches!(err, Error::Options { .. }), "{err}");
-        // declarations come from the pass made with its options
+    fn a_stated_pass_declares_by_its_options() {
         let mut r = PassRegistry::new();
         const OPTIONAL: PassSpec = PassSpec {
             name: "optional",
             options: &[OptionSpec::optional(
                 "lowers",
                 "true",
-                "true: it lowers toy.layered",
-                "it lowers nothing",
+                "true: it removes toy.layered",
+                "it removes nothing",
             )],
             make: |g| {
                 Ok(Box::new(Optional {
@@ -3758,20 +2819,28 @@ mod tests {
         };
         r.add(&OPTIONAL);
         let m = PassManager::new(r);
-        let t = Target::new("t").illegal("toy.layered").carry_unknown();
+        let t = Target::new("t").illegal("toy.layered");
         let mut w = World::new();
         let e = w.spawn();
         w.insert(e, Layered(1));
-        assert!(matches!(
-            m.convert(&mut w.clone(), &t, Mode::Full, &PassOptions::new()),
-            Err(Error::NoLowering { .. })
-        ));
+        let err = m
+            .convert(
+                &mut w.clone(),
+                &m.registry.parse("optional").unwrap(),
+                &t,
+                Mode::Full,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::Illegal { lowered_by, .. } if lowered_by.is_empty()),
+            "{err}"
+        );
         let report = m
             .convert(
                 &mut w,
+                &m.registry.parse("optional{lowers=true}").unwrap(),
                 &t,
                 Mode::Full,
-                &options(&[("optional", "lowers", "true")]),
             )
             .unwrap();
         assert_eq!(report.pipeline, "optional{lowers=true}");
@@ -3780,10 +2849,7 @@ mod tests {
     struct Decl {
         name: &'static str,
         requires: &'static [&'static str],
-        provides: &'static [&'static str],
-        removes: &'static [&'static str],
         modifies: &'static [&'static str],
-        legalizes: &'static [&'static str],
     }
     impl Pass for Decl {
         fn name(&self) -> &'static str {
@@ -3792,119 +2858,45 @@ mod tests {
         fn requires(&self) -> &[&'static str] {
             self.requires
         }
-        fn provides(&self) -> &[&'static str] {
-            self.provides
-        }
-        fn removes(&self) -> &[&'static str] {
-            self.removes
-        }
         fn modifies(&self) -> &[&'static str] {
             self.modifies
-        }
-        fn legalizes(&self) -> &[&'static str] {
-            self.legalizes
         }
         fn run(&self, _: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
             Ok(())
         }
     }
 
-    fn order(passes: Vec<Decl>) -> Vec<&'static str> {
-        let passes: Vec<Box<dyn Pass>> = passes.into_iter().map(|p| Box::new(p) as Box<dyn Pass>).collect();
-        let all: BTreeSet<usize> = (0..passes.len()).collect();
-        order_passes(&passes, &all)
-            .unwrap()
-            .into_iter()
-            .map(|i| passes[i].name())
-            .collect()
-    }
-
     #[test]
-    fn a_modifier_runs_between_providers_and_consumers() {
-        fn decl(
-            name: &'static str,
-            requires: &'static [&'static str],
-            provides: &'static [&'static str],
-            removes: &'static [&'static str],
-            modifies: &'static [&'static str],
-        ) -> Decl {
-            Decl {
-                name,
-                requires,
-                provides,
-                removes,
-                modifies,
-                legalizes: removes,
-            }
-        }
-        // names chosen so that name order alone is wrong
-        let bake = decl(
-            "a-bake",
-            &["toy.mesh", "toy.layered"],
-            &["toy.pbr"],
-            &["toy.layered"],
-            &[],
-        );
-        let load = decl("m-load", &["toy.file"], &["toy.mesh"], &["toy.file"], &[]);
-        let weld = decl("z-weld", &["toy.mesh"], &[], &[], &["toy.mesh"]);
-        assert_eq!(order(vec![bake, load, weld]), ["m-load", "z-weld", "a-bake"]);
-        // a pass that lowers a mesh away runs after the mesh is welded too
-        let drop = decl("a-drop", &[], &[], &["toy.mesh"], &[]);
-        let weld = decl("z-weld", &["toy.mesh"], &[], &[], &["toy.mesh"]);
-        assert_eq!(order(vec![drop, weld]), ["z-weld", "a-drop"]);
-        // two passes modifying one name keep name order
-        let a = decl("a-tint", &["toy.mesh"], &[], &[], &["toy.mesh"]);
-        let weld = decl("z-weld", &["toy.mesh"], &[], &[], &["toy.mesh"]);
-        assert_eq!(order(vec![weld, a]), ["a-tint", "z-weld"]);
-        // a pass that lowers a name and keeps it reads it: after its modifier
-        let keep = Decl {
-            name: "a-keep",
-            requires: &[],
-            provides: &["toy.pbr"],
-            removes: &[],
-            modifies: &[],
-            legalizes: &["toy.mesh"],
-        };
-        let weld = decl("z-weld", &["toy.mesh"], &[], &[], &["toy.mesh"]);
-        assert_eq!(order(vec![keep, weld]), ["z-weld", "a-keep"]);
-    }
-
-    #[test]
-    fn values_a_planned_pass_produces_are_lowered_after_it() {
-        // load makes Mesh(3) from File(3); the target wants even meshes: only once the mesh exists does the check
-        // see it, so convert plans again on the world the first pipeline produced
+    fn values_a_stated_pass_produces_are_checked_after_the_pipeline() {
+        // load makes Mesh(3) from File(3); the target wants even meshes: evens, stated after load, fixes it
         let mut r = PassRegistry::new();
         r.add(&LOAD);
-        const EVENS: PassSpec = PassSpec {
-            name: "evens",
-            options: &[],
-            make: |_| Ok(Box::new(Evens { legalizes: true })),
-        };
         r.add(&EVENS);
         let m = PassManager::new(r);
         let t = Target::new("even")
             .illegal("toy.file")
             .dynamic_typed::<Mesh>(|m| m.0 % 2 == 0);
-        let mut w = World::new();
-        let e = w.spawn();
-        w.insert(e, File(3));
-        let report = m.convert(&mut w, &t, Mode::Partial, &PassOptions::new()).unwrap();
+        let mut w = w_with_file(3);
+        let e = w.entities().next().unwrap();
+        let report = m
+            .convert(
+                &mut w,
+                &m.registry.parse("load, evens").unwrap(),
+                &t,
+                Mode::Partial,
+            )
+            .unwrap();
         assert_eq!(report.pipeline, "load, evens");
         assert_eq!(w.get::<Mesh>(e), Some(&Mesh(4)));
-        // a produced value the check accepts needs no second round
-        let mut w = World::new();
-        let e = w.spawn();
-        w.insert(e, File(2));
-        let report = m.convert(&mut w, &t, Mode::Partial, &PassOptions::new()).unwrap();
-        assert_eq!(report.pipeline, "load");
-        // a produced value no pass can fix is refused after the round that made it
-        let mut r = PassRegistry::new();
-        r.add(&LOAD);
-        let err = PassManager::new(r)
-            .convert(&mut w_with_file(5), &t, Mode::Partial, &PassOptions::new())
+        // a produced value the check accepts needs nothing more
+        let load = m.registry.parse("load").unwrap();
+        m.convert(&mut w_with_file(2), &load, &t, Mode::Partial).unwrap();
+        // a produced value the pipeline does not fix is refused after it
+        let err = m
+            .convert(&mut w_with_file(5), &load, &t, Mode::Partial)
             .unwrap_err();
         assert!(
-            matches!(err, Error::NoLowering { ref name, .. } if name == "toy.mesh"),
+            matches!(&err, Error::Illegal { name, lowered_by, .. } if name == "toy.mesh" && lowered_by.is_empty()),
             "{err}"
         );
     }
@@ -3914,212 +2906,6 @@ mod tests {
         let e = w.spawn();
         w.insert(e, File(n));
         w
-    }
-
-    #[derive(Clone, Debug, PartialEq)]
-    struct Ta;
-    impl Component for Ta {
-        const NAME: &'static str = "toy.a";
-        const GEOMETRY: crate::Geometry = crate::Geometry::None;
-    }
-    #[derive(Clone, Debug, PartialEq)]
-    struct Tb;
-    impl Component for Tb {
-        const NAME: &'static str = "toy.b";
-        const GEOMETRY: crate::Geometry = crate::Geometry::None;
-    }
-    #[derive(Clone, Debug, PartialEq)]
-    struct Tx(u32);
-    impl Component for Tx {
-        const NAME: &'static str = "toy.x";
-        const GEOMETRY: crate::Geometry = crate::Geometry::None;
-    }
-
-    /// Removes toy.a (and toy.b with `both`); with `requires`, requires what it removes.
-    struct Strip {
-        name: &'static str,
-        both: bool,
-        requires: bool,
-    }
-    impl Pass for Strip {
-        fn name(&self) -> &'static str {
-            self.name
-        }
-        fn requires(&self) -> &[&'static str] {
-            match (self.requires, self.both) {
-                (false, _) => &[],
-                (true, false) => &["toy.a"],
-                (true, true) => &["toy.a", "toy.b"],
-            }
-        }
-        fn removes(&self) -> &[&'static str] {
-            if self.both {
-                &["toy.a", "toy.b"]
-            } else {
-                &["toy.a"]
-            }
-        }
-        fn run(&self, w: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
-            for e in w.entities().collect::<Vec<_>>() {
-                w.remove::<Ta>(e);
-                if self.both {
-                    w.remove::<Tb>(e);
-                }
-            }
-            Ok(())
-        }
-    }
-
-    fn ab_world() -> World {
-        let mut w = World::new();
-        let e = w.spawn();
-        w.insert(e, Ta);
-        w.insert(e, Tb);
-        w
-    }
-
-    #[test]
-    fn a_chosen_pass_another_choice_covers_is_left_out() {
-        let t = Target::new("t").illegal("toy.a").illegal("toy.b");
-        for requires in [false, true] {
-            let mut r = PassRegistry::new();
-            // name order chooses a-only for toy.a first; z-both, chosen for toy.b, also takes toy.a
-            r.add(if requires { &STRIP_A_REQ } else { &STRIP_A });
-            r.add(if requires { &STRIP_BOTH_REQ } else { &STRIP_BOTH });
-            let mut w = ab_world();
-            let report = PassManager::new(r)
-                .convert(&mut w, &t, Mode::Partial, &PassOptions::new())
-                .unwrap();
-            assert_eq!(report.pipeline, "z-both", "requires {requires}");
-            assert!(
-                report.plan.iter().all(|c| c.pass == "z-both"),
-                "{:?}",
-                report.plan
-            );
-            assert!(w.component_names().is_empty());
-        }
-    }
-    const STRIP_A: PassSpec = PassSpec {
-        name: "a-only",
-        options: &[],
-        make: |_| {
-            Ok(Box::new(Strip {
-                name: "a-only",
-                both: false,
-                requires: false,
-            }))
-        },
-    };
-    const STRIP_A_REQ: PassSpec = PassSpec {
-        name: "a-only",
-        options: &[],
-        make: |_| {
-            Ok(Box::new(Strip {
-                name: "a-only",
-                both: false,
-                requires: true,
-            }))
-        },
-    };
-    const STRIP_BOTH: PassSpec = PassSpec {
-        name: "z-both",
-        options: &[],
-        make: |_| {
-            Ok(Box::new(Strip {
-                name: "z-both",
-                both: true,
-                requires: false,
-            }))
-        },
-    };
-    const STRIP_BOTH_REQ: PassSpec = PassSpec {
-        name: "z-both",
-        options: &[],
-        make: |_| {
-            Ok(Box::new(Strip {
-                name: "z-both",
-                both: true,
-                requires: true,
-            }))
-        },
-    };
-
-    /// Requires toy.x, removes its letter (toy.a or toy.b) and adds one to every toy.x, which it provides and
-    /// modifies.
-    struct Bump {
-        name: &'static str,
-        b: bool,
-    }
-    impl Pass for Bump {
-        fn name(&self) -> &'static str {
-            self.name
-        }
-        fn requires(&self) -> &[&'static str] {
-            &["toy.x"]
-        }
-        fn provides(&self) -> &[&'static str] {
-            &["toy.x"]
-        }
-        fn modifies(&self) -> &[&'static str] {
-            &["toy.x"]
-        }
-        fn removes(&self) -> &[&'static str] {
-            if self.b { &["toy.b"] } else { &["toy.a"] }
-        }
-        fn run(&self, w: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
-            for e in w.entities().collect::<Vec<_>>() {
-                if self.b {
-                    w.remove::<Tb>(e);
-                } else {
-                    w.remove::<Ta>(e);
-                }
-            }
-            if let Some(mut c) = w.column_mut::<Tx>() {
-                for (_, x) in c.iter_mut() {
-                    x.0 += 1;
-                }
-            }
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn two_passes_that_provide_and_modify_one_name_do_not_form_a_cycle() {
-        let t = Target::new("t").illegal("toy.a").illegal("toy.b").legal("toy.x");
-        const BUMP_A: PassSpec = PassSpec {
-            name: "bump-a",
-            options: &[],
-            make: |_| {
-                Ok(Box::new(Bump {
-                    name: "bump-a",
-                    b: false,
-                }))
-            },
-        };
-        const BUMP_B: PassSpec = PassSpec {
-            name: "bump-b",
-            options: &[],
-            make: |_| {
-                Ok(Box::new(Bump {
-                    name: "bump-b",
-                    b: true,
-                }))
-            },
-        };
-        for order in [[&BUMP_A, &BUMP_B], [&BUMP_B, &BUMP_A]] {
-            let mut r = PassRegistry::new();
-            for spec in order {
-                r.add(spec);
-            }
-            let mut w = ab_world();
-            let e = w.entities().next().unwrap();
-            w.insert(e, Tx(0));
-            let report = PassManager::new(r)
-                .convert(&mut w, &t, Mode::Partial, &PassOptions::new())
-                .unwrap();
-            assert_eq!(report.pipeline, "bump-a, bump-b");
-            assert_eq!(w.get::<Tx>(e), Some(&Tx(2)));
-        }
     }
 
     /// A table of rows a classifier fills in: `None` is a row not classified yet.
@@ -4139,9 +2925,6 @@ mod tests {
             &["toy.table"]
         }
         fn modifies(&self) -> &[&'static str] {
-            &["toy.table"]
-        }
-        fn legalizes(&self) -> &[&'static str] {
             &["toy.table"]
         }
         fn settles(&self) -> &[&'static str] {
@@ -4189,7 +2972,7 @@ mod tests {
     }
 
     #[test]
-    fn a_resource_value_rule_is_planned_and_checked() {
+    fn a_resource_value_rule_is_checked_after_the_pipeline() {
         let mut r = PassRegistry::new();
         const CLASSIFY: PassSpec = PassSpec {
             name: "classify",
@@ -4199,33 +2982,33 @@ mod tests {
         r.add(&CLASSIFY);
         let m = PassManager::new(r);
         let mut w = table_world(vec![Some(3), None]);
+        let classify = m.registry.parse("classify").unwrap();
         let report = m
-            .convert(&mut w, &classified(), Mode::Partial, &PassOptions::new())
+            .convert(&mut w, &classify, &classified(), Mode::Partial)
             .unwrap();
         assert_eq!(report.pipeline, "classify");
         assert_eq!(w.resource::<Table>(), Some(&Table(vec![Some(3), Some(0)])));
         // a table the rule accepts needs nothing
-        let report = m
-            .convert(
-                &mut table_world(vec![Some(1)]),
-                &classified(),
-                Mode::Partial,
-                &PassOptions::new(),
-            )
-            .unwrap();
-        assert_eq!(report.pipeline, "");
-        // nothing classifies: no lowering
-        let err = PassManager::new(PassRegistry::new())
+        m.convert(
+            &mut table_world(vec![Some(1)]),
+            &Pipeline::default(),
+            &classified(),
+            Mode::Partial,
+        )
+        .unwrap();
+        // nothing classifies: refused, naming the rule
+        let err = m
             .convert(
                 &mut table_world(vec![None]),
+                &Pipeline::default(),
                 &classified(),
                 Mode::Partial,
-                &PassOptions::new(),
             )
             .unwrap_err();
         assert_eq!(
             err.to_string(),
-            "no pass lowers `toy.table` to anything `t` accepts"
+            "`t` does not accept `toy.table` (every row classified) after the pipeline: nothing in the stated pipeline \
+             removes or rewrites it"
         );
         assert_eq!(classified().rule_words("toy.table"), Some("every row classified"));
     }
@@ -4256,8 +3039,8 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_value_names_its_rule() {
-        // `lazy` claims to legalize toy.mesh in place but changes nothing: the check after the pipeline names the rule
+    fn a_refused_value_names_its_rule_and_the_passes_that_left_it() {
+        // `lazy` modifies toy.mesh but changes nothing: the check after the pipeline names the rule and the pass
         let mut r = PassRegistry::new();
         const LAZY: PassSpec = PassSpec {
             name: "lazy",
@@ -4266,21 +3049,24 @@ mod tests {
                 Ok(Box::new(Decl {
                     name: "lazy",
                     requires: &["toy.mesh"],
-                    provides: &[],
-                    removes: &[],
                     modifies: &["toy.mesh"],
-                    legalizes: &["toy.mesh"],
                 }))
             },
         };
         r.add(&LAZY);
+        let m = PassManager::new(r);
         let t = Target::new("even").check::<Mesh>("even meshes", |m| m.0 % 2 == 0);
-        let err = PassManager::new(r)
-            .convert(&mut mesh_world(3), &t, Mode::Partial, &PassOptions::new())
+        let err = m
+            .convert(
+                &mut mesh_world(3),
+                &m.registry.parse("lazy").unwrap(),
+                &t,
+                Mode::Partial,
+            )
             .unwrap_err();
         assert_eq!(
             err.to_string(),
-            "`even` does not accept `toy.mesh` (even meshes) on [e0] after the pipeline"
+            "`even` does not accept `toy.mesh` (even meshes) on [e0] after the pipeline: lazy left it"
         );
         assert!(matches!(err, Error::Illegal { ref rule, .. } if rule == "even meshes"));
     }
@@ -4332,14 +3118,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(w.resource::<Table>(), Some(&Table(vec![Some(0), Some(0)])));
-        // the planner puts the classifier after the pass that adds rows
-        let passes: Vec<Box<dyn Pass>> = vec![Box::new(Classify), Box::new(AddRow)];
-        let order: Vec<&str> = order_passes(&passes, &BTreeSet::from([0, 1]))
-            .unwrap()
-            .into_iter()
-            .map(|i| passes[i].name())
-            .collect();
-        assert_eq!(order, ["add-row", "classify"]);
     }
 
     #[test]
@@ -4355,10 +3133,11 @@ mod tests {
                     .collect()
             }
         }
-        let mut m = PassManager::new(registry(false)).with_pass_checks(true);
+        let mut m = PassManager::new(registry()).with_pass_checks(true);
         m.add_validator(Box::new(NoPbr));
+        let pipeline = m.registry.parse("load, bake").unwrap();
         let err = m
-            .convert(&mut world(), &gltf(), Mode::Partial, &PassOptions::new())
+            .convert(&mut world(), &pipeline, &gltf(), Mode::Partial)
             .unwrap_err();
         assert_eq!(
             err.to_string(),
@@ -4381,12 +3160,9 @@ mod tests {
                     .collect()
             }
         }
-        assert_eq!(
-            PassManager::new(registry(false)).pass_checks(),
-            cfg!(debug_assertions)
-        );
+        assert_eq!(PassManager::new(registry()).pass_checks(), cfg!(debug_assertions));
         for checks in [true, false] {
-            let mut m = PassManager::new(registry(false)).with_pass_checks(checks);
+            let mut m = PassManager::new(registry()).with_pass_checks(checks);
             m.add_validator(Box::new(NoPbr));
             let pipeline = m.registry.parse("load, bake").unwrap();
             let ran = m.run(&mut world(), &pipeline, &mut RunReport::default());

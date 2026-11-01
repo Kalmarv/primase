@@ -256,7 +256,7 @@ impl Pass for ToyPass {
     }
 }
 
-/// Would lower the raw form; registered, so a planner could choose it, but the loop never runs a pass on its own.
+/// Would lower the raw form; registered, but the loop runs only the passes the program states.
 struct ToyLowerRaw;
 impl Pass for ToyLowerRaw {
     fn name(&self) -> &'static str {
@@ -266,9 +266,6 @@ impl Pass for ToyLowerRaw {
         &["toy.raw"]
     }
     fn removes(&self) -> &[&'static str] {
-        &["toy.raw"]
-    }
-    fn legalizes(&self) -> &[&'static str] {
         &["toy.raw"]
     }
     fn run(&self, w: &mut World, _log: &mut PassLog) -> std::result::Result<(), String> {
@@ -1116,7 +1113,7 @@ fn planned_parts_read_what_reaches_them_by_its_authored_box() {
         at: vec![([10.0, 10.0], unit), ([500.0, 10.0], long), ([510.0, 10.0], unit)],
         loads: Vec::new(),
     };
-    let (w, written) = writer(Target::new("t").carry_unknown());
+    let (w, written) = writer(Target::new("t"));
     convert_parts(&mut reader, &mut PlannedParts::default(), w, &m, &select, &passes).unwrap();
     events();
     // the west part loaded its own placement and the long one, and wrote only its own
@@ -1714,7 +1711,7 @@ fn a_part_sharing_its_own_root_or_context_is_refused() {
     }
     for (as_root, what) in [(true, "also one of its roots"), (false, "also its context")] {
         let mut toy = reader(2);
-        let (w, _) = writer(Target::new("t").carry_unknown());
+        let (w, _) = writer(Target::new("t"));
         let err = convert_parts(
             &mut toy,
             &mut Sharing { as_root, part: None },

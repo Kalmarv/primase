@@ -107,9 +107,6 @@ impl Pass for FillNormals {
     fn removes(&self) -> &[&'static str] {
         &[MeshFile::NAME]
     }
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn approximates(&self) -> &'static str {
         "normals of vertices that had none: area-weighted over the primitive's triangles, or straight up"
     }

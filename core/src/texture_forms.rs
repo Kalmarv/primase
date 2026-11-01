@@ -152,9 +152,6 @@ impl Pass for SelectTextureForm {
     fn modifies(&self) -> &[&'static str] {
         &[Texture::NAME, TextureFile::NAME]
     }
-    fn legalizes(&self) -> &[&'static str] {
-        &[TextureForms::NAME]
-    }
     fn despawns_entities(&self) -> bool {
         true
     }

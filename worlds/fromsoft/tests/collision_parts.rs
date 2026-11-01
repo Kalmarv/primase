@@ -11,7 +11,7 @@ use primase_core::convert::{
     Finished, Part, PartSource, Reader, Report, Result, WholeWorld, Writer, convert_parts,
 };
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, Target};
-use primase_core::{Collision, Entity, Instance, Surfaces, Transform, World};
+use primase_core::{Collision, Component, Entity, Instance, Surfaces, Transform, World};
 use primase_fromsoft::sekiro::collision::{FMeshes, LowerFromSoftCollision};
 use primase_fromsoft::sekiro::objects::MotionSelection;
 use primase_fromsoft::sekiro::objects::{ConvexBodies, ConvexSurface, LowerFromSoftObjectCollision};
@@ -126,7 +126,7 @@ impl PartSource for Fixed {
 struct Soups(Rc<RefCell<Vec<Groups>>>);
 impl Writer for Soups {
     fn target(&self) -> Target {
-        Target::new("soups").carry_unknown()
+        Target::new("soups").legal(Collision::NAME)
     }
     fn write(&mut self, part: &World) -> Result<()> {
         let names = part.resource::<Surfaces>();

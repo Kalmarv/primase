@@ -794,9 +794,6 @@ mod tests {
         fn removes(&self) -> &[&'static str] {
             &["test.raw"]
         }
-        fn legalizes(&self) -> &[&'static str] {
-            &["test.raw"]
-        }
         fn run(&self, w: &mut World, _log: &mut PassLog) -> Result<(), String> {
             let raw: Vec<Entity> = w.iter::<Raw>().map(|(e, _)| e).collect();
             for e in raw {
@@ -806,11 +803,11 @@ mod tests {
         }
     }
 
-    /// The planner never runs a required-option pass on its registered example: a plan that needs partition-grid is
-    /// an error without the caller's cell size, and uses the caller's when given.
+    /// A required-option pass runs only as the program states it: a pipeline that names partition-grid without its cell
+    /// size does not parse, and stated with one it makes the plan the pass after it needs.
     #[test]
-    fn the_planner_needs_the_callers_options_for_a_required_option_pass() {
-        use primase_core::pass::{Mode, PassManager, PassOptions, PassRegistry, RunReport, Target};
+    fn a_required_option_pass_runs_only_with_its_stated_options() {
+        use primase_core::pass::{Mode, PassManager, PassRegistry, Target};
         let mut reg = PassRegistry::new();
         crate::register(&mut reg);
         const LOWER_RAW: PassSpec = PassSpec {
@@ -820,22 +817,22 @@ mod tests {
         };
         reg.add(&LOWER_RAW);
         let manager = PassManager::new(reg);
-        let target = Target::new("t").illegal("test.raw").carry_unknown();
+        let target = Target::new("t").illegal("test.raw");
         let mut w = World::new();
         let proto = w.spawn();
         let e = placement(&mut w, proto, 10.0, 10.0);
         w.insert(e, Raw);
-        let plan = |options: &PassOptions| {
-            manager.plan(&w, &target, Mode::Partial, options, &mut RunReport::default())
-        };
-        let e = plan(&PassOptions::new()).map(|p| p.to_string()).unwrap_err();
+        let e = manager.registry.parse("partition-grid, lower-raw").unwrap_err();
         assert!(e.to_string().contains("partition-grid"), "{e}");
-        let given = PassOptions::from([(
-            "partition-grid".to_owned(),
-            Options::from([("cell".to_owned(), "250".to_owned())]),
-        )]);
-        let p = plan(&given).unwrap().to_string();
-        assert!(p.contains("partition-grid{cell=250}"), "{p}");
+        let pipeline = manager
+            .registry
+            .parse("partition-grid{cell=250}, lower-raw")
+            .unwrap();
+        let report = manager
+            .convert(&mut w, &pipeline, &target, Mode::Partial)
+            .unwrap();
+        assert_eq!(report.pipeline, "partition-grid{cell=250}, lower-raw");
+        assert!(!w.has_component_named("test.raw"));
     }
 
     /// Every option, the lists included, survives the pipeline text: options are separated by commas, so a list's

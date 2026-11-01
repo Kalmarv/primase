@@ -250,9 +250,6 @@ impl Pass for PrepareReskateFloor {
     fn removes(&self) -> &[&'static str] {
         &["core.collision", "skate.rock"]
     }
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn despawns_entities(&self) -> bool {
         true
     }

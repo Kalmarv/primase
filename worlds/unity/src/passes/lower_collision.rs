@@ -349,10 +349,6 @@ impl Pass for LowerUnityCollision {
             "core.transform",
         ]
     }
-    /// It lowers Unity colliders and keeps them, marked `lowered`.
-    fn legalizes(&self) -> &[&'static str] {
-        &["unity.collider"]
-    }
     fn modifies(&self) -> &[&'static str] {
         &["unity.collider"]
     }

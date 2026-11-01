@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use primase_core::convert::{Finished, Reader, Report, Result, WholeWorld, Writer, convert_parts};
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, Target};
-use primase_core::{Entity, Instance, Light, Name, Transform, World};
+use primase_core::{Component, Entity, Instance, Light, Name, Transform, World};
 use primase_gta::components::GtaLights;
 use primase_gta::passes::lights::{LightHours, LowerGtaLights};
 use rage_engine_formats::drawable::LightAttr;
@@ -69,7 +69,7 @@ struct CountLights(Rc<RefCell<usize>>);
 
 impl Writer for CountLights {
     fn target(&self) -> Target {
-        Target::new("lights").carry_unknown()
+        Target::new("lights").legal(Light::NAME)
     }
     fn write(&mut self, part: &World) -> Result<()> {
         *self.0.borrow_mut() += part.iter::<Light>().count();

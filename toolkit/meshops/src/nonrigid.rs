@@ -85,11 +85,6 @@ impl Pass for BakeNonrigid {
             "core.lods",
         ]
     }
-    /// It lowers non-rigid transforms: a target that takes only rigid ones (a dynamic `core.transform`) gets it
-    /// from the planner.
-    fn legalizes(&self) -> &[&'static str] {
-        &["core.transform"]
-    }
     /// What a mapping drops is each component's own answer ([`primase_core::Linearity::Drop`]), recorded in the log.
     fn removes_by_log(&self) -> bool {
         true

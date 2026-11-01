@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use fromsoft_formats::dcx::Decoder;
 use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use primase_core::frame::{Axis, SourceFrame};
-use primase_core::{Skeleton, World};
+use primase_core::{Component, Skeleton, World};
 use primase_fromsoft::rigid::SourceModel;
 mod common;
 
@@ -180,7 +180,10 @@ struct Kept(std::rc::Rc<std::cell::RefCell<Parts>>);
 
 impl primase_core::convert::Writer for Kept {
     fn target(&self) -> primase_core::pass::Target {
-        primase_core::pass::Target::new("kept").carry_unknown()
+        primase_core::pass::Target::new("kept")
+            .legal(primase_core::Asset::NAME)
+            .legal(primase_core::Source::NAME)
+            .legal(primase_core::Skin::NAME)
     }
     fn write(&mut self, part: &World) -> primase_core::convert::Result<()> {
         let sources = part

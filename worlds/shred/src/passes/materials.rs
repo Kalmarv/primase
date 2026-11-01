@@ -267,9 +267,6 @@ impl Pass for LowerShredMaterials {
     fn provides(&self) -> &[&'static str] {
         &[PbrMaterial::NAME, Texture::NAME, Name::NAME]
     }
-    fn legalizes(&self) -> &[&'static str] {
-        &[ShredMaterial::NAME]
-    }
     fn approximates(&self) -> &'static str {
         "named slot and constant mappings to PBR; colour transfer, normal encoding/basis, UV0/repeat, rough dielectric response, alpha and culling without native state semantics; unmapped shader operations omitted; a material whose pixel program (microcode) only scales its colour texture by uniforms is unlit"
     }

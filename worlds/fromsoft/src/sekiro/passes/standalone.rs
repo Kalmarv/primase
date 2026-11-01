@@ -880,9 +880,6 @@ impl Pass for LowerFromSoftSelectedOutfit {
     fn modifies(&self) -> &[&'static str] {
         &self.modifies
     }
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn despawns_entities(&self) -> bool {
         true
     }

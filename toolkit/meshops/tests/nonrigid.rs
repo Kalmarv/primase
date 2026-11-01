@@ -3,9 +3,7 @@
 #![allow(clippy::unwrap_used)]
 use std::collections::BTreeMap;
 
-use primase_core::pass::{
-    Mode, Options, PassManager, PassOptions, PassRegistry, Pipeline, RunReport, Target,
-};
+use primase_core::pass::{Mode, PassManager, PassRegistry, Pipeline, RunReport, Target};
 use primase_core::{
     Collision, Instance, Light, LightKind, LodForm, Lods, Mesh, MeshFile, Name, Opaque, OpaqueData,
     Primitive, Semantic, Stream, Surface, Surfaces, Topology, Transform, TransformKind, World,
@@ -347,35 +345,40 @@ fn own_geometry_soups_lights_and_kept_mirrors() {
     );
 }
 
+/// A target taking only rigid transforms refuses a mirror until the program states `bake-nonrigid` before it; whether a
+/// mirror becomes geometry is the program's option.
 #[test]
-fn a_target_taking_rigid_transforms_is_planned_with_the_pass() {
+fn a_target_taking_rigid_transforms_needs_bake_nonrigid_stated() {
     let mut reg = PassRegistry::new();
     primase_meshops::register(&mut reg);
     let manager = PassManager::new(reg);
     let target = Target::new("rigid").dynamic_typed::<Transform>(|t| {
         matches!(t.classify(), TransformKind::Regular | TransformKind::Degenerate)
     });
-    let mut w = World::new();
-    let p = proto(&mut w, "roof");
-    let e = place(&mut w, p, Transform::IDENTITY);
-    let given = PassOptions::from([(
-        "bake-nonrigid".to_owned(),
-        Options::from([("mirrors".to_owned(), "bake".to_owned())]),
-    )]);
-    let plan = |w: &World, options: &PassOptions| {
-        manager
-            .plan(w, &target, Mode::Partial, options, &mut RunReport::default())
-            .map(|p| p.to_string())
+    let placed = |transform: Transform| {
+        let mut w = World::new();
+        let p = proto(&mut w, "roof");
+        place(&mut w, p, transform);
+        w
     };
-    assert_eq!(plan(&w, &given).unwrap(), "", "rigid already: nothing to do");
-    w.insert(
-        e,
-        t([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0; 3]]),
-    );
-    assert_eq!(plan(&w, &given).unwrap(), "bake-nonrigid{mirrors=bake}");
-    // whether a mirror becomes geometry is the caller's: the plan needs the option given
-    let e = plan(&w, &PassOptions::new()).unwrap_err().to_string();
+    let mirror = || t([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0; 3]]);
+    let none = Pipeline::default();
+    manager
+        .convert(&mut placed(Transform::IDENTITY), &none, &target, Mode::Partial)
+        .expect("rigid already: nothing to do");
+    let e = manager
+        .convert(&mut placed(mirror()), &none, &target, Mode::Partial)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("core.transform"), "{e}");
+    // the pass is made only with the option stated
+    let e = manager.registry.parse("bake-nonrigid").unwrap_err().to_string();
     assert!(e.contains("bake-nonrigid"), "{e}");
+    let bake = manager.registry.parse("bake-nonrigid{mirrors=bake}").unwrap();
+    let report = manager
+        .convert(&mut placed(mirror()), &bake, &target, Mode::Partial)
+        .unwrap();
+    assert_eq!(report.pipeline, "bake-nonrigid{mirrors=bake}");
 }
 
 /// A component a mapping drops is counted and recorded, so a name whose only holder was mapped may vanish under the

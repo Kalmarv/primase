@@ -100,10 +100,6 @@ impl Pass for OmitStuntboostHidden {
     fn removes(&self) -> &[&'static str] {
         &[<Instance as primase_core::Component>::NAME]
     }
-    /// It lowers nothing: what it takes away is left out, not made into another form.
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn despawns_entities(&self) -> bool {
         true
     }

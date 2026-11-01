@@ -66,12 +66,13 @@ fn registry() -> PassRegistry {
     r
 }
 
-/// Keeps a copy of the one part it is given, whatever it holds.
+/// Keeps a copy of the one part it is given, whatever it holds; it writes none of it, so every name is reported as not
+/// written.
 struct Capture(Arc<Mutex<Vec<World>>>);
 
 impl Writer for Capture {
     fn target(&self) -> Target {
-        Target::new("capture").carry_unknown()
+        Target::new("capture")
     }
     fn write(&mut self, part: &World) -> primase_core::convert::Result<()> {
         let copy = part.subset(&part.entities().collect());

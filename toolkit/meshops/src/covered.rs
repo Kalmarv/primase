@@ -245,10 +245,6 @@ impl Pass for DropCoveredSurfaces {
     fn removes(&self) -> &[&'static str] {
         &["core.mesh_file"]
     }
-    /// The file links it removes are a side effect: the changed meshes no longer match their files.
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         // placements of each mesh, by transform; a mesh no placement takes, by its own
         let mut placements: Vec<(Entity, Transform)> = Vec::new();

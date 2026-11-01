@@ -338,10 +338,6 @@ impl Pass for SplitUvTiles {
     fn removes(&self) -> &[&'static str] {
         &["core.mesh_file"]
     }
-    /// The file links it removes are a side effect: the changed meshes no longer match their files.
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn approximates(&self) -> &'static str {
         "skin weights interpolated at new vertices (not the skinned positions); normals that cancel keep the nearest \
          corner's"

@@ -320,10 +320,6 @@ impl Pass for CapTextures {
     fn removes(&self) -> &[&'static str] {
         &[TextureFile::NAME]
     }
-    /// Only the textures: the file links go as a side effect.
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn approximates(&self) -> &'static str {
         "textures with no stored level within the cap: box-filtered from their smallest level, decoded to RGBA8"
     }

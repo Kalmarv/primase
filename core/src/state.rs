@@ -17,8 +17,8 @@
 //!   each axis's default. An axis with none of them (its default unknown, nothing assigned) stays unresolved, with
 //!   what depends on it: a value the source doesn't state is not chosen for the caller.
 //!
-//! Writers that cannot toggle declare `core.condition` and `core.state_override` illegal, so the planner runs
-//! `resolve-state` before them. A world without state components is never touched.
+//! Writers that cannot toggle declare `core.condition` and `core.state_override` illegal: a program that writes to one
+//! states `resolve-state` before it. A world without state components is never touched.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1057,7 +1057,7 @@ mod tests {
         );
     }
     use crate::components::Name;
-    use crate::pass::{Mode, PassManager, PassOptions, PassRegistry, Target};
+    use crate::pass::{Error, Mode, PassManager, PassRegistry, Pipeline, Target};
 
     fn axis(w: &mut World, key: &str) -> Entity {
         let e = w.spawn();
@@ -1988,27 +1988,36 @@ mod tests {
         s
     }
 
-    /// A world without state components plans no pass and comes out byte for byte the same.
+    /// A world without state components needs no pass and comes out byte for byte the same; `resolve-state` stated on
+    /// it changes nothing.
     #[test]
     fn stateless_world_is_untouched() {
         let mut c = castle();
         run(&mut c.w, "");
         let before = dump(&c.w);
         let m = PassManager::new(registry());
-        let report = m
-            .convert(&mut c.w, &skate(), Mode::Partial, &PassOptions::new())
+        m.convert(&mut c.w, &Pipeline::default(), &skate(), Mode::Partial)
             .unwrap();
-        assert_eq!(report.pipeline, "");
+        assert_eq!(dump(&c.w), before);
+        let resolve = m.registry.parse("resolve-state").unwrap();
+        m.convert(&mut c.w, &resolve, &skate(), Mode::Partial).unwrap();
         assert_eq!(dump(&c.w), before);
     }
 
+    /// A writer that cannot toggle refuses state until the program states `resolve-state` before it.
     #[test]
-    fn planner_resolves_before_a_writer_that_cannot_toggle() {
-        let mut c = castle();
+    fn a_writer_that_cannot_toggle_needs_resolve_state_stated() {
         let m = PassManager::new(registry());
-        let report = m
-            .convert(&mut c.w, &skate(), Mode::Partial, &PassOptions::new())
-            .unwrap();
+        let err = m
+            .convert(&mut castle().w, &Pipeline::default(), &skate(), Mode::Partial)
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::Illegal { name, lowered_by, .. } if name == Condition::NAME && lowered_by.is_empty()),
+            "{err}"
+        );
+        let mut c = castle();
+        let resolve = m.registry.parse("resolve-state").unwrap();
+        let report = m.convert(&mut c.w, &resolve, &skate(), Mode::Partial).unwrap();
         assert_eq!(report.pipeline, "resolve-state");
         assert_eq!(names(&c.w), ["m003312_3802"]);
     }

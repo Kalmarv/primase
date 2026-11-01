@@ -134,9 +134,6 @@ impl Pass for PrepareReskateTextures {
     fn removes(&self) -> &[&'static str] {
         &["skate.texture"]
     }
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn approximates(&self) -> &'static str {
         "material tints multiplied into 8-bit copies of their base textures (in linear light)"
     }

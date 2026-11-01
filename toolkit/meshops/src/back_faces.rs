@@ -263,10 +263,6 @@ impl Pass for AddBackFaces {
     fn removes(&self) -> &[&'static str] {
         &["core.mesh_file"]
     }
-    /// The file links it removes are a side effect: the changed meshes no longer match their files.
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         if let Some(e) = w.iter::<MeshFile>().map(|(e, _)| e).find(|&e| !w.has::<Mesh>(e)) {
             return Err(format!("{e:?}: geometry still in its file (load it first)"));

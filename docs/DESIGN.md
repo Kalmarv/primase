@@ -88,22 +88,20 @@ conversion's reader output and before its writer in every build; after every pas
 builds only when the program opts in with `PassManager::with_pass_checks(true)`: off there by default for speed). A pass that declares it **despawns entities**
 (`drop-optional`, `select-lod`) may also make a name vanish that only the entities it despawned held, so it need not
 list every component a dropped placement or a discarded form may carry; a name a surviving entity lost must still be in
-`removes`, and the planner counts on `removes` alone. A writer declares a **target** (MLIR's conversion
-target): per component name `Legal`, `Dynamic` (a per-value check: texture format, TRS-decomposable transform),
-`Illegal`, and what it does with unknown names: a format writer leaves them out and reports them. `Carry` (written
-through untouched) and `LowerAndCarry` (carried, and lowered as well) belong to core's own serialisation only, never to a
-format writer's target. Full conversion requires every name Legal (or, for core's serialisation, carried); partial
-conversion leaves unknown names out and reports them. A pass also declares what it **legalizes** (lowers), by default what it removes: a pass whose removals are
-side effects (the file link of a texture it rewrote) or that keeps its source says what it lowers.
+`removes`. A writer declares a **target** (MLIR's conversion target): per component name `Legal`, `Dynamic` (a per-value
+check: texture format, TRS-decomposable transform), `Covered` (written through another component on the entities a
+check accepts) or `Illegal`. A name the target gives no rule is not written: partial conversion keeps it and reports it,
+full conversion refuses it. A writer's target never carries a name through untouched (law 4); core's own serialisation
+(v2, `docs/SPEC.md`) keeps opaque components untouched by its own rule, not through a target.
 
-Pipelines are explicit lists in a text form (`load-texture-files,bake-fromsoft-layered{size=1024}`). The planner
-builds one by MLIR's legalization depth: for each name to lower, the pass chain of least depth that lowers it with
-legal outputs (ties by priority, then name), plus the producers of what those passes require, ordered by data
-dependencies (providers, then passes that modify a name, then those that read it as it is) and checked by simulating the
-declarations. An illegal name must be removed, a dynamic name's failing values removed or rewritten in place, a
-`LowerAndCarry` name only lowered. Passes are made with the caller's options, by pass name. It fails naming the missing link ("no pass lowers `fromsoft.layered_material` to
-anything `stl` accepts"). The chosen pipeline is printed and recorded in the report, so every run is reproducible as an
-explicit pipeline. No fixed-point rewriting, no backtracking.
+Pipelines are explicit lists in a text form (`load-texture-files,bake-fromsoft-layered{size=1024}`) that the program
+states: every pass, in order, with its options. The manager runs a pipeline as written and never chooses, adds or
+reorders a pass. Before anything runs it checks the declarations (no pass provides a name an earlier pass settled unless
+a later one settles it again), and `Pipeline::unfed` names the passes that would lack their inputs. After the pipeline
+the world is checked against the writer's target: a name the target still refuses is an error naming the passes of the
+pipeline that remove or rewrite it, or saying none does ("`stl` does not accept `fromsoft.layered_material` on [...]
+after the pipeline: nothing in the stated pipeline removes or rewrites it"). The pipeline is printed and recorded in the
+report, so every run is reproducible. No fixed-point rewriting, no backtracking.
 
 **Reports and instrumentation.** Passes record named counters and approximation remarks (entity, `Source`, what was
 approximated) in the run report, which is deterministic (no timings in it). Instrumentation hooks run before and after

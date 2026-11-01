@@ -661,9 +661,6 @@ impl Pass for LowerHavokClips {
     fn provides(&self) -> &[&'static str] {
         &[Clip::NAME]
     }
-    fn legalizes(&self) -> &[&'static str] {
-        &[HavokAnimation::NAME]
-    }
     fn approximates(&self) -> &'static str {
         "clip keys are the spline sampled at a fixed rate; between keys core.clip interpolates, not the spline"
     }

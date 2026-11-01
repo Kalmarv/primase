@@ -93,10 +93,6 @@ impl Pass for OmitPlacements {
     fn modifies(&self) -> &[&'static str] {
         &[Instance::NAME, Asset::NAME]
     }
-    /// It lowers nothing: what it takes away is left out.
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn despawns_entities(&self) -> bool {
         true
     }

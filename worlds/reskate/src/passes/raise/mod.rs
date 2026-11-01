@@ -1103,10 +1103,6 @@ impl primase_core::pass::Pass for RaiseSkate {
     fn modifies(&self) -> &[&'static str] {
         &["core.surfaces", "core.collision", "skate.rock"]
     }
-    /// It lowers nothing a target refuses: what it removes is what skate has no surface for.
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn approximates(&self) -> &'static str {
         "light energy as Studio watts (4 pi^2 candela x the calibration); emission as Studio's by the same calibration; base colour alpha factors with a texture not kept (all counted)"
     }

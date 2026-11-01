@@ -538,9 +538,6 @@ impl Pass for LowerHavokLayers {
     fn provides(&self) -> &[&'static str] {
         &["core.controller", "core.controller_binding"]
     }
-    fn legalizes(&self) -> &[&'static str] {
-        &[HavokBehaviorLayers::NAME]
-    }
     fn modifies(&self) -> &[&'static str] {
         &["core.controller"]
     }

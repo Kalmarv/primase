@@ -1,6 +1,6 @@
 //! Lowering parametric data for the outputs that need triangles or polylines: `tessellate-colliders`
 //! (`core.collider` to `core.collision`) and `flatten-curves` (Bezier `core.curve`s to polylines). A writer that
-//! needs them says so in its target, so the planner runs them only for it.
+//! needs them says so in its target, and a program writing to it states them.
 
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Collider, Collision, Component, Curve, Diagonal, Heightfield, Shape, World};

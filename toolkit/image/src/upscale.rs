@@ -141,10 +141,6 @@ impl Pass for UpscaleNearest {
     fn removes(&self) -> &[&'static str] {
         &[TextureFile::NAME]
     }
-    /// Only the textures: the file links go as a side effect.
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn approximates(&self) -> &'static str {
         "nearest-sampled textures enlarged so linear filtering blends only across their texel blocks; lower mip levels \
          remade by the box filter"

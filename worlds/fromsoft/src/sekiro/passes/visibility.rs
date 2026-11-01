@@ -25,10 +25,6 @@ impl Pass for PreserveDisplayMasks {
     fn requires(&self) -> &[&'static str] {
         &[PrimitiveCondition::NAME, StateAxis::NAME]
     }
-    // This opt-in playback representation is not a general legalization of arbitrary world state.
-    fn legalizes(&self) -> &[&'static str] {
-        &[]
-    }
     fn removes(&self) -> &[&'static str] {
         &[PrimitiveCondition::NAME]
     }

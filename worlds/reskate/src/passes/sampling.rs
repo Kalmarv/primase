@@ -292,10 +292,6 @@ impl Pass for PrepareReskateUvTransforms {
     fn removes(&self) -> &[&'static str] {
         &["core.mesh_file"]
     }
-    /// It lowers texture transforms into the coordinates.
-    fn legalizes(&self) -> &[&'static str] {
-        &["pbr.material"]
-    }
     fn approximates(&self) -> &'static str {
         "slots tiling otherwise than their anchor take its tiling; coordinates transformed once in f32"
     }
