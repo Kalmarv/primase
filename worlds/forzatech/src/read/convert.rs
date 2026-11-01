@@ -140,6 +140,8 @@ impl ForzaReader {
         self.models.empty_forms += report.empty_forms;
         self.models.promoted += report.promoted;
         self.models.default_lost += report.default_lost;
+        self.models.empty_base += report.empty_base;
+        self.models.empty_variant += report.empty_variant;
         Ok(lines)
     }
 }

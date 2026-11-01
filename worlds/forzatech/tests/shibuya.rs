@@ -17,11 +17,12 @@ mod inputs;
 use forzatech_formats::world::{Area, Season};
 use inputs::{Game, install_file};
 use primase_core::convert::Reader;
-use primase_core::pass::{PassManager, PassRegistry};
+use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry};
 use primase_core::{Entity, Instance, Lods, Mesh, Semantic, Stream, Texture, World};
 use primase_forzatech::components::{
-    ForzaMaterial, MaterialTextures, ModelFiles, Placement, PlacementOrigin,
+    ForzaMaterial, LodProfiles, MaterialTextures, ModelFiles, Placement, PlacementOrigin,
 };
+use primase_forzatech::passes::SelectForzaDrawn;
 use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
 use primase_forzatech::read::placements::Scope;
@@ -79,10 +80,20 @@ fn shibuya_scramble() {
     );
 
     // every 20th prototype's forms, loaded
+    drawn_by_tier(&world);
+
     let sample: BTreeSet<Entity> = prototypes.iter().copied().step_by(20).collect();
     let t2 = std::time::Instant::now();
     let (part, lines) = reader.load(&world, &sample).unwrap();
     manager.verify(&part, "load").unwrap();
+    // the conversion installs the part's scope over every entity it asked for: load keeps each alive
+    let asked = world.closure(sample.iter().copied());
+    let lost: Vec<Entity> = asked.iter().copied().filter(|e| !part.is_alive(*e)).collect();
+    assert!(
+        lost.is_empty(),
+        "load despawned {} entities it was asked for",
+        lost.len()
+    );
     println!(
         "loaded {} prototypes in {:.1} s",
         sample.len(),
@@ -107,6 +118,29 @@ fn shibuya_scramble() {
     assert!(meshes > 0);
     assert!(agree > disagree * 10, "{agree} agree, {disagree} disagree");
     materials(&part, &reader);
+}
+
+/// The LOD profiles' (pass, tier) records, and what `select-forzatech-drawn` keeps at 5 m at each tier.
+fn drawn_by_tier(world: &World) {
+    let mut kinds: BTreeMap<(u16, u16), usize> = BTreeMap::new();
+    if let Some(p) = world.resource::<LodProfiles>() {
+        for r in p.0.iter().flatten() {
+            *kinds.entry((r.pass, r.tier)).or_default() += 1;
+        }
+    }
+    println!("LOD profile records by (pass, tier): {kinds:?}");
+    for tier in 0..5 {
+        let mut w = world.subset(&world.entities().collect());
+        let mut log = PassLog::default();
+        SelectForzaDrawn::new(5.0, tier)
+            .unwrap()
+            .run(&mut w, &mut log)
+            .unwrap();
+        println!(
+            "select-forzatech-drawn at 5 m, tier {tier}: dropped {:?}",
+            log.drops
+        );
+    }
 }
 
 /// Every loaded material's chain reaches a parent and a shader family, every resolved texture parameter's hash a

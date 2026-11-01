@@ -14,7 +14,8 @@ use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
 use primase_forzatech::read::placements::Scope;
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_image::{Beyond, CapMode, CapTextures, NormalDownscale, NormalizeNormals};
+use primase_image::{Beyond, CapMode, CapTextures, MissingLevels, NormalDownscale, NormalizeNormals, OrmSize, PackOrm};
+use primase_meshops::{BakeNonrigid, Mirrors, OmitUnshadedPrimitives, SpecializeMaterialVariants, UnusedVariants};
 use primase_reskate::compile::{CompileChoices, Streaming, Studio, TimeOfDay, compile_map};
 use primase_reskate::components::{CollisionSurfaces, CollisionWeld};
 use primase_reskate::passes::{
@@ -48,8 +49,9 @@ fn main() -> Result<()> {
         ..EncodingOptions::default()
     };
 
-    // Run once on the box as read: what the game draws near the camera.
-    let select = Pipeline { passes: vec![Box::new(SelectForzaDrawn::new(5.0, 0)?)] };
+    // Run once on the box as read: what the game draws near the camera, by the hand-placed LOD profiles of quality tier
+    // 1 (the tier most profile groups hold a main-view record of; what a tier stands for is not established).
+    let select = Pipeline { passes: vec![Box::new(SelectForzaDrawn::new(5.0, 1)?)] };
 
     // Run on each part, loaded, before it is written: its second level of detail, its materials lowered to
     // `pbr.material` (the families with a rule; the others are left out, counted), then the core world prepared as the
@@ -57,13 +59,24 @@ fn main() -> Result<()> {
     let prepare = Pipeline {
         passes: vec![
             Box::new(SelectLod { choice: LodChoice::AtMost(1) }),
+            // a placement drawing another material variant gets a prototype of its own, so each tiles one way; the
+            // variants nobody places are dropped, counted
+            Box::new(SpecializeMaterialVariants::new(UnusedVariants::Discard)),
             Box::new(SelectForzaMainView),
             Box::new(LowerForzaMaterials),
             Box::new(CollideForzaDrawn { see_through: SeeThrough::LeaveOut }),
+            // what draws nothing the writer can take is left out, counted: a slot with no material instance, and the
+            // shader families with no lowering rule yet; after the collision, so their ground stays solid
+            Box::new(OmitUnshadedPrimitives),
             Box::new(NormalizeNormals),
+            // the writer takes rigid placements: a mirrored or sheared one draws a baked copy of its prototype
+            Box::new(BakeNonrigid { mirrors: Mirrors::Bake }),
             Box::new(PrepareReskateLaidLayers::default()),
             // each map of an environment material tiles on its own; skate samples one way, the base colour's
             Box::new(PrepareReskateUvTransforms::new(TextureSlot::BaseColor, SamplingConflicts::Adopt)),
+            // skate's mask holds both: a material's separate occlusion and metallic-roughness maps packed as one, at the
+            // metallic-roughness map's size
+            Box::new(PackOrm::new(OrmSize::MetallicRoughness, MissingLevels::Generate)),
             // collision surfaces have no class yet: concrete, the city's most common ground (the program's choice)
             Box::new(RaiseSkate::new(RaiseOptions::new(
                 "shibuya",

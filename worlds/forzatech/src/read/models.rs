@@ -57,6 +57,11 @@ pub struct ModelReport {
     pub promoted: usize,
     /// Prototypes whose default level holds no mesh, left with no default.
     pub default_lost: usize,
+    /// Meshes whose base slot holds no material instance: their primitive has no material of its own.
+    pub empty_base: usize,
+    /// Variant slots with no material instance over a base that has one: `core.material_variants` cannot say that a
+    /// variant draws no material, so the variant draws the base's.
+    pub empty_variant: usize,
 }
 
 impl ModelReport {
@@ -64,14 +69,21 @@ impl ModelReport {
         vec![(
             "forzatech models".into(),
             format!(
-                "{} files, {} meshes, {} triangles ({} meshes of other levels left in their files); levels with no                  mesh: {} forms left out, {} prototypes given their finest form, {} defaults dropped",
+                concat!(
+                    "{} files, {} meshes, {} triangles ({} meshes of other levels left in their files); ",
+                    "levels with no mesh: {} forms left out, {} prototypes given their finest form, {} defaults ",
+                    "dropped; slots with no material instance: {} meshes' base, {} variants over a base that has ",
+                    "one (drawn with the base's)"
+                ),
                 self.files,
                 self.meshes,
                 self.triangles,
                 self.other_level,
                 self.empty_forms,
                 self.promoted,
-                self.default_lost
+                self.default_lost,
+                self.empty_base,
+                self.empty_variant
             ),
         )]
     }
@@ -118,6 +130,9 @@ pub fn load_mesh(
                 .first()
                 .ok_or_else(|| Error::Model(format!("{} mesh {k}: no material group", file.path)))?;
             prim.material = material(track, world, materials, at, &model, file, *base, season)?;
+            if prim.material.is_none() {
+                report.empty_base += 1;
+            }
             let mut overrides = BTreeMap::new();
             for (v, row) in model.header.variants.iter().enumerate() {
                 let group = row
@@ -127,6 +142,9 @@ pub fn load_mesh(
                         Error::Model(format!("{} variant {v}: no group for mesh {k}", file.path))
                     })?;
                 let m = material(track, world, materials, at, &model, file, *group, season)?;
+                if m.is_none() && prim.material.is_some() {
+                    report.empty_variant += 1;
+                }
                 if m != prim.material
                     && let Some(m) = m
                 {
@@ -261,8 +279,10 @@ fn primitive(data: &forzatech_formats::modelbin::MeshData<'_>) -> std::result::R
 /// `core.lods` of every `forzatech.levels` of `world` once its levels are loaded, which it removes: core's LOD forms
 /// are of an entity with a mesh. The levels whose files hold a mesh of their level are kept, finest first. When the
 /// prototype's own holds none, the finest form that does becomes its own (its mesh, records, material variants and
-/// files moved onto it, the form despawned), counted; forms with no mesh are despawned, counted; a default whose level
-/// holds no mesh is dropped, counted. A prototype none of whose levels holds a mesh keeps no `core.lods`.
+/// files moved onto it), counted; forms with no mesh are left out, counted; a default whose level holds no mesh is
+/// dropped, counted. A prototype none of whose levels holds a mesh keeps no `core.lods`. No entity is despawned: the
+/// conversion planned its parts from the read world, so every entity it read is one a part asked for; a form left
+/// out, or emptied by giving the prototype its level, is no longer reached through the prototype.
 pub fn make_lods(world: &mut World, report: &mut ModelReport) {
     let prototypes: Vec<Entity> = world.iter::<ForzaLevels>().map(|(e, _)| e).collect();
     for p in prototypes {
@@ -278,19 +298,13 @@ pub fn make_lods(world: &mut World, report: &mut ModelReport) {
             .copied()
             .filter(|(_, e)| world.has::<Mesh>(*e))
             .collect();
-        for &(_, e) in &all[1..] {
-            if !world.has::<Mesh>(e) {
-                report.empty_forms += 1;
-                world.despawn(e);
-            }
-        }
+        report.empty_forms += all[1..].iter().filter(|(_, e)| !world.has::<Mesh>(*e)).count();
         let Some(&(detail, finest)) = meshed.first() else {
             continue;
         };
         if finest != p {
             report.promoted += 1;
             move_level(world, finest, p);
-            world.despawn(finest);
         }
         let own = |e: Entity| if e == finest { p } else { e };
         let default = match default.map(own) {
@@ -405,7 +419,11 @@ mod tests {
         );
         assert!(world.has::<Mesh>(p));
         assert_eq!(world.get::<ModelFiles>(p).unwrap().level, Some(1));
-        assert!(!world.is_alive(forms[0]) && !world.is_alive(forms[1]));
+        // the emptied and the empty form stay alive, reached through nothing
+        assert!(
+            world.is_alive(forms[0]) && !world.has::<Mesh>(forms[0]) && !world.has::<ModelFiles>(forms[0])
+        );
+        assert!(world.is_alive(forms[1]) && !world.has::<Mesh>(forms[1]));
         assert_eq!(
             (report.empty_forms, report.promoted, report.default_lost),
             (1, 1, 1)

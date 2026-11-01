@@ -65,29 +65,31 @@ impl SelectForzaDrawn {
         Ok(SelectForzaDrawn { distance, tier })
     }
 
+    /// `Ok` when a hand-placed placement is drawn at the distance, else why not.
     fn hand_drawn(
         &self,
         profiles: Option<&LodProfiles>,
         group: Option<u8>,
         band_rows: &[Option<u8>; 6],
-    ) -> bool {
+    ) -> Result<(), &'static str> {
+        let no_row = "hand-placed placements whose band at the distance has no LOD row";
         let Some(group) = group else {
-            return band_rows[0].is_some();
+            return band_rows[0].map(|_| ()).ok_or(no_row);
         };
         let Some(record) = profiles
             .and_then(|p| p.0.get(usize::from(group)))
             .and_then(|g| g.iter().find(|r| r.pass == MAIN_VIEW && r.tier == self.tier))
         else {
-            return false;
+            return Err("hand-placed placements whose LOD profile group has no main-view record of the tier");
         };
         let mut from = 0f32;
         for (k, &to) in record.distances.iter().enumerate() {
             if from <= self.distance && self.distance < to {
-                return band_rows[k].is_some();
+                return band_rows[k].map(|_| ()).ok_or(no_row);
             }
             from = from.max(to);
         }
-        false
+        Err("hand-placed placements beyond their profile's last band")
     }
 }
 
@@ -120,22 +122,19 @@ impl Pass for SelectForzaDrawn {
                         t.ranges
                             .iter()
                             .any(|r| r.start <= self.distance && self.distance < r.end)
-                    }),
+                    })
+                    .then_some(())
+                    .ok_or("rule-placed placements not drawn at the distance"),
                 PlacementOrigin::Hand {
                     band_rows, lod_group, ..
                 } => self.hand_drawn(profiles, *lod_group, band_rows),
             };
-            if !drawn {
-                dropped.push((e, matches!(p.origin, PlacementOrigin::Rule { .. })));
+            if let Err(why) = drawn {
+                dropped.push((e, why));
             }
         }
         let before: BTreeSet<Entity> = world.iter::<Instance>().map(|(_, i)| i.prototype).collect();
-        for (e, rule) in dropped {
-            let why = if rule {
-                "rule-placed placements not drawn at the distance"
-            } else {
-                "hand-placed placements not drawn at the distance"
-            };
+        for (e, why) in dropped {
             primase_core::ledger::despawn(world, e, log, why);
         }
         let after: BTreeSet<Entity> = world.iter::<Instance>().map(|(_, i)| i.prototype).collect();
