@@ -9,7 +9,8 @@
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform};
 use primase_core::{
-    ColorSpace, DrawLayer, DrawOrder, Entity, Name, NormalGreen, NormalZ, TexFormat, TexRole, Texture, World,
+    ColorSpace, DrawLayer, DrawOrder, Entity, Mesh, Name, NormalGreen, NormalZ, Primitive, TexFormat,
+    TexRole, Texture, Topology, World,
 };
 use primase_forzatech::components::{
     ForzaMaterial, InstanceLevel, MaterialLevel, MaterialTexture, MaterialTextures, Parameter, ShaderLevel,
@@ -247,6 +248,39 @@ fn a_family_without_a_rule_is_left_and_counted() {
         log.omitted["materials of shader family terr_cube left unlowered"],
         1
     );
+}
+
+#[test]
+fn a_material_of_no_family_is_left_only_when_something_draws_it() {
+    let mut world = World::new();
+    let drawn = world.spawn();
+    let undrawn = world.spawn();
+    for e in [drawn, undrawn] {
+        let mut m = material("", "Standard", Vec::new());
+        m.shader = None;
+        world.insert(e, m);
+    }
+    let mesh = world.spawn();
+    world.insert(
+        mesh,
+        Mesh::new(vec![Primitive {
+            topology: Topology::Triangles,
+            streams: Default::default(),
+            indices: Some(vec![0, 1, 2]),
+            material: Some(drawn),
+        }]),
+    );
+    let mut log = PassLog::default();
+    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    assert_eq!(
+        log.omitted["materials of shader family no shader family left unlowered"],
+        1
+    );
+    assert_eq!(
+        log.omitted["triangles of shader family no shader family left unlowered"],
+        1
+    );
+    assert_eq!(log.counts["materials of no shader family that nothing draws"], 1);
 }
 
 fn foliage(extra: Vec<Parameter>, atst: u8) -> ForzaMaterial {

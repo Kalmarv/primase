@@ -177,7 +177,7 @@ fn rule(byte: u8) -> PlacementOrigin {
     }
 }
 
-fn hand() -> PlacementOrigin {
+fn hand(tint: [f32; 4]) -> PlacementOrigin {
     PlacementOrigin::Hand {
         instance: 0,
         flags: 0,
@@ -185,7 +185,7 @@ fn hand() -> PlacementOrigin {
         band_rows: [None; 6],
         gameplay_tag: None,
         routes: Vec::new(),
-        tint: [1.0; 4],
+        tint,
         lod_group: None,
     }
 }
@@ -205,7 +205,10 @@ fn the_palette_is_read_at_the_vertex_green_and_the_placements_byte() {
     let b = prototype(&mut world, material, &[[0.0, 1.0]]);
     let a0 = place(&mut world, a, rule(0));
     let a1 = place(&mut world, a, rule(255));
-    let a2 = place(&mut world, a, hand());
+    // a tint that is not a whole byte draws untinted; one that is reads the palette like a rule placement
+    let a2 = place(&mut world, a, hand([0.3; 4]));
+    let a3 = place(&mut world, a, hand([1.0; 4]));
+    let a4 = place(&mut world, a, hand([2.0; 4]));
     let b0 = place(&mut world, b, rule(0));
 
     let mut log = PassLog::default();
@@ -217,7 +220,11 @@ fn the_palette_is_read_at_the_vertex_green_and_the_placements_byte() {
     // the hand-placed instance draws untinted; the tinted ones have a variant each
     let variant = |p: Entity| world.get::<Instance>(p).unwrap().variant;
     // (model variant, byte) in order, the untinted first
-    assert_eq!([variant(a0), variant(a1), variant(a2)], [1, 2, 0]);
+    // untinted, byte 0, row 0.3, row 1.0 (byte 255 and a hand tint of one are the same row)
+    assert_eq!(
+        [variant(a0), variant(a1), variant(a2), variant(a3), variant(a4)],
+        [1, 3, 2, 3, 0]
+    );
     assert_eq!(variant(b0), 0);
 
     // untinted, then the tinted groups by green: three one-triangle primitives
@@ -232,12 +239,14 @@ fn the_palette_is_read_at_the_vertex_green_and_the_placements_byte() {
     assert_eq!(maps.len(), 3);
     assert!(maps[0].is_empty());
     // column 0 (green 0): byte 0 reads red, byte 255 blue; the hand placement (id 0) draws the material itself
+    // (row 0.3 reads the palette's first row, as byte 0 does: one material between them)
     assert_eq!(base(&world, maps[1][&1]), [1.0, 0.0, 0.0, 1.0]);
-    assert_eq!(base(&world, maps[1][&2]), [0.0, 0.0, 1.0, 1.0]);
+    assert_eq!(maps[1][&2], maps[1][&1]);
+    assert_eq!(base(&world, maps[1][&3]), [0.0, 0.0, 1.0, 1.0]);
     assert!(!maps[1].contains_key(&0));
     // column 1 (green 255): byte 0 reads green, byte 255 yellow
     assert_eq!(base(&world, maps[2][&1]), [0.0, 1.0, 0.0, 1.0]);
-    assert_eq!(base(&world, maps[2][&2]), [1.0, 1.0, 0.0, 1.0]);
+    assert_eq!(base(&world, maps[2][&3]), [1.0, 1.0, 0.0, 1.0]);
 
     // one primitive of one group stays whole; its green-0 tint is the first prototype's, shared
     let mesh = world.get::<Mesh>(b).unwrap();
@@ -263,7 +272,7 @@ fn the_palette_is_read_at_the_vertex_green_and_the_placements_byte() {
     let lowered: BTreeSet<Entity> = world.iter::<PbrMaterial>().map(|(e, _)| e).collect();
     assert_eq!(lowered.len(), 5);
     assert_eq!(
-        log.omitted["hand-placed instances of swatch-tinted prototypes: untinted (their tint byte is not traced)"],
+        log.omitted["hand-placed instances of swatch-tinted prototypes whose tint is outside 0 to 1: untinted"],
         1
     );
 }

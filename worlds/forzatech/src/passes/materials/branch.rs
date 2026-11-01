@@ -6,7 +6,11 @@
 //! `uv0 * NormalAUVTiling`, `z` rebuilt from the unscaled `x, y`, then `x, y` times `NormalAIntensity`, brought to the
 //! world as the environment's is (green up, which is glTF's `normalScale`); the only discard compares a constant, not a
 //! texture, so the surface is opaque. The `_MS` permutations blend the terrain in below a height (mega-skirt): left
-//! out, named. A material that blends a second set (`Blend2`) is left unlowered.
+//! out, named. A material that blends a second set (`Blend2`) is left unlowered: the track's `bin.zip` holds seven
+//! GBuffer permutations of the family (`_BranchHiQ_NormalAlpha_AO` with and without `_MS`, `_Snow_MS`, `_Tint`,
+//! `_Tint_MS`, `_MicroNormal_..._MS`, and `_DXRSimpleHit_Base`) and none reads `DiffuseB` or `NormalB` (their
+//! constant-buffer offsets are 0), so no shader in the install draws such a material and there is no rule to derive.
+//! All 6 materials of the Shibuya box (8,213 triangles) have `Blend2` off.
 use super::{Binding, Derived, Lowering, Params, approximate, left_out};
 use crate::components::{ForzaMaterial, MaterialTextures};
 use primase_core::pass::PassLog;

@@ -18,7 +18,7 @@ use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Component, Entity, Instance, LodChoice, Mesh, SelectLod, Semantic};
 use primase_forzatech::components::SwatchTint;
-use primase_forzatech::passes::{BakeForzaSwatchTint, LowerForzaMaterials};
+use primase_forzatech::passes::{BakeForzaSwatchTint, LowerForzaMaterials, SelectForzaMainView};
 use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
 use primase_forzatech::read::placements::Scope;
@@ -52,7 +52,17 @@ fn run(folder: &std::path::Path, bake: bool) -> Prepared {
     }
     .run(&mut part, &mut log)
     .unwrap();
+    // what the main view does not draw is gone before materials are made of it
+    SelectForzaMainView.run(&mut part, &mut log).unwrap();
     LowerForzaMaterials.run(&mut part, &mut log).unwrap();
+    // every material a primitive draws names its shader family (the undrawn Default.materialbin ones went with their
+    // primitives)
+    assert!(
+        !log.omitted
+            .contains_key("materials of shader family no shader family left unlowered"),
+        "a drawn material has no shader family: {:?}",
+        log.omitted
+    );
     // the destination's cap, before the copies are baked
     CapTextures::new(
         256,

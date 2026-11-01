@@ -81,14 +81,22 @@
 //!
 //! The `environment` swatch tint is not a material's but a placement's: the lowering records the palette
 //! ([`crate::components::SwatchTint`]) and `bake-forzatech-swatch-tint` applies it
-//! (`tests/shibuya_swatch.rs`, the whole box after `select-lod` at level 1, `lower-forzatech-materials` and a texture
-//! cap of 256): 568 prototypes of 474,356 triangles, their 3,036 primitives split into 3,351 by the vertex colour, 4,144
-//! (model variant, tint byte) material variants, 7,251 material copies and 549 baked base colour textures. Left out, by
-//! name: the palette read at one texel, not filtered (179,810 triangles); 26 hand-placed instances, untinted (their tint
-//! byte is not traced); 183 triangles whose corners disagree on the tint mask and 291 tinted ones on the palette column;
-//! 2 primitives with no vertex colour; and one material with no base colour texture, tinted as its colour factor.
-//! `specialize-material-variants` then makes 2,060 more prototype copies than without the tint, 383,854 triangles more:
-//! the placed prototypes go from 2,685 to 4,745 and their triangles from 1,419,192 to 1,803,046.
+//! (`tests/shibuya_swatch.rs`, the whole box after `select-lod` at level 1, `select-forzatech-main-view`,
+//! `lower-forzatech-materials` and a texture cap of 256): 568 prototypes of 474,356 triangles, their 3,036 primitives
+//! split into 3,351 by the vertex colour, 4,149 (model variant, palette row) material variants, 7,359 material copies
+//! and 625 baked base colour textures. The row is the instance variation: a rule placement's byte over 255, a
+//! hand-placed instance's transform tint (26 instances, inferred) as it is. No prototype holding levels of detail
+//! reaches the bake after `select-lod`. Left out, by name: the palette read at one texel, not filtered (179,810
+//! triangles; the game's sampler is a run-time one, so its filter is not in the shader: 1,267 palette texels are read,
+//! of which a bilinear read would change 477 with clamp addressing and 592 with wrap by more than two stored values);
+//! 183 triangles whose corners disagree on the tint mask and 291 tinted ones on the palette column; 2 primitives
+//! with no vertex colour; and one material with no base colour texture, tinted as its colour factor.
+//! `specialize-material-variants` then makes 2,065 more prototype copies than without the tint, 384,002 triangles
+//! more: the placed prototypes go from 2,685 to 4,750 and their triangles from 1,391,523 to 1,775,525.
+//!
+//! The lowering reports a material of no shader family as unlowered only when a primitive or a model variant uses it:
+//! after `select-forzatech-main-view` the `Default.materialbin` materials of the undrawn `Bush_Flatten` and occluder
+//! primitives are used by none and are counted apart.
 mod anim_flag;
 mod anim_ledflipbookpanel;
 mod branch;
@@ -111,8 +119,8 @@ use crate::components::{ForzaMaterial, MaterialTextures, PlanarUv, SwatchTint, V
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
-    ColorSpace, Component, DrawOrder, Entity, LayeredMaterial, Mesh, Name, NormalBasis, NormalConvention,
-    NormalGreen, NormalX, NormalZ, Semantic, TexFormat, TexRole, Texture, World,
+    ColorSpace, Component, DrawOrder, Entity, LayeredMaterial, MaterialVariants, Mesh, Name, NormalBasis,
+    NormalConvention, NormalGreen, NormalX, NormalZ, Semantic, TexFormat, TexRole, Texture, World,
 };
 use primase_foundations::color::srgb_to_linear;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -545,6 +553,12 @@ impl Pass for LowerForzaMaterials {
                 }
             }
         }
+        // the materials a primitive draws or a model variant swaps in: a material with no shader family that none does
+        // (the `Default.materialbin` ones of primitives taken out earlier, the occluders) is not an omission
+        let mut used: BTreeSet<Entity> = triangles.keys().copied().collect();
+        for (_, variants) in world.iter::<MaterialVariants>() {
+            used.extend(variants.0.iter().flat_map(|map| map.values().copied()));
+        }
         let materials: Vec<(Entity, ForzaMaterial)> = world
             .iter::<ForzaMaterial>()
             .map(|(e, m)| (e, m.clone()))
@@ -589,6 +603,10 @@ impl Pass for LowerForzaMaterials {
                 _ => None,
             };
             let Some(mut pbr) = lowered else {
+                if family.is_none() && !used.contains(e) {
+                    log.count("materials of no shader family that nothing draws", 1);
+                    continue;
+                }
                 let name = match family {
                     Some("uber_foliage") => "uber_foliage billboard or impostor",
                     Some("uber_branch") => "uber_branch with a second set of maps",

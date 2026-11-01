@@ -70,6 +70,8 @@ fn main() -> Result<()> {
     let prepare = Pipeline {
         passes: vec![
             Box::new(SelectLod { choice: LodChoice::AtMost(1) }),
+            // what the main view does not draw (occluders, meshes in no colour bucket) is left out before anything is made of it
+            Box::new(SelectForzaMainView),
             Box::new(LowerForzaMaterials),
             // the terrain and the roads' planar layers read the position of a surface point: its coordinates, per placement
             Box::new(LowerForzaPlanarUv),
@@ -80,7 +82,6 @@ fn main() -> Result<()> {
             // a placement drawing another material variant gets a prototype of its own, so each tiles one way; the
             // variants nobody places are dropped, counted
             Box::new(SpecializeMaterialVariants::new(UnusedVariants::Discard)),
-            Box::new(SelectForzaMainView),
             Box::new(CollideForzaDrawn { see_through: SeeThrough::LeaveOut, ground: Ground::World }),
             // what draws nothing the writer can take is left out, counted: a slot with no material instance, and the
             // shader families with no lowering rule yet; after the collision, so their ground stays solid

@@ -1,15 +1,15 @@
 //! `bake-forzatech-swatch-tint`: the swatch tint of `environment` materials, applied as material variants.
 //!
 //! The shader multiplies the albedo by `lerp(tint, 1, 1 - a (1 - c.r))`, `a` the diffuse alpha, `c` the vertex colour
-//! and `tint` the `SwatchTintTexture` read at `(c.g, byte / 255)`, `byte` the first of the placement's instance
-//! variation bytes. The vertex colour is the model's (the reader keeps it as `ShaderInput(0)`: it is data, not a
+//! and `tint` the `SwatchTintTexture` read at `(c.g, v)`, `v` the first of the placement's instance
+//! variation. The vertex colour is the model's (the reader keeps it as `ShaderInput(0)`: it is data, not a
 //! colour), so which triangles take the tint and from which palette column is the mesh's, and which palette row is the
 //! placement's. This pass applies both:
 //!
 //! - each swatch-tinted primitive is split by its triangles' vertex colour: those with red under one half (a corner
 //!   majority) are tinted, grouped by their green (the first corner's), the rest are not; a primitive of one group
 //!   stays whole;
-//! - each prototype's placements are given new material variants, one per distinct (model variant, tint byte) among
+//! - each prototype's placements are given new material variants, one per distinct (model variant, palette row) among
 //!   them ([`Instance::variant`] is rewritten to that dense number), whose tinted sub-primitives draw a copy of the
 //!   variant's material whose base colour texture is baked with the tint: each texel's colour times
 //!   `(1 - a) + a tint` (the shader's product at red 0, in linear light), alpha kept, every stored level. The tint is
@@ -24,9 +24,15 @@
 //! size they are kept, not at the stored size): a prototype with levels of detail is left as it is (counted), as the
 //! specializing pass refuses variants beside levels.
 //!
-//! Left out, counted: a hand-placed instance has no tint byte that is known (its transform's tint is not traced to the
-//! shader), so it draws untinted; a triangle whose corners disagree on red (the majority decides) or, among the tinted,
-//! on green (the first corner's); the palette's sampler (it is read at one texel, not filtered); a material with no
+//! The palette row of a placement is the shader's instance variation: a rule record's byte over 255. A hand-placed
+//! instance's transform holds four floats where a rule record holds four bytes (both are all ones, all zeros, or a
+//! varied first with the rest ones, in about the same shares; the swatch-tinted buildings' hand tints are round
+//! authored fractions such as 0.514), so its first float is the row as it is (inferred); one outside 0 to 1 draws
+//! untinted.
+//!
+//! Left out, counted: a triangle whose corners disagree on red (the majority decides) or, among the tinted,
+//! on green (the first corner's); the palette's sampler (it is read at one texel, not filtered: the shader reads it through a run-time
+//! sampler, `s11`, whose filter is in no file; the pass counts the texels a bilinear read would change); a material with no
 //! base colour texture takes the tint as its colour factor, whole; and a texel's mip levels are tinted by their own
 //! alpha, not by the alpha of the level the shader would mix.
 
@@ -58,8 +64,11 @@ pub const BAKE_FORZATECH_SWATCH_TINT: PassSpec = PassSpec {
 /// The vertex colour stream the reader keeps (`read/models.rs`).
 const COLOUR: Semantic = Semantic::ShaderInput(0);
 
-/// A material variant a placement draws: the model's variant and the tint byte (`None`: untinted).
-type Key = (u32, Option<u8>);
+/// A palette row: the placement's instance variation as the `v` coordinate, an `f32`'s bits (so rows order and compare).
+type Row = u32;
+
+/// A material variant a placement draws: the model's variant and the palette row (`None`: untinted).
+type Key = (u32, Option<Row>);
 
 /// A channel of the vertex colour as the byte it was stored as.
 fn byte(x: f32) -> u8 {
@@ -108,13 +117,24 @@ fn split(indices: &[u32], colours: &[[f32; 4]]) -> Result<Split, String> {
 
 /// The palettes read so far, decoded once, with the transfer the shader's view applies.
 #[derive(Default)]
-struct Palettes(BTreeMap<Entity, Option<(Levels, Transfer)>>);
+struct Palettes {
+    levels: BTreeMap<Entity, Option<(Levels, Transfer)>>,
+    /// The (palette, column, row) read so far.
+    seen: BTreeSet<(Entity, u8, Row)>,
+    /// Of those, how many a bilinear read differs from the point read in a channel by more than two stored values,
+    /// clamping and wrapping at the edges.
+    filtered_differs: [u64; 2],
+}
+
+/// Two stored values, the margin within which a filtered read is taken to agree with the point read.
+const AGREE: f64 = 2.0;
 
 impl Palettes {
-    /// The palette's linear colour at column `g`, row `row`; `None` when it can't be read.
-    fn colour(&mut self, w: &World, palette: Entity, g: u8, row: u8) -> Result<Option<[f32; 3]>, String> {
+    /// The palette's linear colour at column `g`, row `row` read at the texel the coordinates fall in; `None` when it
+    /// can't be read. The first read of each texel also compares it with a bilinear read.
+    fn colour(&mut self, w: &World, palette: Entity, g: u8, row: Row) -> Result<Option<[f32; 3]>, String> {
         let Some((levels, transfer)) = self
-            .0
+            .levels
             .entry(palette)
             .or_insert_with(|| {
                 let t = w.get::<Texture>(palette)?;
@@ -129,11 +149,26 @@ impl Palettes {
         else {
             return Ok(None);
         };
-        let uv = [f64::from(g) / 255.0, f64::from(row) / 255.0];
-        let rgba = levels
+        let uv = [f64::from(g) / 255.0, f64::from(f32::from_bits(row))];
+        let point = levels
             .point(0, uv, [Address::Clamp; 2], *transfer)
             .map_err(|e| e.to_string())?;
-        Ok(Some([rgba[0] as f32, rgba[1] as f32, rgba[2] as f32]))
+        if self.seen.insert((palette, g, row)) {
+            // as stored again, to compare in the values the texture holds
+            let stored = |c: f64| match transfer {
+                Transfer::SrgbColour => f64::from(linear_to_srgb8(c)),
+                _ => (c.clamp(0.0, 1.0) * 255.0).round(),
+            };
+            for (k, address) in [Address::Clamp, Address::Wrap].into_iter().enumerate() {
+                let filtered = levels
+                    .bilinear(0, uv, [address; 2], *transfer)
+                    .map_err(|e| e.to_string())?;
+                if (0..3).any(|c| (stored(filtered[c]) - stored(point[c])).abs() > AGREE) {
+                    self.filtered_differs[k] += 1;
+                }
+            }
+        }
+        Ok(Some([point[0] as f32, point[1] as f32, point[2] as f32]))
     }
 }
 
@@ -142,7 +177,7 @@ struct Plan {
     /// Per primitive, its groups in draw order, each with its triangles' indices (`None`: the whole primitive).
     groups: Vec<Vec<(Group, Option<Vec<u32>>)>>,
     /// The tint a (material, palette, column, row) draws.
-    requests: BTreeSet<(Entity, Entity, u8, u8)>,
+    requests: BTreeSet<(Entity, Entity, u8, Row)>,
 }
 
 impl Plan {
@@ -338,10 +373,32 @@ impl Bake<'_> {
         for &p in placements {
             let variant = w.get::<Instance>(p).map_or(0, |i| i.variant);
             let tint = match w.get::<Placement>(p).map(|x| &x.origin) {
-                Some(PlacementOrigin::Rule { variation, .. }) => Some(variation[0]),
-                _ => {
+                // the shader's instance variation is the byte over 255
+                Some(PlacementOrigin::Rule { variation, .. }) => {
+                    Some((f32::from(variation[0]) / 255.0).to_bits())
+                }
+                // a hand-placed instance's transform holds the four floats a rule record holds as bytes (both hold
+                // all ones, all zeros, or a varied first with the rest ones, in about the same shares): the first is
+                // the row as it is
+                Some(PlacementOrigin::Hand { tint, .. }) => {
+                    if (0.0..=1.0).contains(&tint[0]) {
+                        log.approximate(
+                            "hand-placed swatch-tinted instances take the first of their transform's tint as the \
+                             instance variation (inferred): instances",
+                            1,
+                        );
+                        Some(tint[0].to_bits())
+                    } else {
+                        log.omit(
+                            "hand-placed instances of swatch-tinted prototypes whose tint is outside 0 to 1: untinted",
+                            1,
+                        );
+                        None
+                    }
+                }
+                None => {
                     log.omit(
-                        "hand-placed instances of swatch-tinted prototypes: untinted (their tint byte is not traced)",
+                        "instances of swatch-tinted prototypes with no placement record: untinted",
                         1,
                     );
                     None
@@ -399,7 +456,7 @@ impl Bake<'_> {
         let plan = Plan::of(mesh, &swatchy, &ids, resolved, self.swatch, log)?;
 
         // the tinted materials the plan asks for
-        let mut made: BTreeMap<(Entity, u8, u8), Entity> = BTreeMap::new();
+        let mut made: BTreeMap<(Entity, u8, Row), Entity> = BTreeMap::new();
         for &(m, palette, g, row) in &plan.requests {
             let Some(rgb) = self.palettes.colour(w, palette, g, row)? else {
                 log.omit("swatch tint palettes that can't be read: untinted", 1);
@@ -526,8 +583,7 @@ impl Pass for BakeForzaSwatchTint {
         &[SwatchTint::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "the swatch palette is read at one texel, not filtered; a hand-placed instance's tint byte is not traced: \
-         untinted"
+        "the swatch palette is read at one texel, not filtered; a hand-placed instance's tint byte is inferred from its transform's tint"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let swatch: BTreeMap<Entity, Entity> = w.iter::<SwatchTint>().map(|(e, s)| (e, s.palette)).collect();
@@ -549,6 +605,15 @@ impl Pass for BakeForzaSwatchTint {
             log.approximate(
                 "swatch palette read at one texel, not filtered: triangles",
                 bake.tinted_triangles,
+            );
+            log.count("palette texels read", bake.palettes.seen.len() as u64);
+            log.count(
+                "palette texels a clamped bilinear read would change by more than two stored values",
+                bake.palettes.filtered_differs[0],
+            );
+            log.count(
+                "palette texels a wrapped bilinear read would change by more than two stored values",
+                bake.palettes.filtered_differs[1],
             );
         }
         for e in swatch.keys() {
