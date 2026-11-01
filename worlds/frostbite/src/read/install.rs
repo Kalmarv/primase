@@ -1,4 +1,4 @@
-//! Where the pieces of a skate. install lie, as names a caller reads them by. Each is observed in the install the
+//! Where the pieces of a Frostbite install lie, as names a caller reads them by. Each is observed in the install the
 //! reader was written against; [`locate`] checks an install for them.
 #![allow(
     clippy::disallowed_methods,
@@ -38,13 +38,13 @@ pub struct Installed {
     pub oodle: PathBuf,
 }
 
-/// The data folder and the Oodle library of the install at `install`, or why it is not a skate. install: the folder
-/// has no [`LAYOUT_TOC`], or the game's own Oodle library is missing.
+/// The data folder and the Oodle library of the install at `install`, or why it is not an install of this layout: the
+/// folder has no [`LAYOUT_TOC`], or the game's own Oodle library is missing.
 pub fn locate(install: &Path) -> Result<Installed, String> {
     let data = install.join(DATA_FOLDER);
     if !data.join(LAYOUT_TOC).is_file() {
         return Err(format!(
-            "frostbite: {} has no {LAYOUT_TOC}: expected the skate. game folder",
+            "frostbite: {} has no {LAYOUT_TOC}: expected the game folder of a Frostbite install",
             data.display()
         ));
     }
@@ -65,7 +65,7 @@ mod tests {
     /// A folder that is not an install is refused, naming the layout TOC.
     #[test]
     fn a_folder_without_the_layout_toc_is_refused() {
-        let error = locate(&std::env::temp_dir().join("no-such-skate-install")).unwrap_err();
+        let error = locate(&std::env::temp_dir().join("no-such-install")).unwrap_err();
         assert!(error.contains(LAYOUT_TOC), "{error}");
     }
 }
