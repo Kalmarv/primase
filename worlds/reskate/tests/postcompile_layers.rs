@@ -86,14 +86,16 @@ fn layers_gate_on_the_fixture() -> R {
         "{}",
         area(Check::DepthWriting, "c0_wall")
     );
-    // column 1: cutouts at 0 mm and at 4 mm with their origin 40 m away fight; 4 mm with a near origin does not
+    // column 1: cutouts at 0 mm and at 4 mm with their origin 40 m away fight (one strip each, the same 1.2 x 10 m floor
+    // and 1.2 x 3.6 m wall strips as column 0: the cutout's shadow twin does not draw into the view, so it does not
+    // fight a second time); 4 mm with a near origin does not
     assert!(
-        near(area(Check::DepthWriting, "c1_floor"), 24.0),
+        near(area(Check::DepthWriting, "c1_floor"), 12.0),
         "{}",
         area(Check::DepthWriting, "c1_floor")
     );
     assert!(
-        near(area(Check::DepthWriting, "c1_wall"), 8.64),
+        near(area(Check::DepthWriting, "c1_wall"), 4.32),
         "{}",
         area(Check::DepthWriting, "c1_wall")
     );
