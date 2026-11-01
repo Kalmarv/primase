@@ -753,6 +753,9 @@ fn the_fromsoft_passes_register_by_name() {
     ];
     assert_eq!(format!("{reg:?}"), format!("{names:?}"));
     let free = [
+        "bind-fromsoft-environment-probes",
+        "lower-fromsoft-environment-probes",
+        "materialize-fromsoft-catalog",
         "lower-fromsoft-render-graph",
         "lower-elden-ring-reinhard",
         "derive-fromsoft-detail",
