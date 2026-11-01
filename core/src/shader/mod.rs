@@ -41,7 +41,7 @@ pub use shadow_atlas::{
     LocalShadowAtlas, ShadowDepth, ShadowDepthTerm, ShadowFace, ShadowFaceView, ShadowPlacement,
     ShadowedLight,
 };
-pub use shadow_choice::{ChosenShadows, LocalShadowChoice, ShadowView};
+pub use shadow_choice::{ChosenShadows, LocalShadowChoice, ShadowOrder, ShadowView};
 pub use surface::Surface;
 
 mod specialise;

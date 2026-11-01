@@ -9,7 +9,7 @@ use crate::{Entity, Light, Transform, World};
 
 /// The options of the choice: off (no light shadowed, every light lit unshadowed), or the lights of the shadowed table's
 /// kind whose `core.light` says they cast shadows and that have a range, whose range sphere meets the view's frustum
-/// and, where `max_distance` is set, comes within that many metres of the eye, nearest the eye first, up to the atlas's
+/// and, where `max_distance` is set, comes within that many metres of the eye, taken in `order` up to the atlas's
 /// capacity and, where it is set, `max_lights`. Each option changes what is drawn, so each is the consumer's to state:
 /// there is no default, and deserialising requires every field, `null` for no limit included.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -20,6 +20,17 @@ pub struct LocalShadowChoice {
     pub max_distance: Option<f32>,
     #[serde(deserialize_with = "Option::deserialize")]
     pub max_lights: Option<usize>,
+    pub order: ShadowOrder,
+}
+
+/// Which of the lights in view a choice takes first when there are more than it shadows. No game's order is
+/// established: a recorded frame shows the lights the game shadowed, not the ones it passed over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShadowOrder {
+    /// Nearest the eye first: by the distance from the eye to the light's range sphere (0 with the eye inside it), then
+    /// by the distance from the eye to its centre, then by entity.
+    NearestEye,
 }
 
 /// The view a choice is made for, in world space: its view-projection (rows: `clip = m * [p, 1]`, depth 0 to 1 in
@@ -30,7 +41,7 @@ pub struct ShadowView {
     pub eye: [f32; 3],
 }
 
-/// What a choice chose for a view: the lights, nearest the eye first, with their world centres, and how many it
+/// What a choice chose for a view: the lights, in the choice's order, with their world centres, and how many it
 /// considered.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ChosenShadows {
@@ -68,10 +79,13 @@ impl LocalShadowChoice {
             return "local shadows: off; every shadow-casting light is lit without one".into();
         }
         format!(
-            "local shadows: lights with cast_shadows and a range, their range sphere in the view's frustum{}, nearest the eye first, up to {}",
+            "local shadows: lights with cast_shadows and a range, their range sphere in the view's frustum{}, {}, up to {}",
             self.max_distance
                 .map(|d| format!(" and within {d} m of the eye"))
                 .unwrap_or_default(),
+            match self.order {
+                ShadowOrder::NearestEye => "nearest the eye first",
+            },
             match self.max_lights {
                 Some(n) if n < capacity => format!("{n} (the atlas holds {capacity})"),
                 _ => format!("the atlas's capacity, {capacity}"),
@@ -79,8 +93,7 @@ impl LocalShadowChoice {
         )
     }
 
-    /// The lights of `kind` in `world` this choice shadows for `view`, at most `capacity`: nearest the eye first (by
-    /// the distance from the eye to the range sphere, then to the centre, then by entity).
+    /// The lights of `kind` in `world` this choice shadows for `view`, at most `capacity`, in the choice's `order`.
     pub fn choose(
         &self,
         world: &World,
@@ -104,7 +117,11 @@ impl LocalShadowChoice {
             chosen.in_view += 1;
             found.push((gap, to_centre, light, centre, range));
         }
-        found.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
+        match self.order {
+            ShadowOrder::NearestEye => {
+                found.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
+            }
+        }
         let limit = self.max_lights.map_or(capacity, |n| n.min(capacity));
         chosen.lights = found
             .into_iter()
@@ -151,26 +168,31 @@ mod tests {
     use super::*;
     use crate::LightKind;
 
-    /// Shadows on, with no distance or count limit.
+    /// Shadows on, with no distance or count limit, nearest the eye first.
     const ALL: LocalShadowChoice = LocalShadowChoice {
         enabled: true,
         max_distance: None,
         max_lights: None,
+        order: ShadowOrder::NearestEye,
     };
 
     /// Every option is stated: a choice that leaves one out, `null` limits included, does not deserialise.
     #[test]
     fn every_option_is_required() -> Result<(), serde_json::Error> {
-        let all: LocalShadowChoice =
-            serde_json::from_str(r#"{"enabled":true,"max_distance":null,"max_lights":null}"#)?;
+        let all: LocalShadowChoice = serde_json::from_str(
+            r#"{"enabled":true,"max_distance":null,"max_lights":null,"order":"nearest_eye"}"#,
+        )?;
         assert_eq!(all, ALL);
-        let limited: LocalShadowChoice =
-            serde_json::from_str(r#"{"enabled":true,"max_distance":20.0,"max_lights":4}"#)?;
+        let limited: LocalShadowChoice = serde_json::from_str(
+            r#"{"enabled":true,"max_distance":20.0,"max_lights":4,"order":"nearest_eye"}"#,
+        )?;
         assert_eq!((limited.max_distance, limited.max_lights), (Some(20.0), Some(4)));
         for partial in [
-            r#"{"max_distance":null,"max_lights":null}"#,
-            r#"{"enabled":true,"max_lights":null}"#,
-            r#"{"enabled":true,"max_distance":null}"#,
+            r#"{"max_distance":null,"max_lights":null,"order":"nearest_eye"}"#,
+            r#"{"enabled":true,"max_lights":null,"order":"nearest_eye"}"#,
+            r#"{"enabled":true,"max_distance":null,"order":"nearest_eye"}"#,
+            r#"{"enabled":true,"max_distance":null,"max_lights":null}"#,
+            r#"{"enabled":true,"max_distance":null,"max_lights":null,"order":"brightest"}"#,
             r#"{}"#,
         ] {
             assert!(
