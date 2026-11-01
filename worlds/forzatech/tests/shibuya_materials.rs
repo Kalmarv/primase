@@ -17,7 +17,9 @@ use primase_core::Component;
 use primase_core::convert::Reader;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial};
-use primase_core::{ColorSpace, DrawLayer, DrawOrder, Entity, Instance, Mesh, TexFormat, TexRole, Texture};
+use primase_core::{
+    ColorSpace, DrawLayer, DrawOrder, Entity, Instance, LayeredMaterial, Mesh, TexFormat, TexRole, Texture,
+};
 use primase_forzatech::components::{ForzaMaterial, MaterialTextures, Value};
 use primase_forzatech::passes::LowerForzaMaterials;
 use primase_forzatech::read::convert::ForzaReader;
@@ -69,7 +71,8 @@ fn shibuya_materials() {
             .as_ref()
             .map_or("no shader family", |s| s.family.as_str());
         let t = triangles.get(&e).copied().unwrap_or(0);
-        let map = if part.has::<PbrMaterial>(e) {
+        // a road blended of layers is drawn as its blend alone: a layered material, with no plain one beside it
+        let map = if part.has::<PbrMaterial>(e) || part.has::<LayeredMaterial>(e) {
             &mut lowered
         } else {
             &mut unlowered
