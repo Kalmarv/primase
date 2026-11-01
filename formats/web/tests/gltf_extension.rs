@@ -353,7 +353,11 @@ fn detail_world() -> (World, Vec<primase_core::Entity>) {
                 height: 2,
                 format: TexFormat::Rgba8Unorm,
                 levels: vec![(0..16).collect()],
-                color_space: if colour { ColorSpace::Srgb } else { ColorSpace::Linear },
+                color_space: if colour {
+                    ColorSpace::Srgb
+                } else {
+                    ColorSpace::Linear
+                },
                 role: if colour { TexRole::Color } else { TexRole::Mask },
                 normal: None,
             },
@@ -431,7 +435,10 @@ fn a_detail_blend_is_written_beside_its_pbr_material() {
     assert_eq!(doc["extensionsUsed"], json!(["PRIMASE_materials_detail_blend"]));
     let x = &doc["materials"][0]["extensions"]["PRIMASE_materials_detail_blend"];
     assert_eq!(x["revision"], primase_core::detail::REVISION);
-    assert_eq!((&x["equation"], &x["lowering"]), (&json!("detail_lerp"), &json!("gloss_reflectance")));
+    assert_eq!(
+        (&x["equation"], &x["lowering"]),
+        (&json!("detail_lerp"), &json!("gloss_reflectance"))
+    );
     assert_eq!(x["baseColorTexture"]["colorSpace"], "srgb");
     assert_eq!(x["baseNormalTexture"]["colorSpace"], "linear");
     assert_eq!(x["details"].as_array().unwrap().len(), 1);

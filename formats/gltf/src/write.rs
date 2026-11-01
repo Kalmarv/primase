@@ -523,7 +523,9 @@ pub(crate) const EXPRESSED_PROTOTYPE: &[&str] = &[
     Skin::NAME,
     Morphs::NAME,
 ];
-pub(crate) const EXPRESSED_MATERIAL: &[&str] = &[Name::NAME, PbrMaterial::NAME];
+// a material's `core.vertex_color` is expressed by its primitives' COLOR_0: written where it takes it, not where not
+pub(crate) const EXPRESSED_MATERIAL: &[&str] =
+    &[Name::NAME, PbrMaterial::NAME, primase_core::VertexColor::NAME];
 pub(crate) const EXPRESSED_TEXTURE: &[&str] = &[Name::NAME, TextureFile::NAME, Texture::NAME];
 
 /// Write the world as GLB bytes.

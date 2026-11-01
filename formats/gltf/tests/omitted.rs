@@ -153,7 +153,9 @@ fn a_lods_without_other_forms_has_nothing_to_choose() {
     let (doc, report) = written(&w, None);
     assert_eq!(node_names(&doc), ["only"]);
     assert_eq!(report.placements_with_lods, 0);
-    assert!(doc["meshes"][0]["extras"]["primase"][Lods::NAME].is_object());
+    // the forms the levels of detail state have no glTF form: counted, not written
+    assert!(doc["meshes"][0].get("extras").is_none());
+    assert_eq!(report.components_without_form.get(Lods::NAME), Some(&1));
 }
 
 fn marker(w: &mut World) -> Entity {

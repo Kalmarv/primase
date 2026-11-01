@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
-    Instance, MaterialVariants, Mesh, Name, Primitive, Semantic, Stream, Topology, Transform, VertexColor,
-    World,
+    Component, Instance, MaterialVariants, Mesh, Name, Primitive, Semantic, Stream, Topology, Transform,
+    VertexColor, World,
 };
 use primase_gltf::{WriteOptions, write};
 use serde_json::Value;
@@ -86,10 +86,9 @@ fn an_ignoring_material_is_drawn_without_color0() {
     assert_eq!(report.primitives_color0_ignored, 1);
     // nothing draws it: no accessor written (only POSITION's)
     assert_eq!(doc["accessors"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        doc["materials"][0]["extras"]["primase"]["core.vertex_color"]["value"],
-        "ignored"
-    );
+    // what the material states of vertex colour is the missing COLOR_0, nothing more
+    assert!(doc["materials"][0].get("extras").is_none());
+    assert!(!report.components_without_form.contains_key(VertexColor::NAME));
 }
 
 #[test]

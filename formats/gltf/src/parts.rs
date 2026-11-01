@@ -13,8 +13,8 @@ use primase_core::pass::Target;
 use primase_core::state::{Condition, PrimitiveCondition, StateAxis, StateOverride};
 use primase_core::{
     Asset, Attachment, Clip, ClipBinding, Component, Entity, Instance, Light, Lods, MaterialVariants, Mesh,
-    MeshFile, MorphWeights, Morphs, Name, RigInstance, RigPose, Skeleton, Skin, SkinInstance, Sockets, Source,
-    Texture, TextureFile, Tile, Transform, TransformKind, World, pbr::PbrMaterial,
+    MeshFile, MorphWeights, Morphs, Name, RigInstance, RigPose, Skeleton, Skin, SkinInstance, Sockets,
+    Source, Texture, TextureFile, Tile, Transform, TransformKind, World, pbr::PbrMaterial,
 };
 
 use crate::{WriteOptions, WriteReport, write_file};

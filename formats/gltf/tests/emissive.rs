@@ -66,7 +66,7 @@ fn emissive_strength_is_written_as_khr_materials_emissive_strength() {
 }
 
 #[test]
-fn a_data_texture_is_sampled_nearest_and_its_image_marked_data() {
+fn a_data_texture_is_sampled_nearest_and_its_image_states_nothing_else() {
     use primase_core::pbr::TextureRef;
     use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
     let mut w = world(1.0);
@@ -96,8 +96,10 @@ fn a_data_texture_is_sampled_nearest_and_its_image_marked_data() {
         (sampler["magFilter"].as_u64(), sampler["minFilter"].as_u64()),
         (Some(9728), Some(9728))
     );
-    assert_eq!(
-        doc["images"][t["source"].as_u64().unwrap() as usize]["extras"]["primase.role"],
-        "data"
+    // glTF has no texture role: the image is a standard one, with no extras (the web format marks its role)
+    assert!(
+        doc["images"][t["source"].as_u64().unwrap() as usize]
+            .get("extras")
+            .is_none()
     );
 }
