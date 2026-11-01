@@ -9,11 +9,12 @@ use primase_core::{Deltas, MorphFrame, MorphId, MorphTarget, Morphs, Primitive, 
 use primase_meshops::compact_primitive;
 use unity_formats::Error;
 use unity_formats::Result;
-use unity_formats::mesh::{CHANNELS, MeshShapes, MeshSkin, ShapeVertex, UnityMeshData};
+use unity_formats::mesh::{CHANNELS, MeshShapes, ShapeVertex, UnityMeshData};
 use unity_formats::player::SkinWeights;
 
 use crate::components::UNITY;
 use crate::invalid;
+use crate::skin::skin_streams;
 
 /// `core.morphs` for primitives made of this mesh's vertices: target `c` is channel `c` (`MorphId(c)`), its frames at
 /// Unity's weights (0 to 100 for a full shape), and per primitive the sparse deltas of the vertices it kept, in its
@@ -252,55 +253,6 @@ pub fn skinned_primitives(
     }
     let (out, _, notices) = primitives_with(mesh, range, Some(limit))?;
     Ok((out, notices))
-}
-
-/// What a skin draws under a limit, over all the mesh's vertices ([`skin_streams`]).
-#[derive(Debug)]
-pub struct SkinStreams {
-    /// `Joints(k)` (the bone slots, 16 bits) and `Weights(k)` (floats) for each set of four influences.
-    pub streams: Vec<(Semantic, Stream)>,
-    /// How many sets of four influences a vertex has: `streams` holds that many of each.
-    pub sets: usize,
-    /// Vertices with more influences than the limit allows, which keep their first ones renormalised.
-    pub cut: u64,
-    /// Zero-weight influences naming a bone beyond the bind poses, whose bone slot is set to 0.
-    pub beyond: u64,
-}
-
-/// The skin's streams as `limit` draws them ([`MeshSkin::padded`]): a vertex with more influences than `limit`
-/// allows keeps its first ones renormalised, and the bone slot of a zero-weight influence beyond the bind poses is
-/// set to 0.
-pub fn skin_streams(skin: &MeshSkin, limit: SkinWeights) -> SkinStreams {
-    let poses = skin.bind_poses.len() as u32;
-    let sets = skin.sets(limit);
-    let (weights, bones, cut) = skin.padded(limit);
-    let mut beyond = 0u64;
-    let mut streams = Vec::with_capacity(sets * 2);
-    for (k, (weights, bones)) in weights.into_iter().zip(bones).enumerate() {
-        let joints = bones
-            .iter()
-            .zip(&weights)
-            .map(|(b, w)| {
-                std::array::from_fn(|i| {
-                    if b[i] >= poses {
-                        debug_assert_eq!(w[i], 0.0, "checked when read");
-                        beyond += 1;
-                        0
-                    } else {
-                        b[i] as u16
-                    }
-                })
-            })
-            .collect();
-        streams.push((Semantic::Joints(k as u8), Stream::U16x4(joints)));
-        streams.push((Semantic::Weights(k as u8), Stream::F32x4(weights)));
-    }
-    SkinStreams {
-        streams,
-        sets,
-        cut,
-        beyond,
-    }
 }
 
 /// The first `N` components of every vertex of `mesh`'s channel `ch`, which is present with at least `N` components

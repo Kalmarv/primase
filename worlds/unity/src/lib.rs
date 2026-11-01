@@ -9,6 +9,7 @@
 //! - [`asset`]: one mesh, texture or material read into a world as a preview.
 //! - [`mesh`]: meshes (vertex streams, compressed meshes, index buffers, submeshes).
 //! - [`texture`]: textures (formats, mip chains, rows flipped top first, normal map conventions).
+//! - [`skin`]: what a skin draws under a quality level's limit (the rules the reader and `limit-unity-skin-weights` share).
 //! - [`program`]: a shader's compiled programs (variants, constant-buffer layouts, bind slots, code).
 //!
 //! [`colour`]: what a player's programs read of a stored colour (Unity's gamma-to-linear conversion, an `[HDR]`
@@ -41,6 +42,7 @@ mod fixture;
 pub mod humanoid;
 pub mod passes;
 mod read;
+pub mod skin;
 pub mod state_pose;
 
 pub use passes::{

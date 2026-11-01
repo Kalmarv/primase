@@ -4,13 +4,13 @@
 //! unlimited), and the current level is a runtime setting, not data. The reader keeps every influence a skinned mesh
 //! stores in the prototype's `Joints(k)` and `Weights(k)` streams, with the mesh's skin, the player's levels and each
 //! primitive's mesh vertices as `unity.skin_influences` ([`UnitySkinInfluences`]). This pass replaces the streams with
-//! what the level draws ([`crate::mesh::skin_streams`]: a mesh that stores its full influences draws them only at
+//! what the level draws ([`crate::skin::skin_streams`]: a mesh that stores its full influences draws them only at
 //! unlimited skin weights, otherwise its blend channel; a vertex with more influences than the limit keeps its first
 //! ones renormalised), sets `core.skin`'s sets and weight rule to match, and removes `unity.skin_influences`.
 //!
 //! `quality` names a level of the player. It is optional, with a stated meaning for absence: a mesh whose skin every
 //! level draws alike is limited by what they agree on, and a mesh the levels draw differently is refused naming the
-//! levels ([`crate::level::skin_limit`]), so the program states the level exactly where the player's levels differ.
+//! levels ([`crate::skin::skin_limit`]), so the program states the level exactly where the player's levels differ.
 //! The pass chooses nothing: a level the player does not list, or one listed twice, is refused.
 
 use std::collections::BTreeMap;
@@ -19,8 +19,7 @@ use primase_core::pass::{OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, Influences, Mesh, Semantic, Skin, Stream, WeightRule, World};
 
 use crate::components::UnitySkinInfluences;
-use crate::level::{skin_limit, weights_sum_to_one};
-use crate::mesh::skin_streams;
+use crate::skin::{skin_limit, skin_streams, weights_sum_to_one};
 
 /// `limit-unity-skin-weights`' declaration ([`primase_core::pass::PassRegistry::add`]).
 pub const LIMIT_UNITY_SKIN_WEIGHTS: PassSpec = PassSpec {
