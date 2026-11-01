@@ -84,7 +84,7 @@ fn shibuya_materials() {
     println!("approximations: {:#?}", log.approximations);
     println!("omitted: {:#?}", log.omitted);
 
-    // the families with a rule are lowered whole, bar the foliage billboard and impostor
+    // every family with a rule is lowered whole, bar the foliage impostor
     let summary = |m: &BTreeMap<String, (u64, u64)>| -> Vec<(String, u64, u64)> {
         m.iter().map(|(f, (n, t))| (f.clone(), *n, *t)).collect()
     };
@@ -92,15 +92,20 @@ fn shibuya_materials() {
         assert_eq!(
             summary(&lowered),
             [
+                ("emissiveonly".to_owned(), 2, 64),
                 ("environment".to_owned(), 758, 55_464),
+                ("environment_signage".to_owned(), 88, 520),
                 ("environmentdeferreddecal".to_owned(), 70, 1_549),
+                ("glass".to_owned(), 8, 188),
                 ("projection_lod".to_owned(), 59, 10_002),
+                ("pylon_cables".to_owned(), 2, 532),
                 ("uber_branch".to_owned(), 6, 8_213),
-                ("uber_foliage".to_owned(), 16, 13_670),
+                ("uber_foliage".to_owned(), 17, 13_672),
                 ("uber_roaddecal".to_owned(), 2, 146),
+                ("window_linecastroom".to_owned(), 51, 78),
             ]
         );
-        assert_eq!(unlowered["uber_foliage"], (2, 4));
+        assert_eq!(unlowered["uber_foliage"], (1, 2));
     }
     for (family, (n, _)) in &lowered {
         assert_eq!(log.counts[&format!("{family} materials lowered")], *n);

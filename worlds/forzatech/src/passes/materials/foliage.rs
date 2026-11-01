@@ -15,9 +15,12 @@
 //! The rule: `DiffuseTexture` the base colour, its alpha masked at the middle reference; `NormalTexture.a * scale`
 //! re-encoded as the roughness of a metallic-roughness map (no metal), which glTF reads at `TEXCOORD0` as the shader
 //! does; the bush's `NormalTexture` the normal map; `RTAOTexture.b` re-encoded as the occlusion map (its scene
-//! strength and power are left out, named); `DoubleSided` the material's. The billboard and impostor permutations
-//! (atlases of views) are left unlowered; tint, world tint, wind animation, vertex occlusion and wetness are left out,
-//! named. A BC5 `NormalTexture` has no alpha: rough.
+//! strength and power are left out, named); `DoubleSided` the material's. The billboard permutations (a flat card:
+//! `DiffuseTexture` and `RTAOTexture` at `TEXCOORD0`, the same alpha step, no roughness and no normal written) take the
+//! same base colour, occlusion and mask, rough and double-sided; the impostor permutations are left unlowered: their
+//! `DiffuseTexture`, `NormalTexture`, `RTAOTexture` and `MaskTexture` are read at the coordinates of one view of an
+//! atlas of hemi-octahedral views, chosen from the view direction, which no static material holds. Tint, world tint,
+//! wind animation, vertex occlusion and wetness are left out, named. A BC5 `NormalTexture` has no alpha: rough.
 use super::{ALPHA_REFERENCE, Binding, Derived, Lowering, Params, alpha_tested, approximate, left_out};
 use crate::components::{ForzaMaterial, MaterialTextures};
 use primase_core::pass::PassLog;
@@ -25,8 +28,8 @@ use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef};
 use primase_core::{ColorSpace, Entity, TexFormat, TexRole, Texture, World};
 
 impl Lowering {
-    /// The `uber_foliage` family's material: `None` for the billboard and impostor permutations, whose textures are
-    /// atlases of views, not the leaf and bark maps.
+    /// The `uber_foliage` family's material: `None` for the impostor permutations, whose textures are atlases of
+    /// views of a tree read by the view direction, not the leaf and bark maps.
     pub(super) fn uber_foliage(
         &mut self,
         w: &mut World,
@@ -37,9 +40,10 @@ impl Lowering {
         let bound = w.get::<MaterialTextures>(e).cloned();
         let p = Params::new(m, bound.as_ref());
         let triangles = self.triangles.get(&e).copied().unwrap_or(0);
-        if p.on("Billboard") || p.on("Impostor") {
+        if p.on("Impostor") {
             return Ok(None);
         }
+        let billboard = p.on("Billboard");
         let mut pbr = PbrMaterial::default();
 
         match p.texture("DiffuseTexture") {
@@ -61,6 +65,13 @@ impl Lowering {
         pbr.roughness = 1.0;
         let scale = p.float("RoughnessScale").unwrap_or(1.0).max(0.0);
         match p.texture("NormalTexture") {
+            // the billboard permutations write no roughness and no normal
+            _ if billboard => approximate(
+                log,
+                e,
+                "billboard writes no roughness or normal: rough, the vertex normal",
+                triangles,
+            ),
             Binding::Texture(t) => {
                 let alpha = w
                     .get::<Texture>(t)
@@ -115,7 +126,8 @@ impl Lowering {
                 triangles,
             );
         }
-        pbr.double_sided = p.on("DoubleSided");
+        // a billboard is a flat card seen from either side
+        pbr.double_sided = p.on("DoubleSided") || billboard;
 
         for (switch, what) in [
             ("Tint", "tint (colour lookup) left out"),

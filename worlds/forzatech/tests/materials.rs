@@ -239,11 +239,14 @@ fn absent_textures_are_counted_not_guessed() {
 fn a_family_without_a_rule_is_left_and_counted() {
     let mut world = World::new();
     let e = world.spawn();
-    world.insert(e, material("glass", "Standard", Vec::new()));
+    world.insert(e, material("terr_cube", "Standard", Vec::new()));
     let mut log = PassLog::default();
     LowerForzaMaterials.run(&mut world, &mut log).unwrap();
     assert!(!world.has::<PbrMaterial>(e));
-    assert_eq!(log.omitted["materials of shader family glass left unlowered"], 1);
+    assert_eq!(
+        log.omitted["materials of shader family terr_cube left unlowered"],
+        1
+    );
 }
 
 fn foliage(extra: Vec<Parameter>, atst: u8) -> ForzaMaterial {
@@ -325,7 +328,7 @@ fn foliage_bush_roughness_normal_occlusion_and_alpha_step() {
 }
 
 #[test]
-fn foliage_tree_has_no_normal_and_a_billboard_is_left() {
+fn foliage_tree_has_no_normal_and_an_impostor_is_left() {
     let mut world = World::new();
     let normal = texture(&mut world, "normal", ColorSpace::Linear, [128, 128, 255, 255]);
     let tree = world.spawn();
@@ -335,6 +338,11 @@ fn foliage_tree_has_no_normal_and_a_billboard_is_left() {
     world.insert(
         billboard,
         foliage(vec![parameter("Billboard", 32, Value::Int(1))], 1),
+    );
+    let impostor = world.spawn();
+    world.insert(
+        impostor,
+        foliage(vec![parameter("Impostor", 33, Value::Int(1))], 1),
     );
     let mut log = PassLog::default();
     LowerForzaMaterials.run(&mut world, &mut log).unwrap();
@@ -346,9 +354,19 @@ fn foliage_tree_has_no_normal_and_a_billboard_is_left() {
     assert_eq!(pbr.alpha_mode, AlphaMode::Opaque);
     assert_eq!(world.get::<Texture>(normal).unwrap().role, TexRole::Other);
     assert_eq!(log.approximations["canopy normal left out"], 1);
-    assert_eq!(log.approximations["no occlusion map"], 1);
+    // the tree and the billboard card bind no occlusion map
+    assert_eq!(log.approximations["no occlusion map"], 2);
 
-    assert!(!world.has::<PbrMaterial>(billboard));
+    // a billboard is a flat card: lowered rough, with the vertex normal, and double-sided
+    let card = world.get::<PbrMaterial>(billboard).unwrap();
+    assert!(card.double_sided);
+    assert!(card.normal_texture.is_none());
+    assert_eq!(
+        log.approximations["billboard writes no roughness or normal: rough, the vertex normal"],
+        1
+    );
+    // an impostor is an atlas of views chosen by the view direction: no static material
+    assert!(!world.has::<PbrMaterial>(impostor));
     assert_eq!(
         log.omitted["materials of shader family uber_foliage billboard or impostor left unlowered"],
         1

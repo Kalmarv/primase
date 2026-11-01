@@ -21,9 +21,11 @@
 //!
 //! `tests/shibuya_materials.rs` runs the pass on every 20th prototype of the box (x -1550..-1100, z -5000..-4566.67,
 //! summer: 77 prototypes, 90,430 shaded triangles). Lowered (materials, triangles): `environment` 758, 55,464 (61.3%);
-//! `projection_lod` 59, 10,002; `uber_foliage` 16, 13,670; `uber_branch` 6, 8,213; `environmentdeferreddecal` 70, 1,549;
-//! `uber_roaddecal` 2, 146: 89,044 of the box's 90,430 triangles (98.5%). Each lowered material passes
-//! `pbr.material`'s own verification, and the decal families alone have a draw order (the decal layer, no depth write).
+//! `projection_lod` 59, 10,002; `uber_foliage` 17, 13,672; `uber_branch` 6, 8,213; `environmentdeferreddecal` 70, 1,549;
+//! `uber_roaddecal` 2, 146; `pylon_cables` 2, 532; `environment_signage` 88, 520; `glass` 8, 188;
+//! `window_linecastroom` 51, 78; `emissiveonly` 2, 64: 90,428 of the box's 90,430 triangles (99.998%; the two left are
+//! a foliage impostor). Each lowered material passes `pbr.material`'s own verification, and the decal families alone
+//! have a draw order (the decal layer, no depth write).
 //!
 //! The `environment` rule packs 85 distinct RoughMetAoPor maps and makes normal maps of 83 distinct textures (7 more,
 //! 838 triangles, are BC5 SNORM, which the shader's `2 r - 1` does not read: left out, counted). The packed maps'
@@ -51,9 +53,11 @@
 //! roughness reading 1,438, 38,263 (the decal buffer's resolve is in no file) and relaxed cone-step mapping 100
 //! triangles.
 //!
-//! Left unlowered, with no rule yet (materials, triangles): `pylon_cables` 2, 532; `environment_signage` 88, 520;
-//! `glass` 8, 188; `window_linecastroom` 51, 78; `emissiveonly` 2, 64; and the `uber_foliage` billboard and impostor,
-//! 2, 4. The normal maps are made in `NormalZ::Rebuild`: `normalize-normals` converts them to glTF's before a writer.
+//! The surface families (`environment_signage`, `glass`, `window_linecastroom`, `pylon_cables`, `emissiveonly`, and in
+//! the whole box `anim_flag`, `anim_ledflipbookpanel` and `diff1`) each document their evidence and what they leave out in
+//! their own module. Left unlowered, with no rule yet: the `uber_foliage` impostor, 1 material and 2 triangles (a
+//! view-selected atlas of directions has no static material form). The normal maps are made in `NormalZ::Rebuild`:
+//! `normalize-normals` converts them to glTF's before a writer.
 //!
 //! The ground families are in the whole box (`tests/shibuya_ground.rs`, every prototype) and all are lowered (materials,
 //! triangles): `environment_plot` 286, 91,811; `terr_mega` 12, 14,462; `terr_distant` 13, 10,481;
@@ -75,25 +79,33 @@
 //! 2 primitives with no vertex colour; and one material with no base colour texture, tinted as its colour factor.
 //! `specialize-material-variants` then makes 2,060 more prototype copies than without the tint, 383,854 triangles more:
 //! the placed prototypes go from 2,685 to 4,745 and their triangles from 1,419,192 to 1,803,046.
+mod anim_flag;
+mod anim_ledflipbookpanel;
 mod branch;
+mod diff1;
+mod emissiveonly;
 mod environment;
 mod environment_plot;
+mod environment_signage;
 mod environmentdeferreddecal;
 mod foliage;
+mod glass;
 mod projection_lod;
+mod pylon_cables;
 mod terrain;
 mod uber_road;
 mod uber_roaddecal;
+mod window_linecastroom;
 
 use crate::components::{ForzaMaterial, MaterialTextures, PlanarUv, SwatchTint, Value};
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
     ColorSpace, Component, DrawOrder, Entity, LayeredMaterial, Mesh, Name, NormalBasis, NormalConvention,
-    NormalGreen, NormalX, NormalZ, TexFormat, TexRole, Texture, World,
+    NormalGreen, NormalX, NormalZ, Semantic, TexFormat, TexRole, Texture, World,
 };
 use primase_foundations::color::srgb_to_linear;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// What a texture parameter of a material names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -207,6 +219,21 @@ struct Lowering {
     derived: BTreeMap<(Entity, Derived), Entity>,
     /// The road decals' maps made of two textures, made once per pair and recipe.
     decal_maps: BTreeMap<uber_roaddecal::DecalMap, Entity>,
+    /// Textures baked from a source and the constants of one material (a key of the baking rule's own), made once.
+    baked: BTreeMap<(Entity, Vec<u32>, Option<Entity>), Entity>,
+    /// The texture coordinate sets (bit n: `TexCoord(n)`) every primitive drawn with a material carries; a material no
+    /// primitive draws is not listed.
+    coord_sets: BTreeMap<Entity, u8>,
+    /// The glass opacity maps in which the reflection floor raised a texel above the transmission.
+    reflected: BTreeSet<Entity>,
+}
+
+impl Lowering {
+    /// Whether every primitive drawn with material `e` carries `TexCoord(set)` (true of a material nothing draws: no
+    /// primitive lacks it).
+    fn has_set(&self, e: Entity, set: u8) -> bool {
+        self.coord_sets.get(&e).is_none_or(|bits| bits >> set & 1 == 1)
+    }
 }
 
 /// A glTF-layout map made from one channel set of a source texture.
@@ -234,6 +261,9 @@ enum Derived {
     WorldNormalXz,
     /// Occlusion in blue and roughness in red: R occlusion, G roughness.
     OcclusionRoughnessRed,
+    /// Roughness in R alone and a metalness that is a constant of the material: G roughness, B 1 (the constant is the
+    /// metallic factor), R 1.
+    RedRoughnessMetal,
 }
 
 /// The value a shader reads from a texel channel `x` of a texture in `space`: decoded to linear when it is sRGB (the
@@ -303,6 +333,7 @@ impl Lowering {
             Derived::SquaredAlphaOcclusion => ("occlusion-in-alpha, squared,", "occlusion"),
             Derived::WorldNormalXz => ("world-space normal", "normal"),
             Derived::OcclusionRoughnessRed => ("occlusion-in-blue roughness-in-red", "occlusion roughness"),
+            Derived::RedRoughnessMetal => ("roughness-in-red", "roughness metallic"),
         };
         let Some(t) = w.get::<Texture>(source) else {
             log.count(&format!("{what} textures left out: no pixels"), 1);
@@ -363,6 +394,7 @@ impl Lowering {
                         let y = (1.0 - x * x - z * z).max(0.0).sqrt();
                         [byte(x * 0.5 + 0.5), byte(0.5 - z * 0.5), byte(y * 0.5 + 0.5), 255]
                     }
+                    Derived::RedRoughnessMetal => [255, byte(seen(space, r)), 255, 255],
                     Derived::RoughnessMetalRg => {
                         let read = |x: u8| {
                             if signed {
@@ -479,6 +511,17 @@ impl Pass for LowerForzaMaterials {
                 }
             }
         }
+        let mut coord_sets: BTreeMap<Entity, u8> = BTreeMap::new();
+        for (_, mesh) in world.iter::<Mesh>() {
+            for primitive in mesh.primitives() {
+                if let Some(m) = primitive.material {
+                    let present = (0..8u8)
+                        .filter(|n| primitive.streams.contains_key(&Semantic::TexCoord(*n)))
+                        .fold(0u8, |bits, n| bits | 1 << n);
+                    *coord_sets.entry(m).or_insert(u8::MAX) &= present;
+                }
+            }
+        }
         let materials: Vec<(Entity, ForzaMaterial)> = world
             .iter::<ForzaMaterial>()
             .map(|(e, m)| (e, m.clone()))
@@ -487,6 +530,9 @@ impl Pass for LowerForzaMaterials {
             triangles,
             derived: BTreeMap::new(),
             decal_maps: BTreeMap::new(),
+            baked: BTreeMap::new(),
+            coord_sets,
+            reflected: BTreeSet::new(),
         };
         let mut left: BTreeMap<String, (u64, u64)> = BTreeMap::new();
         for (e, m) in &materials {
@@ -496,6 +542,14 @@ impl Pass for LowerForzaMaterials {
                 Some("uber_road") => Some(lowering.uber_road(world, *e, m, log)?),
                 Some("terr_mega" | "terr_distant") => Some(lowering.terrain(world, *e, m, log)?),
                 Some("environment_plot") => Some(lowering.environment_plot(world, *e, m, log)?),
+                Some("anim_flag") => Some(lowering.anim_flag(world, *e, m, log)?),
+                Some("anim_ledflipbookpanel") => Some(lowering.anim_ledflipbookpanel(world, *e, m, log)?),
+                Some("diff1") => Some(lowering.diff1(world, *e, m, log)?),
+                Some("emissiveonly") => Some(lowering.emissiveonly(world, *e, m, log)?),
+                Some("glass") => Some(lowering.glass(world, *e, m, log)?),
+                Some("window_linecastroom") => Some(lowering.window_linecastroom(world, *e, m, log)?),
+                Some("pylon_cables") => Some(lowering.pylon_cables(world, *e, m, log)?),
+                Some("environment_signage") => Some(lowering.environment_signage(world, *e, m, log)?),
                 Some("uber_foliage") => lowering.uber_foliage(world, *e, m, log)?,
                 Some("uber_branch") => lowering.uber_branch(world, *e, m, log)?,
                 Some("projection_lod") => lowering.projection_lod(world, *e, m, log)?,
