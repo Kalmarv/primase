@@ -1,6 +1,6 @@
 //! The glTF reader. A character written by the writer reads back to the same motion: posed by the clip at several
-//! times, every vertex where the original's is (the writer's node tree read as a skeleton with the rig's root above
-//! it). Against the Khronos glTF-Sample-Assets (`oracles.khronos.general/sample-assets`, third-party files with
+//! times, every vertex where the original's is (the writer's node tree read as a skeleton, its rig node as the rig),
+//! joints no skin weights included. Against the Khronos glTF-Sample-Assets (`oracles.khronos.general/sample-assets`, third-party files with
 //! pygltflib's reading of each in `expected.json`): every model reads and verifies; skins' joints and inverse bind
 //! matrices are the document's; each channel on a joint is a clip channel, each `weights` channel one per morph target,
 //! the rest counted; mesh default weights are the morph targets' defaults.
@@ -255,8 +255,8 @@ fn a_written_character_reads_back_to_the_same_motion() {
         ),
         (1, 1, 1, 1, 3)
     );
-    // the writer's rig root node is a joint above the chain: three joints
-    assert_eq!(report.joints, 3);
+    // the writer's rig node is read back as the rig: the chain's two joints
+    assert_eq!((report.joints, report.rig_nodes), (2, 1));
     let copy = || {
         let all = original.entities().collect();
         original.subset(&all)
@@ -267,6 +267,79 @@ fn a_written_character_reads_back_to_the_same_motion() {
             posed(read.subset(&read.entities().collect()), t),
         );
         assert_eq!(want.len(), got.len());
+        for (a, b) in want.iter().flatten().zip(got.iter().flatten()) {
+            for k in 0..3 {
+                assert!((a[k] - b[k]).abs() <= 1e-5, "t={t}: {a:?} vs {b:?}");
+            }
+        }
+    }
+}
+
+/// Each joint of the world's one skeleton by name: its parent's name and its rest's matrix (a written identity
+/// `Affine` reads back as the identity `Trs`).
+fn joints_by_name(w: &World) -> BTreeMap<String, (Option<String>, Transform)> {
+    let [(_, sk)] = w.iter::<Skeleton>().collect::<Vec<_>>()[..] else {
+        panic!("one skeleton");
+    };
+    let name = |id: JointId| sk.joints.iter().find(|j| j.id == id).unwrap().name.clone();
+    sk.joints
+        .iter()
+        .map(|j| (j.name.clone(), (j.parent.map(name), j.rest.matrix())))
+        .collect()
+}
+
+/// The character with joints no skin weights: a dummy below the knee, and a dummy below the hip with a joint of its
+/// own below it, its rig named. Every joint reads back (each with its parent and rest), the rig node as the rig (its
+/// name and transform), every node as something, and the motion is the original's.
+#[test]
+fn unweighted_joints_read_back_with_their_rig() {
+    let mut original = character();
+    let (skeleton, _) = original.iter::<Skeleton>().next().unwrap();
+    let dummy = |id: u32, name: &str, parent: u32, y: f32| Joint {
+        id: JointId(id),
+        name: name.into(),
+        parent: Some(JointId(parent)),
+        rest: Rest::Trs {
+            translation: [0.25, y, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0; 3],
+        },
+    };
+    let mut sk = original.get::<Skeleton>(skeleton).unwrap().clone();
+    sk.joints.extend([
+        dummy(3, "toe_dummy", 2, 0.5),
+        dummy(4, "prop_dummy", 1, 0.75),
+        dummy(5, "prop_tip", 4, 0.1),
+    ]);
+    original.insert(skeleton, sk);
+    let (rig, _) = original.iter::<RigInstance>().next().unwrap();
+    original.insert(rig, primase_core::Name("hero".into()));
+    assert_eq!(original.verify_components(), vec![]);
+
+    let (bytes, written) = write(&original, &WriteOptions::default()).unwrap();
+    assert_eq!((written.rigs, written.joint_nodes), (1, 5));
+    let mut read = World::new();
+    let report = read_glb(&bytes, "hero.glb", &mut read).unwrap();
+    assert_eq!(read.verify_components(), vec![]);
+    assert_eq!(
+        (
+            report.skeletons,
+            report.joints,
+            report.rig_nodes,
+            report.nodes_not_read
+        ),
+        (1, 5, 1, 0)
+    );
+    assert_eq!(joints_by_name(&read), joints_by_name(&original));
+    let (read_rig, _) = read.iter::<RigInstance>().next().unwrap();
+    assert_eq!(read.get::<primase_core::Name>(read_rig).unwrap().0, "hero");
+    assert_eq!(read.get::<Transform>(read_rig), original.get::<Transform>(rig));
+    for t in [0.0, 0.5, 1.0] {
+        let all = original.entities().collect();
+        let (want, got) = (
+            posed(original.subset(&all), t),
+            posed(read.subset(&read.entities().collect()), t),
+        );
         for (a, b) in want.iter().flatten().zip(got.iter().flatten()) {
             for k in 0..3 {
                 assert!((a[k] - b[k]).abs() <= 1e-5, "t={t}: {a:?} vs {b:?}");
@@ -315,7 +388,9 @@ fn khronos_models_read_as_pygltflib_reads_them() {
         let report =
             primase_gltf::read::read(&gltf, &model, &mut w).unwrap_or_else(|e| panic!("{model}: {e}"));
         assert_eq!(w.verify_components(), vec![], "{model}");
-        // the skeleton nodes: every joint of a skin a node draws, and every node above one
+        // the skeleton nodes: every joint of a skin a node draws, every node above one, and every other node of their
+        // roots' trees that is no mesh or light node (nor below one); a root no drawn skin names as a joint, with no
+        // mesh, light or camera and no animation channel, is a rig node, no joint
         let parent = |i: u64| node(&expected, i)["parent"].as_u64();
         let drawn: BTreeSet<u64> = expected["nodes"]
             .as_array()
@@ -323,16 +398,71 @@ fn khronos_models_read_as_pygltflib_reads_them() {
             .iter()
             .filter_map(|n| n["skin"].as_u64())
             .collect();
-        let mut skeleton_nodes = BTreeSet::new();
+        let mut skin_joints = BTreeSet::new();
+        let mut above = BTreeSet::new();
         for s in &drawn {
             for j in expected["skins"][*s as usize]["joints"].as_array().unwrap() {
+                skin_joints.insert(j.as_u64().unwrap());
                 let mut at = j.as_u64();
                 while let Some(n) = at {
-                    skeleton_nodes.insert(n);
+                    above.insert(n);
                     at = parent(n);
                 }
             }
         }
+        let document = &gltf.json()["nodes"];
+        let has = |n: u64, key: &str| document[n as usize].get(key).is_some();
+        let light = |n: u64| {
+            document[n as usize]["extensions"]
+                .get("KHR_lights_punctual")
+                .is_some()
+        };
+        let animated: BTreeSet<u64> = expected["animations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|a| a["channels"].as_array().unwrap())
+            .map(|c| c["targetNode"].as_u64().unwrap())
+            .collect();
+        let roots: BTreeSet<u64> = above
+            .iter()
+            .map(|&n| {
+                let mut r = n;
+                while let Some(p) = parent(r) {
+                    r = p;
+                }
+                r
+            })
+            .collect();
+        let mut skeleton_nodes = BTreeSet::new();
+        let mut rig_nodes = BTreeSet::new();
+        for r in roots {
+            let rig_node = !skin_joints.contains(&r)
+                && !has(r, "mesh")
+                && !has(r, "camera")
+                && !light(r)
+                && !animated.contains(&r);
+            if rig_node {
+                rig_nodes.insert(r);
+            }
+            let mut stack = vec![r];
+            while let Some(n) = stack.pop() {
+                if !above.contains(&n) && (has(n, "mesh") || light(n)) {
+                    continue;
+                }
+                if !(rig_node && n == r) {
+                    skeleton_nodes.insert(n);
+                }
+                stack.extend(
+                    node(&expected, n)["children"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|c| c.as_u64().unwrap()),
+                );
+            }
+        }
+        assert_eq!(report.rig_nodes, rig_nodes.len(), "{model}");
         // skins: each drawn skin's binding has its joints and inverse binds, as stored
         let bindings: BTreeMap<u32, &Binding> = w
             .iter::<Skin>()
@@ -408,12 +538,12 @@ fn khronos_models_read_as_pygltflib_reads_them() {
                     }
                 }
             }
-            assert!(
-                sk.joints
-                    .iter()
-                    .all(|j| skeleton_nodes.contains(&u64::from(j.id.0)))
-            );
         }
+        let joints: BTreeSet<u64> = w
+            .iter::<Skeleton>()
+            .flat_map(|(_, sk)| sk.joints.iter().map(|j| u64::from(j.id.0)))
+            .collect();
+        assert_eq!(joints, skeleton_nodes, "{model}");
         // channels: on a skeleton node one clip channel; weights one a morph target; the rest counted
         let targets_of = |n: u64| -> usize {
             let mesh = node(&expected, n)["mesh"].as_u64().unwrap() as usize;

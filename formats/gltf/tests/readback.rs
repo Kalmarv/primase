@@ -210,6 +210,30 @@ fn placements_read_back_their_shadows() {
     assert_eq!(report.extras_not_read.get("primase/core.source"), Some(&1));
 }
 
+/// The writer's group node (one per prototype by default) is read as nothing of its own: counted, with a notice; its
+/// placements are where it put them. Written without groups, every node is read as something.
+#[test]
+fn group_nodes_are_counted_as_not_read() {
+    let original = world();
+    let (back, report) = read(&glb(&original)).unwrap();
+    assert_eq!(report.nodes_not_read, 1);
+    assert!(
+        report
+            .notices()
+            .iter()
+            .any(|n| n.reason.contains("no joint, rig, mesh, light or camera") && n.count == 1),
+        "{:?}",
+        report.notices()
+    );
+    assert_eq!(by_name::<Transform>(&back), by_name::<Transform>(&original));
+    let options = WriteOptions {
+        group_by: primase_gltf::GroupBy::None,
+        ..WriteOptions::default()
+    };
+    let (_, report) = read(&write(&original, &options).unwrap().0).unwrap();
+    assert_eq!(report.nodes_not_read, 0);
+}
+
 /// Every optional extension the reader does not read is counted by name, wherever the reader has a home for it; the
 /// document still reads, with its lights.
 #[test]

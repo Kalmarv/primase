@@ -4,12 +4,18 @@
 //! counted.
 //!
 //! What goes where:
-//! - **Skeletons.** Every node a skin in the scene names as a joint, and every node above one up to its scene root,
-//!   is a joint of a `core.skeleton`, one skeleton per scene root they hang from: each joint's id its node's index,
-//!   its name the node's, its parent its parent node, its rest the node's local transform as stored (`Rest::Trs` from
-//!   translation/rotation/scale, `Rest::Affine` from a matrix). Core has no general node hierarchy, so the nodes
-//!   above the joints are joints too: their transforms (and channels that animate them) are kept exactly, with no
-//!   composing. Each skeleton has one rig (`core.rig_instance`) at the origin, the scene's space.
+//! - **Skeletons.** One `core.skeleton` per scene root the joints of the skins drawn in the scene hang from, its
+//!   joints that root's tree: every node a drawn skin names as a joint, every node above one, and every other node of
+//!   the tree that is no mesh or light node (nor below one), an unweighted joint as much as a weighted one. Each
+//!   joint's id is its node's index, its name the node's, its parent its parent node (none below the rig's node), its
+//!   rest the node's local transform as stored (`Rest::Trs` from translation/rotation/scale, `Rest::Affine` from a
+//!   matrix). Core has no general node hierarchy, so the nodes above the joints are joints too: their transforms (and
+//!   channels that animate them) are kept exactly, with no composing. Each skeleton has one rig
+//!   (`core.rig_instance`). The writer writes a rig as a root node of its own (the rig's name and transform) with the
+//!   joints below it ([`crate::write`]), and the reader reads that back as it is written: a root that no drawn skin
+//!   names as a joint, with no mesh, light or camera and no animation channel, is the rig (its name the node's,
+//!   `core.transform` its local transform), not a joint. Any other root is a joint, and the rig is at the origin, the
+//!   scene's space.
 //! - **Meshes** each glTF mesh a scene node draws becomes a prototype (`core.mesh`, its name), its primitives drawing
 //!   the material entities. **Materials** are read as their glTF JSON (`gltf.material`, with `core.name`), and the
 //!   images their core texture slots sample as `core.texture`s with a `gltf.material_textures` component ([`crate::textures`]:
@@ -48,7 +54,9 @@
 //! - **The asset**: a root with `core.asset` (each skeleton a rig, each placement a part, each clip a clip),
 //!   `core.source` the caller's key and `core.name`.
 //!
-//! Not read, counted: cameras, the skins' `skeleton` hints (no effect on deformation), images no core material slot
+//! Not read, counted: cameras, scene nodes read as nothing of their own (no joint, rig, mesh, light or camera node:
+//! their transforms are composed into the nodes below them, their names and grouping are not read), the skins'
+//! `skeleton` hints (no effect on deformation), images no core material slot
 //! samples, the images refused by name, every `extras` key of the objects read that is not read above (a mesh's
 //! `targetNames`, a node's `primase.shadows`), by name (each component of primase's own `extras.primase` by its name,
 //! `primase/<component>`), and every optional extension of the document, scene, nodes, meshes, primitives, skins,
@@ -89,7 +97,9 @@ pub struct ReadReport {
     pub meshes: usize,
     pub materials: usize,
     pub skeletons: usize,
+    /// The skeletons' joints, and the rigs read from a rig node of their own (the others are at the origin).
     pub joints: usize,
+    pub rig_nodes: usize,
     /// Glb skins read as bindings (one a skin and mesh it is drawn with).
     pub bindings: usize,
     pub morph_targets: usize,
@@ -98,10 +108,12 @@ pub struct ReadReport {
     pub channels: usize,
     /// Meshes whose skinned vertices' weights do not all sum to 1: read `AsStored`.
     pub weights_as_stored: usize,
-    /// Not read: nodes outside the default scene, cameras, skins' skeleton hints, animation channels on nodes that
-    /// are not joints, joint streams of meshes no node draws with a skin.
+    /// Not read: nodes outside the default scene, cameras, scene nodes read as nothing of their own (no joint, rig,
+    /// mesh, light or camera node), skins' skeleton hints, animation channels on nodes that are not joints, joint
+    /// streams of meshes no node draws with a skin.
     pub nodes_outside_scene: usize,
     pub cameras: usize,
+    pub nodes_not_read: usize,
     pub skeleton_hints: usize,
     /// The `extras` keys the reader read nowhere, by name, each with the number of objects stating it: every key of
     /// the scene's, the scene nodes', drawn skins', drawn meshes', their primitives', the animations', the materials'
@@ -141,6 +153,11 @@ impl ReadReport {
                 self.nodes_outside_scene,
             ),
             n("cameras, not read", self.cameras),
+            n(
+                "scene nodes that are no joint, rig, mesh, light or camera, not read (their transforms are composed \
+                 into the nodes below them)",
+                self.nodes_not_read,
+            ),
             n(
                 "lights no scene node places (KHR_lights_punctual), not read",
                 self.lights_unplaced,
@@ -560,9 +577,10 @@ pub fn read_with_images(
         tally_extensions(&mut report, &node.extensions, &[LIGHTS]);
     }
 
-    // the skins drawn in the scene, and their joints with every node above them: the skeletons' nodes
+    // the skins drawn in the scene, and their joints with every node above them
     let drawn_skins: BTreeSet<usize> = order.iter().filter_map(|&n| nodes[n].skin).collect();
-    let mut skeleton_nodes: BTreeSet<usize> = BTreeSet::new();
+    let mut skin_joints: BTreeSet<usize> = BTreeSet::new();
+    let mut above_joints: BTreeSet<usize> = BTreeSet::new();
     for &s in &drawn_skins {
         let skin = &skins[s];
         if skin.skeleton.is_some() {
@@ -577,49 +595,80 @@ pub fn read_with_images(
                     format!("joint {j} is not in the scene its skinned nodes are"),
                 ));
             }
+            skin_joints.insert(j);
             let mut at = Some(j);
             while let Some(n) = at {
-                if !skeleton_nodes.insert(n) {
+                if !above_joints.insert(n) {
                     break;
                 }
                 at = parent.get(&n).copied();
             }
         }
     }
+    // each skeleton: a scene root those hang from, and every node of its tree that is no mesh or light node (nor below
+    // one) but those above a joint; the root is the rig when it is a rig node as the writer writes one, else a joint
+    let animated: BTreeSet<usize> = animations
+        .iter()
+        .flat_map(|a| a.channels.iter().map(|c| c.node))
+        .collect();
+    let is_light = |n: usize| nodes[n].extensions.contains_key(LIGHTS);
     let w = world;
     let mut skeletons = Skeletons { of: BTreeMap::new() };
-    let mut by_root: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-    for &n in &skeleton_nodes {
-        by_root.entry(root_of[&n]).or_default().push(n);
-    }
+    let mut rig_nodes: BTreeSet<usize> = BTreeSet::new();
     let mut rigs: Vec<(Entity, Entity)> = Vec::new();
-    for (root, members) in &by_root {
+    let tree_roots: BTreeSet<usize> = above_joints.iter().map(|n| root_of[n]).collect();
+    for root in tree_roots {
+        let r = &nodes[root];
+        let rig_node = !skin_joints.contains(&root)
+            && r.mesh.is_none()
+            && !is_light(root)
+            && r.camera.is_none()
+            && !animated.contains(&root);
+        let mut members = Vec::new();
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            if !above_joints.contains(&n) && (nodes[n].mesh.is_some() || is_light(n)) {
+                continue;
+            }
+            if !(rig_node && n == root) {
+                members.push(n);
+            }
+            stack.extend(&nodes[n].children);
+        }
+        members.sort_unstable();
         let skeleton = w.spawn();
         let joints: Vec<Joint> = members
             .iter()
             .map(|&n| Joint {
                 id: JointId(n as u32),
                 name: node_name(&nodes[n], n),
-                parent: parent.get(&n).map(|&p| JointId(p as u32)),
+                parent: parent
+                    .get(&n)
+                    .filter(|&&p| !(rig_node && p == root))
+                    .map(|&p| JointId(p as u32)),
                 rest: rest(&nodes[n].local),
             })
             .collect();
         report.joints += joints.len();
-        w.insert(
-            skeleton,
-            Name(format!("skeleton {}", node_name(&nodes[*root], *root))),
-        );
+        w.insert(skeleton, Name(format!("skeleton {}", node_name(r, root))));
         w.insert(skeleton, Skeleton { joints });
         let rig = w.spawn();
-        w.insert(rig, Name(format!("rig {}", node_name(&nodes[*root], *root))));
         w.insert(rig, RigInstance { skeleton });
-        w.insert(rig, Transform::IDENTITY);
-        for &n in members {
+        if rig_node {
+            w.insert(rig, Name(node_name(r, root)));
+            w.insert(rig, transform(&world_of[&root]));
+            rig_nodes.insert(root);
+        } else {
+            w.insert(rig, Name(format!("rig {}", node_name(r, root))));
+            w.insert(rig, Transform::IDENTITY);
+        }
+        for &n in &members {
             skeletons.of.insert(n, (skeleton, rig));
         }
         rigs.push((skeleton, rig));
     }
     report.skeletons = rigs.len();
+    report.rig_nodes = rig_nodes.len();
     // each skin's skeleton: all its joints hang from one scene root
     let skin_skeleton = |s: usize| -> Result<(Entity, Entity)> {
         let first = skeletons.of[&skins[s].joints[0]];
@@ -951,6 +1000,16 @@ pub fn read_with_images(
         report.lights += 1;
     }
     report.lights_unplaced = (0..lights.len()).filter(|i| !placed_lights.contains(i)).count();
+    report.nodes_not_read = order
+        .iter()
+        .filter(|&&n| {
+            !skeletons.of.contains_key(&n)
+                && !rig_nodes.contains(&n)
+                && !placements.contains_key(&n)
+                && !is_light(n)
+                && nodes[n].camera.is_none()
+        })
+        .count();
 
     // animations
     let mut clips = Vec::new();

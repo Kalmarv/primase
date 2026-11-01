@@ -96,15 +96,30 @@ fn manager() -> PassManager {
     PassManager::new(registry()).with_missing_inputs(MissingInputs::Skip)
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+type Error = Box<dyn std::error::Error + Send + Sync>;
+
+/// The writer's options: the scene named after the character.
+fn options() -> primase_gltf::WriteOptions {
+    primase_gltf::WriteOptions { scene_name: Some(CHARACTER.to_owned()), ..Default::default() }
+}
+
+fn main() -> Result<(), Error> {
     let out = std::env::args().nth(1).ok_or("usage: elden_outfit_gltf <output.glb>")?;
     let root = inputs::install(inputs::Game::Elden).ok_or("GAME_DATA states no `elden` install")?;
     let keys = inputs::keys(inputs::Game::Elden).ok_or("GAME_DATA states no `elden` keys")?;
+    let world = outfit(&root, &keys)?;
+    let report = primase_gltf::write_file(&world, &options(), Path::new(&out))?;
+    println!("glTF {out}:\n{report}");
+    Ok(())
+}
 
+/// The outfit read from the install at `root` with the archive keys in `keys`, selected and lowered: the world the
+/// program writes.
+fn outfit(root: &Path, keys: &Path) -> Result<primase_core::World, Error> {
     let game = Game::EldenRing;
-    let install = Install::new(&root, game, Keys::from_folder(keys, game, game.param_key_sha256())?)
+    let install = Install::new(root, game, Keys::from_folder(keys, game, game.param_key_sha256())?)
         .with_threads(std::thread::available_parallelism()?);
-    let oodle = sekiro::decoder::load_installed(&root)?;
+    let oodle = sekiro::decoder::load_installed(root)?;
     let decoder = || Decoder { oodle: Some(oodle), max_output: 1 << 30 };
     let manager = manager();
 
@@ -140,11 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut lowered = RunReport::default();
     manager.run(&mut world, &pipeline, &mut lowered)?;
     println!("{lowered}");
-
-    let options = primase_gltf::WriteOptions { scene_name: Some(CHARACTER.to_owned()), ..Default::default() };
-    let report = primase_gltf::write_file(&world, &options, Path::new(&out))?;
-    println!("glTF {out}:\n{report}");
-    Ok(())
+    Ok(world)
 }
 
 #[cfg(test)]
@@ -154,12 +165,48 @@ mod tests {
     /// Every stated pass text names a registered pass with the options it declares, and the order of the whole
     /// pipeline is one the passes' own declarations accept.
     #[test]
-    fn the_stated_pipelines_parse_and_order() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn the_stated_pipelines_parse_and_order() -> Result<(), Error> {
         let manager = manager();
         manager.registry.parse(&SELECT.join(", "))?.check()?;
         for parts in [1, 2] {
             manager.registry.parse(&lowering(parts).join(", "))?.check()?;
         }
+        Ok(())
+    }
+
+    /// The written outfit reads back with its whole rig: the writer writes one rig of 238 joint nodes, and the glTF
+    /// reader reads 238 joints (the unweighted ones too, each with its parent), the rig node as the rig, and every
+    /// node as something. Skips without the `elden` install and keys.
+    #[test]
+    fn the_written_outfit_reads_back_its_whole_rig() -> Result<(), Error> {
+        let (Some(root), Some(keys)) = (inputs::install(inputs::Game::Elden), inputs::keys(inputs::Game::Elden)) else {
+            eprintln!("skipped: GAME_DATA states no `elden` install and keys");
+            return Ok(());
+        };
+        let world = outfit(&root, &keys)?;
+        let (glb, written) = primase_gltf::write(&world, &options())?;
+        assert_eq!((written.rigs, written.joint_nodes), (1, 238));
+        let mut read = primase_core::World::new();
+        let report = primase_gltf::read_glb(&glb, "elden_outfit_gltf.glb", &mut read)?;
+        assert_eq!((report.skeletons, report.joints, report.rig_nodes, report.nodes_not_read), (1, 238, 1, 0));
+        // each joint by name with its parent's, as written
+        let joints = |w: &primase_core::World| -> Vec<(String, Option<String>)> {
+            let mut out: Vec<_> = w
+                .iter::<primase_core::RigInstance>()
+                .filter_map(|(_, r)| w.get::<primase_core::Skeleton>(r.skeleton))
+                .flat_map(|sk| {
+                    let name = |id| sk.joints.iter().find(|j| j.id == id).map(|j| j.name.clone());
+                    sk.joints.iter().map(move |j| (j.name.clone(), j.parent.and_then(name)))
+                })
+                .collect();
+            out.sort();
+            out
+        };
+        assert_eq!(joints(&read), joints(&world));
+        println!(
+            "read back: {} joints, {} rig node, {} nodes not read",
+            report.joints, report.rig_nodes, report.nodes_not_read
+        );
         Ok(())
     }
 }
