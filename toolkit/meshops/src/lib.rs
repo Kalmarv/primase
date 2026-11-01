@@ -13,6 +13,8 @@ pub use back_faces::{ADD_BACK_FACES, AddBackFaces};
 mod curves;
 mod distance;
 mod drop_marker;
+mod fill_normals;
+pub use fill_normals::{FILL_NORMALS, FillNormals, Method as FillMethod, Undirected};
 mod spawn_at_start;
 pub use drop_marker::{DROP_MARKER, DropMarker, MarkerAt};
 pub use spawn_at_start::{SPAWN_AT_START, SpawnAtStart};
@@ -52,6 +54,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         &DROP_COVERED_SURFACES,
         &DRAW_COLLISION,
         &DROP_MARKER,
+        &FILL_NORMALS,
         &GROUP_PRIMITIVES,
         &OMIT_MATERIALLESS_PRIMITIVES,
         &OMIT_UNSHADED_PRIMITIVES,
@@ -541,6 +544,7 @@ mod tests {
             "draw-collision",
             "drop-covered-surfaces",
             "drop-marker",
+            "fill-normals",
             "first-texcoord-set",
             "flatten-curves",
             "group-primitives",
