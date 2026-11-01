@@ -177,6 +177,11 @@ mod tests {
 
     fn urp() -> UnityUrpSettings {
         UnityUrpSettings {
+            renderers: Vec::new(),
+            default_renderer: 0,
+            require_depth_texture: false,
+            require_opaque_texture: false,
+            msaa: 1,
             main_light_mode: 1,
             main_light_shadows: true,
             additional_lights_mode: 1,

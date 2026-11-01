@@ -192,11 +192,7 @@ fn a_urp_assets_settings_agree_with_the_variants_the_player_keeps() {
         .iter()
         .map(|l| {
             let asset = player.urp_asset(Some(&l.name)).unwrap().unwrap();
-            let (_, bytes) = player.behaviour(&asset).unwrap();
-            (
-                l.name.clone(),
-                unity_formats::pipeline::read_urp_settings(&bytes).unwrap(),
-            )
+            (l.name.clone(), player.urp_settings(&asset).unwrap())
         })
         .collect();
     for (name, s) in &settings {

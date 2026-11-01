@@ -2364,8 +2364,8 @@ fn urp_settings(player: &Player, quality: Option<&str>) -> Result<Option<UnityUr
     let Some(asset) = player.urp_asset(quality)? else {
         return Ok(None);
     };
-    let (_, bytes) = player.behaviour(&asset)?;
-    unity_formats::pipeline::read_urp_settings(&bytes).map(Some)
+    // unity-formats reads the asset with the layout of the player's Unity version and refuses a version it has none for
+    player.urp_settings(&asset).map(Some)
 }
 
 /// The five fields of a PhysicMaterial, by the two names a type tree gives them: Unity 6 and its kin prefix them
