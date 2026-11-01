@@ -265,7 +265,15 @@ pub fn read_models<'a>(
                 CharacterReader::new(install.clone(), id, decoder)
             } else {
                 let parts: Vec<_> = dressed_parts.iter().map(String::as_str).collect();
-                CharacterReader::parts(install.clone(), &parts, decoder)
+                let reader = CharacterReader::parts(install.clone(), &parts, decoder);
+                // a player's outfit parts each state their own parents: the character's skeleton is the one hierarchy
+                // for them, whether or not its animations are listed. An NPC's parts need none: they are one authored
+                // set that agrees on every joint's parent (observed: each installed Sekiro c0000 map-enemy outfit of
+                // three or four parts assembles with no reference).
+                match &player_outfit {
+                    Some(outfit) => reader.with_assembly_reference(&outfit.animations_of),
+                    None => reader,
+                }
             }
         }
         StandaloneAsset::Parts(parts) => {

@@ -209,6 +209,296 @@ fn warrior_confessor_and_wolf_assemble_against_their_authored_animation_hierarch
     Ok(())
 }
 
+/// A player's outfit read without its animations listed still carries the character's skeleton as the assembly
+/// reference of every part rig, so its parts assemble. The parts of Elden Ring's female starting outfit (initializer
+/// 3002) each store the parents their own authoring gave (the head part parents `L_UpArmTwist` to `L_Clavicle`, the
+/// legs part parents `L_Calf` to `Pelvis`); only the character's skeleton states the one hierarchy. The expected
+/// counts are those of the installed read: the four parts `hd_m_1380_l`, `bd_f_1380_l`, `am_m_1380_l` and
+/// `lg_f_1380_l` (the head and arms rows state a single `m` spelling, the body and legs rows are split by sex).
+#[test]
+fn an_outfit_read_without_animations_assembles_against_the_players_skeleton() -> Result<()> {
+    use primase_core::pass::{MissingInputs, PassManager, PassRegistry, RunReport};
+    use primase_core::{AssemblyReference, Asset, Name, Role, Source};
+    use primase_fromsoft::sekiro::program::{CharacterPreparation, Materials};
+    use primase_fromsoft::sekiro::standalone::{
+        InventoryRequest, SelectedModelRequest, StandaloneAsset, read_inventory, read_selected_models,
+    };
+
+    let (Some(root), Some(folder), Some(library)) =
+        (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
+    else {
+        return Ok(());
+    };
+    let codec = common::oodle(library)?;
+    let installed = common::install(
+        root,
+        Game::EldenRing,
+        Keys::from_folder(folder, Game::EldenRing, None)?,
+    );
+    let decoder = || Decoder {
+        oodle: Some(&codec),
+        max_output: 1 << 30,
+    };
+    let mut registry = PassRegistry::new();
+    primase_core::register(&mut registry);
+    primase_animation::register(&mut registry);
+    primase_fromsoft::sekiro::passes::register(&mut registry);
+    let manager = PassManager::new(registry).with_missing_inputs(MissingInputs::Skip);
+
+    // the candidates, and the registered selection of initializer 3002, presentation f
+    let asset = StandaloneAsset::Character("c0000".to_owned());
+    let mut candidates = read_inventory(
+        &installed,
+        decoder(),
+        InventoryRequest {
+            asset: &asset,
+            names: None,
+            npc: None,
+            weapons: false,
+            save: None,
+            attack_of: None,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let selection = manager.registry.parse(
+        "select-fromsoft-initializer-outfits{initializer=3002,presentation=f,level=prefer-low},          select-fromsoft-npc-outfits{level=prefer-low},          select-fromsoft-character-read{outfit=initializer/3002/f,initializer=none},          select-fromsoft-dressing{npc=none,empty=show}",
+    )?;
+    manager.run(&mut candidates, &selection, &mut RunReport::default())?;
+
+    // the read states no animations: none were asked for
+    let read = read_selected_models(
+        installed,
+        decoder(),
+        &candidates,
+        SelectedModelRequest {
+            asset,
+            animations: None,
+            weapons: Default::default(),
+            grip: None,
+            clip_effects: false,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    assert_eq!(
+        read.models.dressed_parts,
+        ["hd_m_1380_l", "bd_f_1380_l", "am_m_1380_l", "lg_f_1380_l"]
+    );
+    let parts = read.models.dressed_parts.len();
+    let mut world = read.models.world;
+
+    // every part rig references the player's animation skeleton
+    let rigs: Vec<_> = world
+        .iter::<Asset>()
+        .filter(|(root, _)| {
+            world
+                .get::<Source>(*root)
+                .is_some_and(|s| s.0.starts_with("parts/"))
+        })
+        .flat_map(|(_, asset)| {
+            asset
+                .members
+                .iter()
+                .filter(|(_, role)| *role == Role::Rig)
+                .map(|(e, _)| *e)
+        })
+        .collect();
+    assert_eq!(rigs.len(), parts);
+    for rig in rigs {
+        let reference = world
+            .get::<AssemblyReference>(rig)
+            .ok_or("a part rig without the assembly reference")?;
+        assert_eq!(
+            world.get::<Name>(reference.skeleton).map(|n| n.0.as_str()),
+            Some("c0000 havok skeleton")
+        );
+    }
+
+    // the example's lowering assembles them
+    let texts = CharacterPreparation {
+        game: Game::EldenRing,
+        materials: Materials::Preserve,
+        game_shaders: false,
+        water_colour: [48, 98, 122, 190],
+        parts,
+        select_assets: Vec::new(),
+        animations: None,
+        dressing: true,
+        entity_names: true,
+        held: None,
+        bake_cache: primase_fromsoft::sekiro::passes::bake_materials::Cache::Off,
+    }
+    .texts();
+    let mut report = RunReport::default();
+    // texture baking is not what assembly depends on, and decoding the textures of four parts takes minutes
+    let lowering: Vec<_> = texts
+        .iter()
+        .filter(|text| !text.starts_with("bake-fromsoft-materials"))
+        .map(String::as_str)
+        .collect();
+    manager.run(
+        &mut world,
+        &manager.registry.parse(&lowering.join(", "))?,
+        &mut report,
+    )?;
+    let count = |pass: &str, key: &str| -> Result<u64> {
+        let step = report
+            .steps
+            .iter()
+            .find(|step| step.pass.starts_with(pass))
+            .ok_or_else(|| format!("{pass} did not run"))?;
+        step.log
+            .counts
+            .get(key)
+            .copied()
+            .ok_or_else(|| format!("{pass} counted no {key:?}").into())
+    };
+    assert_eq!(count("assemble-character", "assembled joints")?, 238);
+    assert_eq!(
+        count(
+            "assemble-character",
+            "part joints reparented to the reference within reference-tolerance"
+        )?,
+        14
+    );
+    assert_eq!(count("assemble-character", "parts assembled")?, 4);
+    assert_eq!(count("place-assets", "parts placed")?, 4);
+    Ok(())
+}
+
+/// A Sekiro NPC's outfit parts are authored as one set of the character's own, and the set agrees on every joint's
+/// parent: `assemble-character` takes them with no assembly reference, so the NPC read attaches none (only a player's
+/// outfit, whose parts come from different sets, takes its character's skeleton as the reference). Observed on the
+/// installed c0000 map-enemy initializers 15000, 15010, 15020 and 15030 (3 or 4 parts each): every one assembles
+/// all its parts.
+#[test]
+fn an_installed_npc_outfit_of_several_parts_assembles_without_a_reference() -> Result<()> {
+    use primase_core::pass::{MissingInputs, PassManager, PassRegistry, RunReport};
+    use primase_core::{AssemblyReference, Asset, Role};
+    use primase_fromsoft::sekiro::outfit_data::NpcOutfitVariants;
+    use primase_fromsoft::sekiro::passes::bake_materials::Cache;
+    use primase_fromsoft::sekiro::program::{CharacterPreparation, Materials};
+    use primase_fromsoft::sekiro::standalone::{
+        InventoryRequest, SelectedModelRequest, StandaloneAsset, read_inventory, read_selected_models,
+    };
+    let game = Game::Sekiro;
+    let (Some(library), Some(root), Some(folder), Some(names)) = (
+        oodle(Tool::Oodle6),
+        install(Data::Sekiro),
+        keys(Data::Sekiro),
+        inputs::oracle(inputs::OracleSet::Uxm, Data::Sekiro, "dictionary.txt"),
+    ) else {
+        return Ok(());
+    };
+    let codec = common::oodle(library)?;
+    let decoder = || Decoder {
+        oodle: Some(&codec),
+        max_output: 1 << 30,
+    };
+    let installed = common::install(root, game, Keys::from_folder(folder, game, None)?);
+    let mut registry = PassRegistry::new();
+    primase_core::register(&mut registry);
+    primase_animation::register(&mut registry);
+    primase_fromsoft::sekiro::passes::register(&mut registry);
+    let manager = PassManager::new(registry).with_missing_inputs(MissingInputs::Skip);
+    let asset = StandaloneAsset::Character("c0000".to_owned());
+    let mut candidates = read_inventory(
+        &installed,
+        decoder(),
+        InventoryRequest {
+            asset: &asset,
+            names: Some(names.as_ref()),
+            npc: Some(0),
+            weapons: false,
+            save: None,
+            attack_of: None,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let select = manager.registry.parse(
+        "select-fromsoft-initializer-outfits{initializer=all,presentation=authored,level=prefer-low}, select-fromsoft-npc-outfits{level=prefer-low}",
+    )?;
+    manager.run(&mut candidates, &select, &mut RunReport::default())?;
+    let mut variants: Vec<_> = candidates
+        .resource::<NpcOutfitVariants>()
+        .ok_or("no NPC outfit variants")?
+        .0
+        .iter()
+        .filter(|variant| variant.parts.len() >= 2 && variant.unresolved.is_empty())
+        .filter_map(|variant| Some((variant.init?, variant.parts.clone())))
+        .collect();
+    variants.sort();
+    assert_eq!(
+        variants
+            .iter()
+            .map(|(init, parts)| (*init, parts.len()))
+            .collect::<Vec<_>>(),
+        [(15000, 4), (15010, 4), (15020, 4), (15030, 3)]
+    );
+    for (init, parts) in variants {
+        let mut candidates = candidates.clone();
+        let choose = manager.registry.parse(&format!(
+            "select-fromsoft-character-read{{outfit=none,initializer={init}}}"
+        ))?;
+        manager.run(&mut candidates, &choose, &mut RunReport::default())?;
+        let read = read_selected_models(
+            installed.clone(),
+            decoder(),
+            &candidates,
+            SelectedModelRequest {
+                asset: asset.clone(),
+                animations: None,
+                weapons: Default::default(),
+                grip: None,
+                clip_effects: false,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+        assert_eq!(read.models.dressed_parts, parts, "initializer {init}");
+        let mut world = read.models.world;
+        for (_, asset) in world.iter::<Asset>() {
+            for (entity, role) in &asset.members {
+                assert!(
+                    *role != Role::Rig || world.get::<AssemblyReference>(*entity).is_none(),
+                    "initializer {init}: an NPC part rig carries an assembly reference"
+                );
+            }
+        }
+        let texts = CharacterPreparation {
+            game,
+            materials: Materials::Preserve,
+            game_shaders: false,
+            water_colour: [48, 98, 122, 190],
+            parts: parts.len(),
+            select_assets: Vec::new(),
+            animations: None,
+            dressing: false,
+            entity_names: false,
+            held: None,
+            bake_cache: Cache::Off,
+        }
+        .texts();
+        let mut report = RunReport::default();
+        // texture baking is not what assembly depends on, and decoding the textures of four parts takes minutes
+        let lowering: Vec<_> = texts
+            .iter()
+            .filter(|text| !text.starts_with("bake-fromsoft-materials"))
+            .map(String::as_str)
+            .collect();
+        manager.run(
+            &mut world,
+            &manager.registry.parse(&lowering.join(", "))?,
+            &mut report,
+        )?;
+        let assembled = report
+            .steps
+            .iter()
+            .find(|step| step.pass.starts_with("assemble-character"))
+            .and_then(|step| step.log.counts.get("parts assembled").copied());
+        assert_eq!(assembled, Some(parts.len() as u64), "initializer {init}");
+    }
+    Ok(())
+}
+
 /// Every starting-class presentation uses the browser's outfit reader, geometry lowering and guarded assembly.
 /// No renderer, material baking, game process or native skinning-parity claim is involved.
 #[test]

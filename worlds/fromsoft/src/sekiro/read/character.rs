@@ -1674,6 +1674,16 @@ impl<'a> CharacterReader<'a> {
         self
     }
 
+    /// Take the hierarchy of character `of`'s animation skeleton (its Havok skeleton, read without tracks or a clip
+    /// listing) as the assembly reference of every part rig, so `assemble-character` takes the parents of joints the
+    /// parts state differently from the game's own skeleton rather than refusing them. The parts of a player's outfit
+    /// each store the parents their own authoring gave (a part may parent a twist bone past a bone it holds), and
+    /// only the character's skeleton states one hierarchy for all of them. Only a read of parts takes it.
+    pub fn with_assembly_reference(mut self, of: &str) -> Self {
+        self.assembly_reference = Some(of.to_owned());
+        self
+    }
+
     /// Also read the effects the events of each clip start as the clip loads.
     pub fn with_clip_effects(mut self) -> Self {
         self.options.clip_effects = true;
@@ -1774,9 +1784,9 @@ impl<'a> CharacterReader<'a> {
             ));
         }
         let parts: Vec<_> = outfit.parts.iter().map(String::as_str).collect();
-        let mut reader = Self::parts(install, &parts, decoder).with_animations(&outfit.animations_of);
-        reader.assembly_reference = Some(outfit.animations_of.clone());
-        Ok(reader)
+        Ok(Self::parts(install, &parts, decoder)
+            .with_animations(&outfit.animations_of)
+            .with_assembly_reference(&outfit.animations_of))
     }
 }
 
