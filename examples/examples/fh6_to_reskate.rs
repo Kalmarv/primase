@@ -97,12 +97,13 @@ fn main() -> Result<()> {
             // skate's mask holds both: a material's separate occlusion and metallic-roughness maps packed as one, at the
             // metallic-roughness map's size
             Box::new(PackOrm::new(OrmSize::MetallicRoughness, MissingLevels::Generate)),
-            // collision surfaces have no class yet: concrete, the city's most common ground (the program's choice)
-            Box::new(RaiseSkate::new(RaiseOptions::new(
-                "shibuya",
-                LightCalibration::Standard,
-                Unclassified::Surface("concrete".into()),
-            )?)),
+            // collision surfaces have no class yet: concrete, the city's most common ground (the program's choice).
+            // Emission at 50 cd/m2 per unit of emissive strength (the program's choice): the track-emissive exposure of
+            // the summer sky over the day, the season and time of the level; the game's own unit is inferred, not read
+            Box::new(RaiseSkate::new(
+                RaiseOptions::new("shibuya", LightCalibration::Standard, Unclassified::Surface("concrete".into()))?
+                    .with_emission(50.0)?,
+            )),
             // skate blends by vertex weights: a road's blend mask and layer heights are evaluated at its vertices and
             // interpolated between them (counted)
             Box::new(BakeLayerChannels),
