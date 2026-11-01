@@ -25,7 +25,7 @@ data that prevents valid output. Compilation, stitching and other later stages r
 | [`worlds/trackmania`](worlds/trackmania/) | TrackMania Nations Forever maps, placed from the install's block models |
 | [`worlds/forzatech`](worlds/forzatech/) | Forza Horizon 6 tracks: a box's placements, models, material chains and textures, as stored |
 | [`worlds/reskate`](worlds/reskate/) | skate. maps: preparation passes, the map folder ReSkate Studio compiles, and the compile and post-compile finishing |
-| [`formats/gltf`](formats/gltf/), [`formats/web`](formats/web/) | glTF 2.0 / GLB, and tiled glTF scenes for web viewers |
+| [`formats/gltf`](formats/gltf/) | glTF 2.0 / GLB |
 
 ## Architecture
 
@@ -33,7 +33,7 @@ data that prevents valid output. Compilation, stitching and other later stages r
 | --- | --- |
 | [`core`](core/) | Shared meanings: geometry, materials, lights, collision and world state; what a shader program's inputs, constants and outputs stand for (`core::shader`); the `World` store, texture forms, irradiance volumes, auto exposure and pass/conversion machinery. |
 | [`toolkit`](toolkit/) | Reusable mechanisms, independent of a particular game or destination: texture codecs, DDS, images, mesh operations, animation, lighting, the GLB codec, Havok lowering, a disk cache. |
-| [`formats`](formats/) | Interchange formats and their writers. |
+| [`formats`](formats/) | Formats that are not one game's or destination's: their readers and writers. |
 | [`worlds`](worlds/) | Game, engine-family and destination knowledge: source readers, namespaced data and domain passes/writers. |
 | [`examples`](examples/) | Programs using primase as a library (the one below). primase has no command line: a program composes readers, passes and writers itself. |
 | [`checks`](checks/) | The architecture rules' tests and tests spanning crates. |
@@ -237,7 +237,7 @@ fn main() -> Result<()> {
 ```
 
 This is [`examples/examples/sekiro_to_reskate.rs`](examples/examples/sekiro_to_reskate.rs) without its imports and Oodle
-loader; `cargo test --workspace` builds it. With the game, ReSkate Studio and skate. installed at the paths in it:
+loader; landing's checks build it. With the game, ReSkate Studio and skate. installed at the paths in it:
 
 ```text
 cargo run --release -p primase-examples --example sekiro_to_reskate
@@ -249,8 +249,6 @@ surface, foliage drawn as plain surfaces, and markers snapped down to the ground
 
 Status: the library is being aligned with this model; remaining boundary exceptions are tracked in
 [`architecture.toml`](architecture.toml).
-
-Run real-data tests with `cargo test --profile gate`: the release-like `gate` profile keeps debug assertions enabled. [CONTRIBUTING](CONTRIBUTING.md#fixtures-and-real-data) describes the checks and `GAME_DATA` setup.
 
 See [CONTRIBUTING](CONTRIBUTING.md) for rules, checks and real-data setup, and [DESIGN](docs/DESIGN.md) for detail.
 

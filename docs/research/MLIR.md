@@ -44,7 +44,7 @@ form, a dialect registry), skip the drivers (greedy fixed point, rollback, regio
 | 12 | World text form (print / parse / round trip) + golden and diagnostic tests | adopt | printer early, as debug hook |
 | 13 | v2: each component kind marked **required** or **optional** (glTF `extensionsRequired`); a reader meeting an unknown required kind fails | adopt | v2 SPEC  |
 | 14 | Keep one fixed world frame (not USD-style per-stage units); USD writer always authors `metersPerUnit = 1`, `upAxis = "Y"` | keep / note | no |
-| 15 | "Lower and keep" (USD fallback prim types, glTF fallback images): a lowering may keep its source; writers `Carry` it | adopt | via #4 |
+| 15 | "Lower and keep" (USD fallback prim types, glTF fallback images): a lowering may keep its source; writers `Carry` it | superseded: no format writer carries (CONTRIBUTING.md, laws 1 and 4) | no |
 | 16 | No multiple-apply components; one component per name per entity (use child entities or a `Vec`) | keep | no |
 | 17 | Merging passes merge provenance (MLIR fused locations) | adopt later | no |
 
@@ -88,7 +88,7 @@ Found in current core while reading (to fix regardless):
 |---|---|
 | MLIR | Per op or dialect: **Legal**, **Dynamic** (a callback decides per instance, e.g. `arith.addi` legal only on i32), **Illegal**; anything unmarked is "unknown". Partial conversion legalises what it can and lets unknown ops remain; full conversion fails unless every op ends legal; **analysis conversion** reports what *would* be legalised without changing the IR. `markOpRecursivelyLegal` exempts nested ops. |
 | glTF | `extensionsUsed` (may be ignored) vs `extensionsRequired` (subset; must be understood to load). `extras`: "application-specific data", no schema. `EXT_texture_webp`: with a PNG fallback the extension must *not* be required. |
-| primase | Writers declare legal component names; partial keeps unknown, full requires all legal (DESIGN §4). DESIGN §7: the v1 glTF writer keeps dialect data in extras next to baked PBR. |
+| primase | Writers declare legal component names; partial keeps unknown, full requires all legal (DESIGN §4). (DESIGN §7's v1 glTF writer keeping dialect data in extras is superseded: no format writer carries (CONTRIBUTING.md, laws 1 and 4).) |
 | verdict | **Adapt: four actions plus an unknown policy.** `Legal` (the writer consumes it), `Dynamic(fn(&World, Entity) -> Result<(), Reason>)` (format and shape limits are per value: skate. takes `core.texture` only in BC1/3/4/5/7; glTF needs a `Transform` "decomposable to TRS" (glTF spec "MUST be decomposable"), so `Sheared` is illegal there; triangle-only targets), `Illegal` (must be lowered), and `Carry` (written through untouched: glTF extras, skate-scene extras, our v2). Unknown names (no action): full conversion = error; partial = the target's `on_unknown` (`Carry` if the format can hold opaque data, else an error; a writer that drops data says so by count, never silently). The search plans on names; `Dynamic` is checked per entity in the final legality check, and a failure there names the entity and the reason. Expose analysis conversion as a dry run: `primase plan --to gltf` prints the pipeline and anything still illegal. |
 
 ## 5. Rewrite patterns and the greedy driver vs explicit passes
@@ -208,7 +208,7 @@ equal (MLIR checks text and bytecode the same way).
 | units, axes | stage metadata `metersPerUnit` (fallback **0.01**, centimetres) and `upAxis` (fallback Y, configurable per site); consumers correct when assembling; "exporters strongly encouraged to always set upAxis" | keep our fixed frame (passes never think about units). Drop `Frame` from the core components table; keep the source frame as a provenance resource. The USD writer **must** author `metersPerUnit = 1` and `upAxis = "Y"` or USD readers take our metres as centimetres |
 | fallbacks | USD `fallbackPrimTypes` stage metadata (older types for older readers); glTF WebP with a PNG fallback is *not* required | "lower and keep": the bake keeps `fromsoft.layered_material` next to `pbr.material`; the writer marks the source `Carry`. That is DESIGN §7's v1 glTF plan, made a legality rule |
 | required vs used | `extensionsRequired` subset of `extensionsUsed`; a loader must fail on a required extension it doesn't know | our opaque carry-through treats every unknown kind as optional. In v2 mark each component table `required` when ignoring it changes the meaning of other data (a quantisation or transform-convention component); unknown + required = read error |
-| extras | free-form app data, no schema, SHOULD be an object | v1 glTF writer: our dialect components as `extras.primase` (keyed by component name and version), never required, so any glTF loader opens the file. A vendor extension only if we ever need loaders to fail on it |
+| extras | free-form app data, no schema, SHOULD be an object | Superseded: no format writer carries (CONTRIBUTING.md, laws 1 and 4); was: v1 glTF writer: our dialect components as `extras.primase` |
 
 ## 10. Proposed edits to DESIGN.md §3-4
 

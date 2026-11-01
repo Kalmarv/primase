@@ -56,7 +56,8 @@ composes them and makes the choices.
   add a floor are explicit settings or parameters of the passes a program picks.
 - **Programs** live in the consumer's repository (a game's conversion program), import primase and compose its
   operations, through the chunked conversion helper (`convert`) or directly. They own the recipe and the choices, and
-  may hold custom steps; useful pieces move into primase later. primase has no library tier for complete recipes.
+  may hold custom steps; useful pieces move into primase later. primase may hold a shared ordered list of passes; every
+  setting in it is the program's.
 - **Writers** write the prepared core and namespaced data they understand, whichever reader it came from. They write
   what they can write: an unsupported feature is omitted and reported, not a failure. They never adapt: baking,
   resizing, generating collision or moving placements is a pass. Encoding prepared data in their format is writing
@@ -102,8 +103,8 @@ hand-worked fixture), never from a second implementation of ours; make it work, 
 
 ## Roles
 
-Every piece of code has one of these roles. Each rule is checked by the normal gates (`cargo clippy ... -D warnings`,
-`cargo test --workspace`) where a check can see it; a lexical check is a guardrail, not proof.
+Every piece of code has one of these roles. Each rule is checked by the checks landing runs (clippy with
+`-D warnings`, the unit and architecture tests) where a check can see it; a lexical check is a guardrail, not proof.
 
 | role | may | may not | checked by |
 |---|---|---|---|
@@ -197,8 +198,8 @@ these crates; primase has no command line. A world crate depends on the toolkit 
 core, never on a format. Each says what it is in its manifest (`[package.metadata.primase] kind`): a `game` crate (a
 game or a game family) or a `destination` crate may depend on its engine family's `engine` crate (`engine = "<package>"`),
 never the other way round, and an engine crate never depends on a game, a destination or a recipe; no other world
-depends on another. A format crate depends on the toolkit, core and `formats/gltf` (the scene writer other formats
-embed; the GLB codec itself is `toolkit/glb`) only. What two of them share belongs lower. Dev-dependencies may add format crates (round-trip gates) and
+depends on another. A format crate depends on the toolkit, core and `formats/gltf` (the GLB codec itself is
+`toolkit/glb`) only. What two of them share belongs lower. Dev-dependencies may add format crates (round-trip gates) and
 `primase-testdata`, which is never a normal dependency.
 
 ### Crates in their own repositories
@@ -282,9 +283,7 @@ tests are what show that. It checks:
 
 It works by name: a function value, a trait object or a macro that reaches I/O is not seen. A module not yet arranged
 carries a migration status in `architecture.toml` (`[[layout]]`, one per module, counted like a break): a new
-violating module fails, and a listed one that follows the layout must be deleted, so the list only shrinks. Crates move
-one at a time: ReSkate first, before step 20; then GTA, Unity, Frostbite and FromSoft, each before the final
-review.
+violating module fails, and a listed one that follows the layout must be deleted, so the list only shrinks.
 
 ### Where code goes
 
@@ -375,12 +374,12 @@ installs, keys, tools, oracle sets and scratch folder are, and how much the heav
 [game-data.example.toml](https://github.com/Kalmarv/primase-testdata/blob/main/game-data.example.toml), placeholder
 paths only). Copy the example to an ignored `game-data.toml` (or keep the private file outside the checkout); never
 commit a populated configuration. A query whose key is not configured prints one `SKIP` line naming the test and the
-key; `[run] require = 'gate'` makes the inputs a change must have fail instead, so run the real-data tests a change
-affects with it and a skipped affected test counts as a failure, not a pass.
+key; `[run] require = 'gate'` makes the inputs a change must have fail instead: landing runs the real-data tests it is
+given that way, so a skipped affected test counts as a failure, not a pass.
 
-The real-data tests run fastest under [cargo-nextest](https://nexte.st) (`cargo nextest run --cargo-profile gate -p
-<crate>`): it runs every test as its own process across all the binaries at once, where `cargo test` runs one binary
-after another. The `gate` profile is release with debug assertions, so the pass checks the test suites rely on
+Landing runs the tests under [cargo-nextest](https://nexte.st), the real-data ones in the `gate` profile: nextest runs
+every test as its own process across all the binaries at once. The `gate` profile is release with debug assertions,
+so the pass checks the test suites rely on
 (`PassManager::pass_checks`: each pass's effects against its declarations, and the verifiers) run on the installs'
 data too; under plain `--release` they are off, and a pass that adds a component it does not declare passes.
 `.config/nextest.toml` weights each test that holds gigabytes of an install by its peak memory, so the tests running at
@@ -408,7 +407,7 @@ The inputs of each crate are in its `tests/inputs/README.md` (for the crates in 
 A reference is independent of the code it checks, or it is a regression baseline of the current route (a frozen
 run of today's code, to show a change altered nothing). Our own old code is neither: an input it produced is not a
 check, so it is not kept. Known coverage gaps, each without an independent reference yet, are stated here rather than
-hidden by skips; build one when a whole-route (step 20) or in-game difference points at its area:
+hidden by skips; build one when a whole-route or in-game difference points at its area:
 
 - FromSoft: texture packages (TPF census and pixels), material definitions and assignments (MTD), Havok map and
   object collision against an independent decoder, the layer bake (grouping, periods, images: the game's layer
@@ -418,7 +417,7 @@ hidden by skips; build one when a whole-route (step 20) or in-game difference po
 - ReSkate: the vertex-blend output (the postcompile stage retargeting Studio's blend keys). `postcompile_vbrecord.rs`
   checks the record stage's I/O on a real compile (declarations, indices, texture coordinates, tangents, positions,
   donor rows, determinism) with our own readers; no independent decode checks the result. The decal retarget is
-  checked in game at step 20 (Legion's blended materials); the two-texture-set retarget has no producer in any route
+  checked in game (Legion's blended materials); the two-texture-set retarget has no producer in any route
   and is unit-tested only.
 - ReSkate: the level-root string repair (`postcompile::levelroot`). `level_root.rs` checks the gate, the repair and the
   writer's layout on a document in the shape of Studio's level root and on Legion's Patch with our own readers; that the
@@ -446,11 +445,11 @@ duplicate keys and typed values). Propose anything else in the pull request, wit
 
 Licence: GPL-3.0-or-later for the whole workspace; dependencies must be GPL-3-compatible.
 
-## Checks before a merge
+## Landing
 
-Toolchain: pinned in `rust-toolchain.toml` (latest stable). `cargo fmt --all --check`,
-`cargo clippy --workspace --all-targets` with no warnings, `cargo test --workspace`. Commit messages say what changed
-and how it was verified: which affected checks ran, and which inputs were missing.
+Toolchain: pinned in `rust-toolchain.toml` (latest stable). Landing is the one check, and no test is run before it: it
+runs `cargo fmt --check`, `cargo clippy --workspace --all-targets` with no warnings, the unit, architecture and
+real-data declaration tests, and the real-data tests named for the change. Commit messages say what changed.
 
 ## Open design questions
 

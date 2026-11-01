@@ -213,7 +213,7 @@ pub fn of(type_id: u32) -> Coverage {
             ),
             _ => (
                 Status::Read,
-                "typed Anvil/core components; see docs/anvil-content-preview.md resource table",
+                "typed Anvil/core components",
             ),
         };
         return Coverage {

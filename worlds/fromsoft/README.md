@@ -925,9 +925,8 @@ the formula differs), *model* (the two do not share a lighting model), *agree* (
 | both games, baked by `bake-fromsoft-materials` | alpha | the previous base texture's alpha at UV0 times the base alpha | the program's discard and blend | arithmetic for a program whose alpha is not that texture's | noticed (`program still discards texels with alpha test disabled` refuses) |
 | both games | vertex colour | Elden Ring material binaries: ignored unless the alpha test reads it; Sekiro: kept only for the layered programs that read it | read by the programs that use it (blend weights, occlusion) | missing for the others | **stated**: a pixel program with a `COLOR` varying is named per material (`pixel program reads a vertex colour ...`); the bake feeds a program's `COLOR0` white and counts `COLOR0 frozen to white` (it was refused). Core has only `VertexColor::Ignored`; there is no field for "multiplies the albedo by it", and the arithmetic of which output a colour reaches is not read |
 
-Why `bake-fromsoft-materials` refuses a material, from the recorded run reports (`scratch/branch-triage/measure/*/report.json`
-and `scratch/primase-reset/copy-cache-evidence/replies.json`: character parts and areas mixed, so the order, not the
-counts, is what to take), most frequent first, and what each needs:
+Why `bake-fromsoft-materials` refuses a material, most frequent first in recorded run reports (character parts and areas
+mixed, so the order, not the counts, is what to take), and what each needs:
 
 | Refusal | Cause | Status |
 |---|---|---|
@@ -943,16 +942,7 @@ counts, is what to take), most frequent first, and what each needs:
 | `vertex program ...: t1/t7: no queries given` | a vertex program that samples a texture | open |
 
 The two fixed rows do not make every Sekiro simple or Elden Ring material bake: a material still stops at the next row it
-meets. Whether Elden Ring's materials now bake is for a rerun to say (`program bake refused` in its notices).
-
-Not done: the tiling rule's 130 unreproduced Sekiro contents. The capture rows (`cbTextureTilingScale`, 483 contents of 58
-programs) the rule's doc cites are not on disk under the names the task gave (`cache/sekiro/cb11-capture` holds the
-texture-scroll buffer, one content, identity), and Elden Ring's `tiling-offline/RECORD.md` is undecided for the Elden branch
-and says so. Classifying the 130 by what differs needs the capture file tied to the install by a census run.
-
-Open rows after this round: the F0 of the simple shaders and the untraced layered programs; roughness and metallic of the
-unclassified and Elden Ring shaders where the bake still refuses (the table above); Elden Ring's normal basis; additive and
-unstated blend modes; forward materials; vertex colours' arithmetic; the tiling rule's residual; and the bake's static frame.
+meets.
 
 ## Consumer normal-map frame
 

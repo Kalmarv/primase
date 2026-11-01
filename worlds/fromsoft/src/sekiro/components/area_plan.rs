@@ -30,14 +30,14 @@ impl AutoRegion {
     pub fn why(&self) -> String {
         format!(
             "the area holds {} drawn parts, more than a read keeps whole (1500): the densest \
-             150 m square, chosen by the lab, holds the most of them ({} parts) and is what is read; \
-             state region to read another (null reads the whole area)",
+             150 m square, chosen by select-fromsoft-area{{region=preview}}, holds the most of them \
+             ({} parts) and is what is read; state region to read another (null reads the whole area)",
             self.parts, self.kept
         )
     }
     pub fn says(&self) -> String {
         format!(
-            "the lab's pick: the densest 150 m square, {} of {} parts",
+            "select-fromsoft-area{{region=preview}}'s pick: the densest 150 m square, {} of {} parts",
             self.kept, self.parts
         )
     }

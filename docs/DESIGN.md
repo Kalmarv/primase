@@ -6,8 +6,8 @@
 means one bespoke tool per pair. primase turns that into plumbing between any input and any output:
 
 - **Readers** take a game's (or a file format's) data and attach what they know to a shared in-memory world.
-- **Writers** take that world and produce an output: a skate. map (via ReSkate), glTF (Blender and other tools), a web
-  world for three.js / react-three-fiber, and later USD, STL/3MF, OBJ, FBX and pen-plotter drawings.
+- **Writers** take that world and produce an output: a skate. map (via ReSkate), glTF (Blender and other tools), and
+  later USD, STL/3MF, OBJ, FBX and pen-plotter drawings.
 - **Passes** transform the world in between: bake layered materials, decode and verify textures, decimate, build
   LODs, split into streaming tiles, stack decals, smooth collision, repair meshes for printing.
 - **A pattern toolkit** holds everything games keep repeating: one `TexFormat` enum for every BC/ETC/ASTC format,
@@ -19,35 +19,18 @@ and writers ask for (section 3).
 
 ## 2. Principles
 
-0. **Roles.** Readers only read, passes transform, writers only write; core holds shared meanings and the pass
-   machinery, the toolkit shared mechanisms; programs, in their consumers' repositories, compose them and make the
-   choices. CONTRIBUTING.md ("The model", "Roles") says what each may and may not do and which check enforces it. Without these roles the plumbing between
-   any input and any output stops being plumbing.
-1. **Small core, open edges.** The core fixes only what everyone must agree on: entities, transforms, meshes,
-   textures, units/axes/handedness, colour space. Game- and target-specific meaning lives in namespaced components.
-2. **Readers attach what they know; writers declare what they need.** Nobody has to model everything.
-3. **Lowering, not lossy import.** Data stays in its richest form until a writer needs a simpler one; then a pass
-   lowers it (FromSoft layered material -> baked PBR) and records what was approximated.
-4. **Correctness is part of the API.** Every decoder has a second, independent decoder or a fixture to check it
-   against; every reader has a census over all of a game's assets; rules like "one name -> one payload" are validators
-   over the world, not ad-hoc scripts. Decoder bugs in widely used community tools (a BC5 decoder that drops the second
-   channel, a BC1 decoder that ignores punch-through alpha) are only ever caught by cross-checking.
-5. **Community tools become test oracles, not dependencies.** Our readers decode the same files as the established
-   community tools (CodeWalker, SoulsFormats, ALERT, Pillow, ReSkate's readers); any difference is a bug in one of
-   them.
-6. **Deterministic.** The same inputs give the same output bytes. Matching an older tool's bytes is not a goal:
-   outputs are compared with references by meaning.
+The laws in CONTRIBUTING.md ("The laws") are primase's principles.
 
 ## 3. The world: core plus components
 
 **Storage:** an entity-component store (entities + typed components + queries). **Our own small store** (`core/src/world.rs`), not `hecs`: every column iterates in entity order, so output is a function of
-the world's contents (determinism, principle 6); components carry a stable namespaced name and a schema version
+the world's contents (determinism); components carry a stable namespaced name and a schema version
 (serialisation and pass declarations use the name); unknown components are held as opaque values (JSON or bytes),
 which core's own serialisation writes back untouched; ids are never reused. A reader spawns entities and attaches components; a pass queries
 `(Mesh, LayeredMaterial)` and inserts `BakedPbr`.
 
 **Registry, verification, references** (from MLIR, see `docs/research/MLIR.md`). Each crate
-registers its components in a `Registry` (`pub fn register(reg: &mut Registry)`; the CLI composes them): name, schema
+registers its components in a `Registry` (`pub fn register(reg: &mut Registry)`; a program composes them): name, schema
 version, required/optional, verifier, entity-reference visitor, text codec. A value whose namespace is registered but
 whose name or version is unknown is an error, never an opaque component; opaque components are for namespaces this
 build doesn't know. Entities stay untyped ("has a"); **roles are checked, not stored**: the core verifier enforces the
@@ -172,15 +155,9 @@ repositories"). Bindings for other languages (python through pyo3, C# through cs
 **The crate rule.** Each game becomes its own crate (`worlds/sekiro`, `worlds/gta`, ...), and patterns that recur
 across games become core or toolkit functions: the second time a game crate needs something another game already has
 (a codec, a container walk, a vertex decode, a transform convention, a hash), it moves to the toolkit with a gate and
-both games call it. A game crate ends up mostly composition: format specifics plus calls into the toolkit. Likewise a
-CLI is a few dozen lines of reader + passes + writer; if it needs more than piping, the missing piece belongs in a
-crate. Dependencies point down only (`worlds/formats -> toolkit -> core`); world crates never
+both games call it. A game crate ends up mostly composition: format specifics plus calls into the toolkit. Dependencies point down only (`worlds/formats -> toolkit -> core`); world crates never
 depend on each other or on formats, and formats depend on no format but `formats/gltf` (CONTRIBUTING.md). `TexFormat` lives in core (a `Texture` component holds one); its codecs live in `toolkit/texcodec`. Crates are
 two-way where it makes sense: a `reskate` reader lets a skate. map round-trip or go to Blender.
-
-**Scope of this repository.** It holds library crates, thin CLIs and small examples only. Applications that consume
-primase output (viewers, editors, services) live in their own repositories and depend on documented output formats,
-not on this repository's internals.
 
 **Dependencies: small, focused, maintained crates that do one job well; no umbrella crates.** Each sits behind our own
 trait (`TexDecoder`, `Compressor`, ...), so swapping it is local, and each is held to the same gates as our code.
@@ -203,13 +180,6 @@ area holds 22-82 MB of GLB, but one tile of a whole GTA city 1.1-1.7 GB (six til
 than a whole-scene load should hold. That laziness is to move behind the `core.mesh` interface (a loader filling
 `core.mesh` per band) rather than stay a second input. The two paths are checked to write the same map.
 
-**The web writer** is the glTF writer plus a web lowering: KTX2 (Basis Universal) textures, meshopt-compressed and
-quantised vertices (`EXT_meshopt_compression`), prototypes and placements as `EXT_mesh_gpu_instancing` (three.js
-`InstancedMesh`), baked PBR as `MeshStandardMaterial`, one GLB per 200 m tile with a distance-based tile loader,
-collision soups for `@react-three/rapier`. The web writer is its own writer: what the viewer needs beyond glTF's
-standard (grind curves, spawns, markers, provenance) is web's own data, produced by web passes and encoded by web's
-writer through the glTF writer's extension hook, never by the generic glTF writer.
-
 **The plotter writer** (later) hands a world to a hidden-line renderer to draw it as pen-plotter lines: silhouette and
 crease edges picked by dihedral angle, optional hatching from baked colour or normals, per-material pens.
 
@@ -224,25 +194,17 @@ crease edges picked by dihedral angle, optional hatching from baked colour or no
 - **World validators:** identity rules ("texture name -> one image", "EBX name -> one partition"), frame sanity,
   non-finite and degenerate checks.
 
-Real data never enters the repository: tests read installs from documented environment variables and skip when they
-are unset (CONTRIBUTING.md).
+Real data never enters the repository: tests read it through `GAME_DATA` (CONTRIBUTING.md, "Fixtures and real
+data").
 
 ## 7. Roadmap
 
-**v1.** Readers: Forza Horizon 6, a Unity game, Sekiro, GTA V (from existing scene-interchange folders first). Writers:
-ReSkate (skate. maps), Blender via generic glTF (the baked PBR materials and group empties; what glTF has no form
-for is reported), and three.js / react-three-fiber (the web writer).
-
-**After v1:** Sunset Overdrive, Sonic Adventure 2, STL/3MF, the plotter writer, and rich Blender output: the games'
+**Later:** Sunset Overdrive, Sonic Adventure 2, STL/3MF, the plotter writer, and rich Blender output: the games'
 real material setups (layered materials, shading recipes, spec/normal workflows) rebuilt as Blender node trees: its
 own writer, which may build on the glTF writer, fed by Blender passes from core and the games' namespaced data.
-Also after v1: a **native skate. level writer** that writes the game's own level data directly instead of going
+Also later: a **native skate. level writer** that writes the game's own level data directly instead of going
 through ReSkate Studio: first test fixtures, deterministic identities and a round-trip harness, then replacing one
 mesh in a small test level and loading it in game.
-
-Order of work: M0 core + scene-interchange read/write; M1 glTF; M2 the toolkit pieces with their gates (texcodec, dds,
-image, compress, hash, vertex, meshops); M3 the ReSkate writer; M4+ world readers one at a time, each
-differential-tested against the tool it replaces.
 
 ## 8. Licence
 
