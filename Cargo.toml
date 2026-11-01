@@ -59,7 +59,7 @@ ruzstd = { version = "=0.7.3", default-features = false, features = ["std", "has
 libloading = { version = "=0.9.0", default-features = false, features = ["std"] }
 oozextract = { version = "=0.5.7", default-features = false, features = ["verbose_errors"] }
 primase-core = { path = "core" }
-primase-testdata = { git = "https://github.com/Kalmarv/primase-testdata", rev = "9140fb245f4a75f25d1690131cc33d6119771e6e" }
+primase-testdata = { git = "https://github.com/Kalmarv/primase-testdata", rev = "6f6ff1b3bddd65c2351763e4ce650e12819074ad" }
 primase-texcodec = { path = "toolkit/texcodec" }
 primase-dds = { path = "toolkit/dds" }
 primase-image = { path = "toolkit/image" }
@@ -71,7 +71,7 @@ primase-exactsum = { path = "toolkit/exactsum" }
 dxcontainer = { git = "https://github.com/Kalmarv/dx", rev = "39883bd084ad1db1f66416f41b25cf2529f9eec1" }
 rsx-reader = { git = "https://github.com/Kalmarv/dx", rev = "39883bd084ad1db1f66416f41b25cf2529f9eec1" }
 primase-cache = { path = "toolkit/cache" }
-havok-cloth = { git = "https://github.com/Kalmarv/havok-cloth", rev = "6cac84de4723ab8590b3b033ac4a46f55bc7a46e" }
+havok-cloth = { git = "https://github.com/Kalmarv/havok-cloth", rev = "c68c5cba8560f76147f230dd672d2a5c63c82c84" }
 havok-formats = { git = "https://github.com/Kalmarv/havok-formats", rev = "eb2aba273217c2ece6e5a59981ddfd6b41a02497" }
 primase-havok = { path = "toolkit/havok" }
 morpheme-formats = { git = "https://github.com/Kalmarv/morpheme-formats", rev = "187d8827c679eca818707036e8678657ad029628" }
