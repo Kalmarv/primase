@@ -10,8 +10,7 @@ use primase_core::pbr::TextureSlot;
 use primase_core::{LodChoice, SelectLod};
 use primase_forzatech::passes::{
     BakeForzaSwatchTint, CollideForzaDrawn, Ground, LowerForzaMaterials, LowerForzaPlanarUv, SeeThrough,
-    SelectForzaDrawn,
-    SelectForzaMainView,
+    SelectForzaDrawn, SelectForzaMainView,
 };
 use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
