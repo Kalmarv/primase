@@ -279,7 +279,12 @@ pub const BIND_FROMSOFT_ANIMATION: PassSpec = PassSpec {
             "assembly",
             "the target skeleton's name, or assembly: the character's skeleton assemble-character recorded",
         ),
-        OptionSpec::required("tolerance", "0.001", "rest agreement in model units"),
+        OptionSpec::required(
+            "tolerance",
+            "0.0001",
+            "rest agreement in model units; with to=assembly, the larger of this and the rest tolerance the assembly \
+             records (its skeleton's rests are only as exact as the parts were related)",
+        ),
         OptionSpec::required(
             "empty",
             "model-space",
@@ -376,6 +381,7 @@ impl Pass for BindFromSoftAnimation {
         &[primase_core::Clip::NAME]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        log.count(&self.target(w)?.says(), 1);
         let steps = self.expansion(w)?;
         let mut registry = primase_core::pass::PassRegistry::new();
         registry.add(&primase_havok::world::LOWER_HAVOK_CLIPS);
@@ -710,25 +716,62 @@ impl Pass for SelectFromSoftCharacterRead {
 /// `bind-fromsoft-animation{to=assembly}`: the clips bind onto the character's skeleton assemble-character recorded.
 pub const TO_ASSEMBLY: &str = "assembly";
 
+/// What `bind-fromsoft-animation` binds onto: the target skeleton and the rest tolerance its joints correspond at.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BindTarget {
+    pub skeleton: String,
+    pub tolerance: f64,
+    /// Whether the tolerance is the assembly's rests' (larger than the binding's own), not the binding's.
+    pub assembly_rests: bool,
+}
+
+impl BindTarget {
+    /// Which tolerance applied, as the pass's log says it: `tolerance 0.001: the assembly's rests`.
+    pub fn says(&self) -> String {
+        let whose = if self.assembly_rests {
+            "the assembly's rests"
+        } else {
+            "the binding's"
+        };
+        format!("tolerance {}: {whose}", self.tolerance)
+    }
+}
+
 impl BindFromSoftAnimation {
-    /// The target skeleton's name: `to`, or with `to=assembly` the character's skeleton `assemble-character` recorded in
-    /// `w` (refused where none did).
-    pub fn target(&self, w: &World) -> Result<String, String> {
+    /// The target: `to` at the binding's tolerance, or with `to=assembly` the character's skeleton
+    /// `assemble-character` recorded in `w` (refused where none did) at the larger of the binding's tolerance and the
+    /// rest tolerance the assembly records, its skeleton's rests being no more exact than that.
+    pub fn target(&self, w: &World) -> Result<BindTarget, String> {
         if self.to != TO_ASSEMBLY {
-            return Ok(self.to.clone());
+            return Ok(BindTarget {
+                skeleton: self.to.clone(),
+                tolerance: self.tolerance,
+                assembly_rests: false,
+            });
         }
-        w.resource::<primase_animation::AssembledCharacter>()
-            .map(|assembled| assembled.skeleton.clone())
-            .ok_or_else(|| {
-                "to=assembly: no assemble-character recorded the character's skeleton (animation.assembled_character)"
-                    .to_owned()
-            })
+        let assembled = w.resource::<primase_animation::AssembledCharacter>().ok_or_else(|| {
+            "to=assembly: no assemble-character recorded the character's skeleton (animation.assembled_character)"
+                .to_owned()
+        })?;
+        let (tolerance, assembly_rests) = match assembled.rest_tolerance {
+            Some(rests) if rests > self.tolerance => (rests, true),
+            _ => (self.tolerance, false),
+        };
+        Ok(BindTarget {
+            skeleton: assembled.skeleton.clone(),
+            tolerance,
+            assembly_rests,
+        })
     }
 
     /// Diagnostic expansion of this registered operation. Programs run the operation, never branch on this text.
     pub fn expansion(&self, w: &World) -> Result<Vec<String>, String> {
-        let to = self.target(w)?;
-        let counts = primase_animation::correspond::hierarchy_counts(w, &self.from, &to, self.tolerance);
+        let BindTarget {
+            skeleton: to,
+            tolerance,
+            ..
+        } = self.target(w)?;
+        let counts = primase_animation::correspond::hierarchy_counts(w, &self.from, &to, tolerance);
         let model_space = counts.is_some_and(|c| c.paired == 0) && self.empty == "model-space";
         let (parents, rests, reparented) = if model_space {
             ("any", "source", "model-space")
@@ -745,8 +788,8 @@ impl BindFromSoftAnimation {
                 self.absent, self.rate, self.root_motion, self.clips
             ),
             format!(
-                "correspond-skeletons{{from={},to={to},tolerance={},parents={parents}}}",
-                self.from, self.tolerance
+                "correspond-skeletons{{from={},to={to},tolerance={tolerance},parents={parents}}}",
+                self.from
             ),
             format!(
                 "map-clip{{unmapped={},rests={rests},reparented={reparented}}}",
@@ -788,6 +831,61 @@ mod binding_contract {
                 ]
             );
         }
+    }
+
+    /// With `to=assembly` the clips bind onto the recorded skeleton at the larger of the binding's tolerance and the
+    /// assembly's rest tolerance, and the pass says which; one part (no rest tolerance) and a named target bind at the
+    /// binding's own.
+    #[test]
+    fn an_assembly_binds_no_finer_than_its_rests() {
+        let bind = |to: &str| BindFromSoftAnimation {
+            from: "c0000 havok skeleton".into(),
+            to: to.into(),
+            tolerance: 0.0001,
+            empty: "model-space".into(),
+            absent: "neutral".into(),
+            rate: 1,
+            root_motion: "leave".into(),
+            clips: "a000_000000".into(),
+            unmapped: "drop".into(),
+            parents: "same".into(),
+            rests: "target".into(),
+            reparented: "refuse".into(),
+        };
+        let world = |rest_tolerance: Option<f64>| {
+            let mut w = World::new();
+            w.insert_resource(primase_animation::AssembledCharacter {
+                skeleton: "assembled skeleton".into(),
+                rest_tolerance,
+            });
+            w
+        };
+        let assembled = bind(TO_ASSEMBLY).target(&world(Some(0.001))).unwrap();
+        assert_eq!(
+            (assembled.skeleton.as_str(), assembled.tolerance, assembled.says()),
+            (
+                "assembled skeleton",
+                0.001,
+                "tolerance 0.001: the assembly's rests".to_owned()
+            )
+        );
+        assert!(
+            bind(TO_ASSEMBLY).expansion(&world(Some(0.001))).unwrap()[1]
+                .contains("to=assembled skeleton,tolerance=0.001,")
+        );
+        let one_part = bind(TO_ASSEMBLY).target(&world(None)).unwrap();
+        assert_eq!(
+            (one_part.tolerance, one_part.says()),
+            (0.0001, "tolerance 0.0001: the binding's".to_owned())
+        );
+        let finer = bind(TO_ASSEMBLY).target(&world(Some(0.00001))).unwrap();
+        assert_eq!((finer.tolerance, finer.assembly_rests), (0.0001, false));
+        let named = bind("c0000 skeleton").target(&world(Some(0.001))).unwrap();
+        assert_eq!(
+            (named.skeleton.as_str(), named.tolerance),
+            ("c0000 skeleton", 0.0001)
+        );
+        assert!(bind(TO_ASSEMBLY).target(&World::new()).is_err());
     }
 
     #[test]

@@ -92,8 +92,10 @@
 //! No part at all is refused: nothing was read to assemble.
 //!
 //! **The result** is recorded ([`AssembledCharacter`], `animation.assembled_character`): the name of the character's
-//! skeleton, the assembled one (`<name> skeleton`) or, for one part, that part's. What binds clips onto the character
-//! reads it there, never from a name it composes.
+//! skeleton, the assembled one (`<name> skeleton`) or, for one part, that part's, and the rest tolerance that skeleton
+//! is good to: the assembled rests are only as exact as the `tolerance` the parts were related at, and one part's are
+//! its own (none). What binds clips onto the character reads it there, never from a name it composes, and binds at no
+//! finer tolerance than the skeleton's rests hold.
 //!
 //! The six original options are required; `leave-out-marked=` and `reference-tolerance=` are optional. Approximations, reported: joints whose rests differ within the
 //! tolerance, the vertex displacement measure of `own`, the inverse binds `assembled` moves, and sockets of one name two
@@ -153,10 +155,13 @@ pub enum WeightedRests {
 }
 
 /// What `assemble-character` made of the parts (`animation.assembled_character`): the name of the character's
-/// skeleton, the one clips bind onto.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+/// skeleton, the one clips bind onto, and the rest tolerance it is good to.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct AssembledCharacter {
     pub skeleton: String,
+    /// How far the skeleton's rests may stand from a part's: the `tolerance` the parts were related at, for an
+    /// assembly of several; none for one part, whose skeleton is its own and whose rests are as stored.
+    pub rest_tolerance: Option<f64>,
 }
 
 impl Resource for AssembledCharacter {
@@ -959,7 +964,10 @@ impl Pass for AssembleCharacter {
                 .clone();
             log.count(&format!("parts: 1 ({}), nothing to relate", part.label), 1);
             log.count("held objects left out (leave-out-marked=)", left_out);
-            w.insert_resource(AssembledCharacter { skeleton });
+            w.insert_resource(AssembledCharacter {
+                skeleton,
+                rest_tolerance: None,
+            });
             return Ok(());
         }
         let reference = add_reference(&mut parts, w)?;
@@ -1104,6 +1112,7 @@ impl Pass for AssembleCharacter {
         w.insert(assembled, Name(format!("{} skeleton", self.name)));
         w.insert_resource(AssembledCharacter {
             skeleton: format!("{} skeleton", self.name),
+            rest_tolerance: Some(self.tolerance),
         });
         w.insert(assembled, skeleton);
         let sockets = self.carry_sockets(w, &parts, &of, log)?;
@@ -2290,11 +2299,12 @@ mod tests {
         let report = run(&mut w, &held).unwrap();
         let log = &report.steps[0].log;
         assert_eq!(log.counts["held objects left out (leave-out-marked=)"], 2);
-        // the character's skeleton is recorded under the stated name
+        // the character's skeleton is recorded under the stated name, good to the tolerance the parts were related at
         assert_eq!(
             w.resource::<AssembledCharacter>(),
             Some(&AssembledCharacter {
-                skeleton: "hero skeleton".into()
+                skeleton: "hero skeleton".into(),
+                rest_tolerance: Some(0.001),
             })
         );
         assert_eq!(log.counts["parts assembled"], 2);
@@ -2360,7 +2370,8 @@ mod tests {
         assert_eq!(
             w.resource::<AssembledCharacter>(),
             Some(&AssembledCharacter {
-                skeleton: "body skeleton".into()
+                skeleton: "body skeleton".into(),
+                rest_tolerance: None,
             })
         );
         let root = w.iter::<Asset>().next().unwrap().0;
