@@ -366,6 +366,26 @@ fn same_corners(a: &Tri, b: &Tri, tol: f64) -> bool {
 /// Runs every check over `level`, each section's class taken from `classes` by its material key (a key absent from
 /// it: [`Class::Other`]); see the module documentation.
 pub fn check(level: &Level, classes: &BTreeMap<u64, Class>, limits: &Limits) -> Report {
+    let threads = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(MAX_THREADS);
+    check_threads(level, classes, limits, threads)
+}
+
+/// The most threads [`check`] runs tiles on: each holds one tile's triangles and their index (a dense city tile's
+/// million triangles take a few hundred megabytes).
+pub const MAX_THREADS: usize = 16;
+
+/// [`check`] on `threads` threads (at least one). Tiles are checked independently, then merged in tile order, so the
+/// report does not depend on the thread count: a tile's checks at both finest LODs first, every tile's, then the
+/// decal-class pairs at other LODs ([`Tile::lod_pair`]), which need to know, from every tile, which placements back
+/// which.
+pub fn check_threads(
+    level: &Level,
+    classes: &BTreeMap<u64, Class>,
+    limits: &Limits,
+    threads: usize,
+) -> Report {
     let mut report = Report {
         unresolved: level
             .unresolved
@@ -394,13 +414,156 @@ pub fn check(level: &Level, classes: &BTreeMap<u64, Class>, limits: &Limits) -> 
             }
         }
     }
-    let class_of_key = |k: u64| classes.get(&k).copied().unwrap_or(Class::Other);
+    let tiles: Vec<((i64, i64), Vec<u32>)> = tiles.into_iter().collect();
+    let make = |k: usize| {
+        let ((tx, tz), members) = &tiles[k];
+        Tile::new(level, &placements, classes, limits, pad, (*tx, *tz), members)
+    };
+    // the checks at both finest LODs (and between depth-writing LODs), each tile's own
+    let first: Vec<Option<TileOut>> = on_threads(tiles.len(), threads, |k| {
+        let here = make(k)?;
+        let mut out = TileOut::default();
+        let mut near = Vec::new();
+        let mut deferred = Vec::new();
+        for i in 0..here.items.len() {
+            if !here.owns(i) {
+                continue;
+            }
+            *out.triangles.entry(here.items[i].class).or_default() += 1;
+            if !here.index.listed(i) {
+                out.unindexed += 1;
+            }
+            here.check_one(i, &mut near, &mut out.tally, &mut deferred);
+        }
+        out.deferred = deferred;
+        Some(out)
+    });
     let mut tally = Tally::default();
-    let (mut near, mut deferred) = (Vec::new(), Vec::new());
-    for ((tx, tz), members) in &tiles {
-        let (x0, z0) = (*tx as f64 * limits.tile, *tz as f64 * limits.tile);
+    let mut deferred: Vec<(usize, Vec<(usize, usize)>)> = Vec::new();
+    for (k, out) in first.into_iter().enumerate() {
+        let Some(out) = out else { continue };
+        for (class, n) in out.triangles {
+            *report.triangles.entry(class).or_default() += n;
+        }
+        report.unindexed += out.unindexed;
+        tally.absorb(out.tally);
+        if !out.deferred.is_empty() {
+            deferred.push((k, out.deferred));
+        }
+    }
+    // a decal-class layer against depth-writing surfaces at LODs other than both finest, once every tile has found
+    // which placements are its bases
+    let bases = std::mem::take(&mut tally.bases);
+    let second: Vec<Option<Tally>> = on_threads(deferred.len(), threads, |d| {
+        let (k, pairs) = &deferred[d];
+        let here = make(*k).expect("a tile that deferred pairs has items");
+        let mut out = Tally::default();
+        for &(i, j) in pairs {
+            here.lod_pair(i, j, &bases, &mut out);
+        }
+        Some(out)
+    });
+    for out in second.into_iter().flatten() {
+        tally.absorb(out);
+    }
+    for f in tally.findings.values_mut() {
+        prune(&mut f.top);
+    }
+    report.findings = tally.findings;
+    report
+}
+
+/// `f(k)` for every `k` below `n`, on up to `threads` threads, in `k` order.
+fn on_threads<T: Send>(n: usize, threads: usize, f: impl Fn(usize) -> Option<T> + Sync) -> Vec<Option<T>> {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut done: Vec<(usize, Option<T>)> = std::thread::scope(|s| {
+        let workers: Vec<_> = (0..threads.clamp(1, n.max(1)))
+            .map(|_| {
+                s.spawn(|| {
+                    let mut mine = Vec::new();
+                    loop {
+                        let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if k >= n {
+                            return mine;
+                        }
+                        mine.push((k, f(k)));
+                    }
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|w| w.join().expect("a tile's checks do not panic"))
+            .collect()
+    });
+    done.sort_by_key(|(k, _)| *k);
+    done.into_iter().map(|(_, t)| t).collect()
+}
+
+/// What one tile's checks at both finest LODs gather.
+#[derive(Default)]
+struct TileOut {
+    triangles: BTreeMap<Class, u64>,
+    unindexed: u64,
+    tally: Tally,
+    /// (decal-class item, depth-writing item) pairs at other LODs, for [`Tile::lod_pair`].
+    deferred: Vec<(usize, usize)>,
+}
+
+/// What the checks gather.
+#[derive(Default)]
+struct Tally {
+    findings: BTreeMap<Check, Finding>,
+    /// (decal-class placement, depth-writing placement) where the second backs the first at both finest LODs.
+    bases: BTreeSet<(u32, u32)>,
+}
+
+impl Tally {
+    /// Another tile's findings and bases added: areas and counts summed, offenders kept by area.
+    fn absorb(&mut self, other: Tally) {
+        for (check, f) in other.findings {
+            let mine = self.findings.entry(check).or_default();
+            mine.area_m2 += f.area_m2;
+            mine.pairs += f.pairs;
+            for (mesh, a) in f.by_mesh {
+                *mine.by_mesh.entry(mesh).or_default() += a;
+            }
+            for o in f.top {
+                keep(&mut mine.top, o);
+            }
+        }
+        self.bases.extend(other.bases);
+    }
+}
+
+/// One tile's triangles (every one reaching the padded tile) and their index.
+struct Tile<'a> {
+    level: &'a Level,
+    placements: &'a [Placed],
+    items: Vec<Item>,
+    tris: Vec<Tri>,
+    index: Index,
+    limits: &'a Limits,
+    /// The tile's own square, horizontally: `x0 <= x < x1`, `z0 <= z < z1`.
+    x: (f64, f64),
+    z: (f64, f64),
+}
+
+impl<'a> Tile<'a> {
+    /// Tile `(tx, tz)`: the triangles of `members` (placements) reaching it padded by `pad`, of the classes the checks
+    /// look at; `None` when only the game's own meshes do (it holds nothing the build put there).
+    fn new(
+        level: &'a Level,
+        placements: &'a [Placed],
+        classes: &BTreeMap<u64, Class>,
+        limits: &'a Limits,
+        pad: f64,
+        (tx, tz): (i64, i64),
+        members: &[u32],
+    ) -> Option<Tile<'a>> {
+        let (x0, z0) = (tx as f64 * limits.tile, tz as f64 * limits.tile);
         let (x1, z1) = (x0 + limits.tile, z0 + limits.tile);
-        // the triangles reaching the padded tile
+        let class_of_key = |k: u64| classes.get(&k).copied().unwrap_or(Class::Other);
         let mut items: Vec<Item> = Vec::new();
         for &pi in members {
             let p = &level.placements[pi as usize];
@@ -442,65 +605,30 @@ pub fn check(level: &Level, classes: &BTreeMap<u64, Class>, limits: &Limits) -> 
                 }
             }
         }
-        // a tile of the game's meshes alone holds nothing the build put there
         if items.iter().all(|i| i.stock) {
-            continue;
+            return None;
         }
         let tris: Vec<Tri> = items.iter().map(|i| i.tri).collect();
         let index = Index::new(&tris, 1.0, pad);
-        let here = Tile {
+        Some(Tile {
             level,
-            placements: &placements,
+            placements,
             items,
             tris,
             index,
             limits,
-        };
-        deferred.clear();
-        for (i, t) in here.items.iter().enumerate() {
-            let centroid: [f64; 3] =
-                std::array::from_fn(|a| (t.tri.c[0][a] + t.tri.c[1][a] + t.tri.c[2][a]) / 3.0);
-            if !(x0..x1).contains(&centroid[0]) || !(z0..z1).contains(&centroid[2]) {
-                continue;
-            }
-            *report.triangles.entry(t.class).or_default() += 1;
-            if !here.index.listed(i) {
-                report.unindexed += 1;
-            }
-            here.check_one(i, &mut near, &mut tally, &mut deferred);
-        }
-        // a decal-class layer against depth-writing surfaces at LODs other than both finest, once the tile has found
-        // which placements are its bases
-        for &(i, j) in &deferred {
-            here.lod_pair(i, j, &mut tally);
-        }
+            x: (x0, x1),
+            z: (z0, z1),
+        })
     }
-    for f in tally.findings.values_mut() {
-        prune(&mut f.top);
+
+    /// Whether item `i` is this tile's to check: its centroid lies in the tile's own square.
+    fn owns(&self, i: usize) -> bool {
+        let c = &self.items[i].tri.c;
+        let centroid = |a: usize| (c[0][a] + c[1][a] + c[2][a]) / 3.0;
+        (self.x.0..self.x.1).contains(&centroid(0)) && (self.z.0..self.z.1).contains(&centroid(2))
     }
-    report.findings = tally.findings;
-    report
-}
 
-/// What the checks gather.
-#[derive(Default)]
-struct Tally {
-    findings: BTreeMap<Check, Finding>,
-    /// (decal-class placement, depth-writing placement) where the second backs the first at both finest LODs.
-    bases: BTreeSet<(u32, u32)>,
-}
-
-/// One tile's triangles (every one reaching the padded tile) and their index.
-struct Tile<'a> {
-    level: &'a Level,
-    placements: &'a [Placed],
-    items: Vec<Item>,
-    tris: Vec<Tri>,
-    index: Index,
-    limits: &'a Limits,
-}
-
-impl Tile<'_> {
     /// Records a finding of triangle `t`, against `other` when it is a pair.
     #[allow(clippy::too_many_arguments)]
     fn add(
@@ -774,7 +902,7 @@ impl Tile<'_> {
     /// coarser base dropping below the layer is not checked: the layer still draws over it (the base sets the stencil
     /// behind it), and from that far its lift does not show. Against any other surface, one in front within the cover
     /// reach leaks through it, as at the finest LODs.
-    fn lod_pair(&self, i: usize, j: usize, tally: &mut Tally) {
+    fn lod_pair(&self, i: usize, j: usize, bases: &BTreeSet<(u32, u32)>, tally: &mut Tally) {
         let limits = self.limits;
         let (t, u) = (&self.items[i], &self.items[j]);
         let frame = Frame::of(&t.tri);
@@ -800,7 +928,7 @@ impl Tile<'_> {
             together(a, usize::from(t.lod), b, usize::from(u.lod)).unwrap_or(0.0)
         };
         let hidden = limits.behind.max(limits.bias_per_metre * nearest);
-        let reach = if tally.bases.contains(&(t.placement, u.placement)) {
+        let reach = if bases.contains(&(t.placement, u.placement)) {
             limits.reach
         } else {
             cover

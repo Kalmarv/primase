@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_reskate::postcompile::layers::{Check, Class, Limits, Report, check};
+use primase_reskate::postcompile::layers::{Check, Class, Limits, Report, check, check_threads};
 use primase_reskate::postcompile::level::{Level, Mesh, Placement, Section};
 
 const OPAQUE: u64 = 1;
@@ -178,4 +178,57 @@ fn overlapping_decals_need_boxes_apart_along_the_normal_behind_the_surface() {
         ("b", up(28.0, 1), [1.0, 0.0, -1.0]),
     ]));
     assert!(r.findings[&Check::Order].area_m2 > 3.9);
+}
+
+/// The report does not depend on the thread count: a base spanning nine tiles, decals across tile borders (on it,
+/// under it, under a cover, floating, alone), a fight, and a two-LOD decal whose coarse LOD sinks into the base, whose
+/// base is found in another tile than the one the coarse pair is checked in.
+#[test]
+fn the_report_is_the_same_on_one_thread_and_many() {
+    let mut l = level(vec![
+        ("base", square(150.0, 0.0, 30, OPAQUE), [-10.0, 0.0, 10.0]),
+        ("on", square(4.0, 0.0, 2, DECAL), [62.0, 0.0, -10.0]),
+        ("under", square(3.0, -0.0005, 3, DECAL), [126.0, 0.0, -62.0]),
+        ("covered", square(2.0, 0.0, 2, DECAL), [20.0, 0.0, -63.0]),
+        ("cover", square(1.0, 0.05, 1, OPAQUE), [20.5, 0.0, -63.5]),
+        ("floating", square(2.0, 0.02, 2, DECAL), [100.0, 0.0, -100.0]),
+        ("alone", square(2.0, 0.0, 2, DECAL), [300.0, 0.0, 0.0]),
+        ("top", square(2.0, 0.0002, 3, OPAQUE), [63.0, 0.0, -127.0]),
+    ]);
+    // a decal at LOD 0 on the base, its LOD 1 a little under it, straddling the tile border at x = 64
+    l.meshes.push(Mesh {
+        name: "lodded".into(),
+        lods: vec![
+            vec![square(4.0, 0.001, 2, DECAL)],
+            vec![square(4.0, -0.01, 1, DECAL)],
+        ],
+        lod_distances: Some(vec![30.0]),
+        lod_group: None,
+        stock: false,
+    });
+    l.placements.push(Placement {
+        mesh: l.meshes.len() - 1,
+        rows: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        trans: [62.5, 0.0, -30.0],
+        document: "level".into(),
+    });
+    let classes = BTreeMap::from([(OPAQUE, Class::DepthWriting), (DECAL, Class::Decal)]);
+    let one = check_threads(&l, &classes, &Limits::default(), 1);
+    for threads in [2, 8] {
+        assert_eq!(
+            check_threads(&l, &classes, &Limits::default(), threads),
+            one,
+            "{threads} threads"
+        );
+    }
+    for c in [
+        Check::Behind,
+        Check::Covered,
+        Check::Floating,
+        Check::Unbacked,
+        Check::DepthWriting,
+        Check::Lod,
+    ] {
+        assert!(one.findings.contains_key(&c), "{c:?}: {:?}", one.findings.keys());
+    }
 }
