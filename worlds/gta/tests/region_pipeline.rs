@@ -54,7 +54,9 @@ fn every_named_region_through_the_gta_passes() {
     registry.add(&primase_image::NORMALIZE_NORMALS);
     primase_gta::register(&mut registry);
     let pipeline = registry.parse(PART).expect("part passes");
-    let manager = PassManager::new(registry);
+    let manager = PassManager::new(registry).with_settings(primase_core::pass::Settings {
+        threads: primase_core::parallel::Threads::ONE,
+    });
     for (name, region) in REGIONS {
         if only.as_deref().is_some_and(|o| o != *name) {
             continue;

@@ -70,7 +70,9 @@ fn layered_terrain_is_left_out_of_the_generic_gltf_and_counted() -> Result<()> {
     primase_image::register(&mut registry);
     primase_gta::register(&mut registry);
     primase_gltf::register(&mut registry);
-    let m = PassManager::new(registry);
+    let m = PassManager::new(registry).with_settings(primase_core::pass::Settings {
+        threads: primase_core::parallel::Threads::ONE,
+    });
     let w = vespucci(&m, &source)?;
     let layered: Vec<(Entity, &LayeredMaterial)> = w.iter::<LayeredMaterial>().collect();
     let per_pixel = layered

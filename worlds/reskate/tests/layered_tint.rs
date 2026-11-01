@@ -150,6 +150,9 @@ fn run(w: &mut World) -> (PassLog, PassLog) {
     w.insert_resource(SkateScene::default());
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .with_pass_checks(true)
         .run(w, &pipeline, &mut report)
         .unwrap();

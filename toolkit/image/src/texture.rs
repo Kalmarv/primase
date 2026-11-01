@@ -139,7 +139,8 @@ pub fn texture_level_rgba8_with(threads: Threads, t: &Texture, level: usize) -> 
 /// Every stored mip is decoded to RGBA8; alpha
 /// and colour-space metadata stay unchanged. Already-conforming textures remain
 /// byte-identical and keep file provenance. Missing normal metadata is an error. The textures are converted on the
-/// world's stated threads (`core.threads`, one texture per thread at a time): the same result on any count.
+/// world's stated threads (`core.threads`, one texture per thread at a time; refused where it states none): the
+/// same result on any count.
 pub fn normalize_normals(world: &mut World) -> Result<PassLog> {
     let mut log = PassLog::default();
     let mut todo = Vec::<(Entity, &Texture, NormalConvention)>::new();
@@ -153,7 +154,7 @@ pub fn normalize_normals(world: &mut World) -> Result<PassLog> {
     }
     // each texture converted on its own (at most the stated threads at once), the counts added in the textures' order
     let converted = primase_foundations::parallel::map(
-        primase_core::parallel::threads(world),
+        primase_core::parallel::threads(world)?,
         &todo,
         |_, &(_, t, convention)| convert_normals(t, convention),
     )
@@ -363,6 +364,9 @@ impl Pass for NormalizeNormals {
         "normalize-normals"
     }
     // no `requires`: a world without textures (a part of a conversion with none) has nothing to convert
+    fn settings(&self) -> &[primase_core::pass::Setting] {
+        &[primase_core::parallel::THREADS]
+    }
     fn modifies(&self) -> &[&'static str] {
         &["core.texture"]
     }

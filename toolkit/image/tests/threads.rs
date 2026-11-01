@@ -50,11 +50,9 @@ fn texture(w: u32, h: u32, levels: usize, bc1: bool, seed: u32, role: TexRole) -
     }
 }
 
-/// The world after `pass` with `threads` stated (none: absent), and the run's report.
-fn after(mut w: World, threads: Option<usize>, pass: Pipeline) -> (Vec<(Entity, Texture)>, RunReport) {
-    if let Some(n) = threads {
-        w.insert_resource(Threads::new(n).unwrap());
-    }
+/// The world after `pass` with `threads` stated, and the run's report.
+fn after(mut w: World, threads: usize, pass: Pipeline) -> (Vec<(Entity, Texture)>, RunReport) {
+    w.insert_resource(Threads::new(threads).unwrap());
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
         .with_pass_checks(true)
@@ -94,13 +92,14 @@ fn normalize_normals_on_any_thread_count_is_the_serial_pass() {
     let pass = || Pipeline {
         passes: vec![Box::new(NormalizeNormals)],
     };
-    let (serial, report) = after(normals(), None, pass());
-    assert_eq!(
-        after(normals(), Some(1), pass()),
-        (serial.clone(), report.clone())
-    );
+    let (serial, report) = after(normals(), 1, pass());
+    // a world that states no count is refused, naming the setting: no count stands in for it
+    let refused = PassManager::new(PassRegistry::new())
+        .run(&mut normals(), &pass(), &mut RunReport::default())
+        .unwrap_err();
+    assert!(refused.to_string().contains("core.threads"), "{refused}");
     for n in [2, 4, 16] {
-        let (textures, r) = after(normals(), Some(n), pass());
+        let (textures, r) = after(normals(), n, pass());
         assert_eq!(textures, serial, "{n} threads");
         assert_eq!(r, report, "{n} threads: the log");
     }
@@ -145,9 +144,9 @@ fn pack_orm_on_any_thread_count_is_the_serial_pass() {
         let pass = || Pipeline {
             passes: vec![Box::new(PackOrm::new(size, MissingLevels::Generate))],
         };
-        let (serial, report) = after(pairs(), None, pass());
+        let (serial, report) = after(pairs(), 1, pass());
         for n in [2, 8] {
-            let (textures, r) = after(pairs(), Some(n), pass());
+            let (textures, r) = after(pairs(), n, pass());
             assert_eq!(textures, serial, "{size:?} on {n} threads");
             assert_eq!(r, report, "{size:?} on {n} threads: the log");
         }

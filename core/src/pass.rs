@@ -3,10 +3,18 @@
 //!
 //! - A [`Pass`] has a stable name, text options, and declares the component and resource names it **requires**,
 //!   **provides**, **removes** and **modifies** (in place), plus what it approximates (a name is a component's or a
-//!   resource's, never both). After a pass runs, the names that actually
-//!   appeared and disappeared must be among those it declared. A pass that declares it **despawns entities** (leaves
-//!   placements out, discards forms) may also make a name disappear that only despawned entities held: no
-//!   surviving entity lost it. A pass that **removes by log** may make a component name disappear that it recorded
+//!   resource's, never both), and the run **settings** it reads. An input (required) is content a reader or an
+//!   earlier pass makes, and a world may simply not hold it: a pass that opts in is skipped where it finds none of its
+//!   inputs ([`Pass::may_lack_inputs`]). A setting ([`Setting`]) is how the program runs the pass, never made from
+//!   the content: its thread count (`core.threads`). The program states its settings once, on the manager
+//!   ([`PassManager::with_settings`], [`Settings`]), which states them in every world it runs a pipeline on, a
+//!   conversion's parts included, as operational resources no writer writes. A pass that runs without a setting it
+//!   declares is refused like one without an input ([`Error::Missing`]), but a setting never decides whether a pass is
+//!   skipped, and the run report states each setting a step read with its value (`threads 16`,
+//!   [`StepReport::settings`]). A value that changes what a pass makes is neither: it is the pass's option.
+//!   After a pass runs, the names that actually appeared and disappeared must be among those it declared. A pass that
+//!   declares it **despawns entities** (leaves placements out, discards forms) may also make a name disappear that
+//!   only despawned entities held: no surviving entity lost it. A pass that **removes by log** may make a component name disappear that it recorded
 //!   as removed ([`PassLog::removed`]: what a hook dropped, known only when it runs).
 //! - A [`Pipeline`] is the program's: it states every pass, in order, with its options (`load-meshes,
 //!   lower-pbr{normals=rebuild}`, [`PassRegistry::parse`]), and runs as written. The manager never chooses, adds or
@@ -179,6 +187,58 @@ impl PassLog {
     }
 }
 
+/// The run settings a program states for every pipeline its manager runs ([`PassManager::with_settings`]): how the
+/// passes run, never what they make.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Settings {
+    /// The threads a pass may use (`core.threads`, [`crate::parallel::THREADS`]).
+    pub threads: primase_foundations::parallel::Threads,
+}
+
+/// A run setting a pass reads ([`Pass::settings`]): a resource the program states for the run, by name, with how a
+/// run report states its value ([`RunSetting::text`]). Made by [`Setting::of`].
+#[derive(Clone, Copy, Debug)]
+pub struct Setting {
+    /// The resource's name (`core.threads`).
+    pub name: &'static str,
+    text: fn(&World) -> Option<String>,
+}
+
+impl Setting {
+    /// The setting `T`.
+    pub const fn of<T: RunSetting>() -> Self {
+        Setting {
+            name: T::NAME,
+            text: setting_text::<T>,
+        }
+    }
+
+    /// Its value in `w` as a report states it (`threads 16`); none where `w` does not state it.
+    pub fn text(&self, w: &World) -> Option<String> {
+        (self.text)(w)
+    }
+}
+
+/// A resource a program states as a run setting ([`Setting`]): how it runs the passes, never what they make.
+pub trait RunSetting: Resource {
+    /// The value as a run report states it (`threads 16`).
+    fn text(&self) -> String;
+}
+
+fn setting_text<T: RunSetting>(w: &World) -> Option<String> {
+    w.resource::<T>().map(RunSetting::text)
+}
+
+/// A setting read from a world that does not state it ([`Setting`]): a pass that reads one without declaring it in
+/// [`Pass::settings`], or a caller outside the pass manager. The program states its settings for the run
+/// ([`PassManager::with_settings`]), and no default stands in for one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("`{name}`, which the world does not have: the program states it for the run")]
+pub struct Unstated {
+    /// The setting's resource name.
+    pub name: &'static str,
+}
+
 /// A transformation of the world. Declarations are component names (`core.mesh`, a destination's `material`).
 pub trait Pass: Send + Sync {
     /// Stable name, used in pipelines and reports (`load-meshes`).
@@ -197,6 +257,13 @@ pub trait Pass: Send + Sync {
     }
     /// Names that must be present before it runs.
     fn requires(&self) -> &[&'static str] {
+        &[]
+    }
+    /// The run settings it reads, which the program states for the run on its manager (its thread count,
+    /// [`crate::parallel::THREADS`], [`PassManager::with_settings`]): checked with [`Pass::requires`] before it runs and
+    /// refused where absent, never counted in whether it is skipped ([`Pass::may_lack_inputs`]), and stated in its
+    /// step's report.
+    fn settings(&self) -> &[Setting] {
         &[]
     }
     /// Names it may add.
@@ -478,7 +545,8 @@ impl Pipeline {
 
     /// The passes a run would refuse for a required name absent, in a world holding the component and resource names
     /// `present` before it runs, and the names held after the passes that can run: each pass in order, with what the
-    /// passes before it provide added. That is the declarations' answer, not a run's: a pass may add less than it
+    /// passes before it provide added. Settings ([`Pass::settings`]) are not inputs: a pass is never unfed for one, and a
+    /// run without one refuses the pass rather than leaving it out. That is the declarations' answer, not a run's: a pass may add less than it
     /// provides and take away less than it removes, so every name provided is taken as added and every name removed as
     /// kept. A pass that may lack its inputs and finds none of them is skipped, as a run skips it, and provides nothing;
     /// one that finds some but not all is refused, as a run refuses it ([`Pass::may_lack_inputs`]). A refused pass
@@ -916,6 +984,13 @@ pub enum Error {
     Stated { name: &'static str, message: String },
     #[error("pass {pass} requires `{name}`, which the world does not have")]
     Missing { pass: String, name: String },
+    /// A world that already states a run setting otherwise than the program does on its manager.
+    #[error("the world states `{name}` as {world}, the program as {program}")]
+    SettingDisagrees {
+        name: &'static str,
+        world: String,
+        program: String,
+    },
     #[error("pass {pass} failed: {message}")]
     Pass { pass: String, message: String },
     #[error("pass {pass} {what} `{names:?}` without declaring it")]
@@ -1016,6 +1091,10 @@ pub struct StepReport {
     pub skipped: Vec<String>,
     /// How long the step took, by the wall clock (zero for a skipped step).
     pub time: StepTime,
+    /// The run settings the pass read ([`Pass::settings`]), as the run stated them (`threads 16`), in its declared order;
+    /// empty for a skipped or refused step. How the step was run, not what it made: a [`StepReport`]'s equality
+    /// leaves them out, as it does the time.
+    pub settings: Vec<String>,
 }
 
 /// A step's wall-clock time, as the pass manager measured it: for a program's log and for profiling, not part of what
@@ -1030,7 +1109,7 @@ pub struct StepTime {
 }
 
 impl PartialEq for StepReport {
-    /// Every field but the time.
+    /// Every field but the time and the settings.
     fn eq(&self, other: &StepReport) -> bool {
         let StepReport {
             pass,
@@ -1042,6 +1121,7 @@ impl PartialEq for StepReport {
             failed,
             skipped,
             time: _,
+            settings: _,
         } = self;
         (
             pass,
@@ -1129,10 +1209,14 @@ impl fmt::Display for RunReport {
             if s.skipped.is_empty() {
                 write!(
                     f,
-                    " ({:.3} s, checks {:.3} s)",
+                    " ({:.3} s, checks {:.3} s",
                     s.time.run.as_secs_f64(),
                     s.time.checks.as_secs_f64()
                 )?;
+                for setting in &s.settings {
+                    write!(f, "; {setting}")?;
+                }
+                write!(f, ")")?;
             }
             writeln!(f)?;
         }
@@ -1189,6 +1273,7 @@ pub struct PassManager {
     conservation: Conservation,
     pass_checks: bool,
     missing_inputs: MissingInputs,
+    settings: Option<Settings>,
 }
 
 impl fmt::Debug for PassManager {
@@ -1211,6 +1296,36 @@ impl PassManager {
             conservation: Conservation::Off,
             pass_checks: cfg!(debug_assertions),
             missing_inputs: MissingInputs::Refuse,
+            settings: None,
+        }
+    }
+
+    /// State the program's run settings: before every pipeline it runs, plain or a conversion's part, the manager
+    /// states them in the world, and a pass that declares a setting ([`Pass::settings`]) reads it there. A manager that
+    /// states none runs only passes that read none (another is refused, [`Error::Missing`]); a world that already
+    /// states a setting otherwise is refused ([`Error::SettingDisagrees`]).
+    pub fn with_settings(mut self, settings: Settings) -> Self {
+        self.settings = Some(settings);
+        self
+    }
+
+    /// The program's settings ([`PassManager::with_settings`]), stated in `w`: refused where `w` already states one
+    /// otherwise.
+    fn state_settings(&self, w: &mut World) -> Result<()> {
+        let Some(Settings { threads }) = self.settings else {
+            return Ok(());
+        };
+        match w.resource::<primase_foundations::parallel::Threads>() {
+            Some(&held) if held != threads => Err(Error::SettingDisagrees {
+                name: <primase_foundations::parallel::Threads as Resource>::NAME,
+                world: RunSetting::text(&held),
+                program: RunSetting::text(&threads),
+            }),
+            Some(_) => Ok(()),
+            None => {
+                w.insert_resource(threads);
+                Ok(())
+            }
         }
     }
 
@@ -1326,6 +1441,7 @@ impl PassManager {
         instrument: &mut dyn Instrument,
     ) -> Result<()> {
         pipeline.check()?;
+        self.state_settings(w)?;
         for (index, p) in pipeline.passes.iter().enumerate() {
             let text = pass_text(p.as_ref());
             let missing: Vec<String> = p
@@ -1349,6 +1465,7 @@ impl PassManager {
                     failed: None,
                     skipped: missing,
                     time: StepTime::default(),
+                    settings: Vec::new(),
                 });
                 continue;
             }
@@ -1402,6 +1519,7 @@ impl PassManager {
                         failed: Some(e.to_string()),
                         skipped: Vec::new(),
                         time,
+                        settings: Vec::new(),
                     });
                     // the pass's error is the one that matters; a failing hook has nothing to add to it
                     let _ = instrument.pass_failed(&step, w, &e);
@@ -1430,6 +1548,16 @@ impl PassManager {
                 });
             }
         }
+        let settings = p
+            .settings()
+            .iter()
+            .map(|s| {
+                s.text(w).ok_or_else(|| Error::Missing {
+                    pass: text.to_owned(),
+                    name: s.name.to_owned(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let before: BTreeSet<String> = w.component_names().into_iter().map(str::to_owned).collect();
         let resources_before: BTreeSet<String> = w.resource_names().into_iter().map(str::to_owned).collect();
         // who held each name a despawning pass may make disappear without declaring it
@@ -1597,6 +1725,7 @@ impl PassManager {
             failed: None,
             skipped: Vec::new(),
             time: StepTime::default(),
+            settings,
         })
     }
 
@@ -3238,5 +3367,96 @@ mod tests {
                 assert!(ran.is_ok());
             }
         }
+    }
+
+    /// Reads the thread count, a setting it declares: what it ran on, as a count.
+    struct Threaded;
+    impl Pass for Threaded {
+        fn name(&self) -> &'static str {
+            "threaded"
+        }
+        fn may_lack_inputs(&self) -> bool {
+            true
+        }
+        fn requires(&self) -> &[&'static str] {
+            &["toy.layered"]
+        }
+        fn settings(&self) -> &[Setting] {
+            &[crate::parallel::THREADS]
+        }
+        fn approximates(&self) -> &'static str {
+            ""
+        }
+        fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+            let threads = crate::parallel::threads(w).map_err(|e| e.to_string())?;
+            log.count("threads", threads.get() as u64);
+            Ok(())
+        }
+    }
+
+    fn threads(n: usize) -> Settings {
+        Settings {
+            threads: primase_foundations::parallel::Threads::new(n).unwrap(),
+        }
+    }
+
+    /// The program states its thread count once, on the manager: the manager states it in the world it runs, the
+    /// pass reads it there, and the step's report says it (`threads 3`), outside the report's equality.
+    #[test]
+    fn the_manager_states_the_programs_settings_and_the_report_says_them() {
+        let manager = PassManager::new(PassRegistry::new()).with_settings(threads(3));
+        let mut w = world();
+        let mut report = RunReport::default();
+        let pipeline = Pipeline {
+            passes: vec![Box::new(Threaded)],
+        };
+        manager.run(&mut w, &pipeline, &mut report).unwrap();
+        assert_eq!(report.steps[0].log.counts["threads"], 3);
+        assert_eq!(report.steps[0].settings, ["threads 3"]);
+        assert!(report.to_string().contains("; threads 3)"), "{report}");
+        let mut other = report.clone();
+        other.steps[0].settings.clear();
+        assert_eq!(report, other, "how a step ran is not what it made");
+        // a world the manager already stated them in is run again as it is
+        manager.run(&mut w, &pipeline, &mut RunReport::default()).unwrap();
+    }
+
+    /// A pass that declares a setting the program states nowhere is refused before it runs, naming the pass and the
+    /// setting; one that is skipped for want of its inputs needs none.
+    #[test]
+    fn a_setting_the_program_does_not_state_refuses_the_pass_but_never_decides_a_skip() {
+        let manager = PassManager::new(PassRegistry::new());
+        let pipeline = Pipeline {
+            passes: vec![Box::new(Threaded)],
+        };
+        let refused = manager
+            .run(&mut world(), &pipeline, &mut RunReport::default())
+            .unwrap_err();
+        assert!(
+            matches!(&refused, Error::Missing { pass, name } if pass == "threaded" && name == "core.threads"),
+            "{refused}"
+        );
+        let mut report = RunReport::default();
+        manager.run(&mut World::new(), &pipeline, &mut report).unwrap();
+        assert_eq!(report.steps[0].skipped, ["toy.layered"]);
+        assert!(report.steps[0].settings.is_empty());
+    }
+
+    /// A world that already states another thread count than the program's is a disagreement, refused naming both.
+    #[test]
+    fn a_world_stating_another_count_than_the_program_is_refused() {
+        let manager = PassManager::new(PassRegistry::new()).with_settings(threads(3));
+        let mut w = world();
+        w.insert_resource(primase_foundations::parallel::Threads::new(2).unwrap());
+        let pipeline = Pipeline {
+            passes: vec![Box::new(Threaded)],
+        };
+        let refused = manager
+            .run(&mut w, &pipeline, &mut RunReport::default())
+            .unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "the world states `core.threads` as threads 2, the program as threads 3"
+        );
     }
 }

@@ -38,6 +38,7 @@ fn tmp(name: &str) -> PathBuf {
 /// ground that spans both; raised and lowered (`lower-layered-reskate`), ready for the writer.
 fn world() -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let material = |w: &mut World, name: &str, base: [f32; 4]| {
         let m = w.spawn();
         w.insert(m, Name(name.into()));
@@ -264,6 +265,9 @@ fn summarized(cull_ids: usize) -> World {
 fn planned(pass: impl Pass + 'static, mut w: World) -> Result<(SkateBlendBudget, PassLog), String> {
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .run(
             &mut w,
             &Pipeline {
@@ -290,6 +294,7 @@ fn pool_finalize(w: World) -> Result<(SkateBlendBudget, PassLog), String> {
 /// counted apart, and the collision cells' counts holding them (split over two cells).
 fn finalize_world(whole: &SkateMapSummary, cells: usize) -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     w.insert_resource(SkateMapSummary {
         summed: whole.summed - cells,
         cells: CellsCounted::Apart,

@@ -232,7 +232,11 @@ impl Pass for PackOrm {
         "a map's level of another size resampled nearest to the packed size; with missing-levels=generate, a level a \
          map does not store box-filtered from its full level"
     }
+    fn settings(&self) -> &[primase_core::pass::Setting] {
+        &[primase_core::parallel::THREADS]
+    }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let threads = primase_core::parallel::threads(world).map_err(|e| e.to_string())?;
         let materials: Vec<(Entity, PbrMaterial)> =
             world.iter::<PbrMaterial>().map(|(e, m)| (e, m.clone())).collect();
         // (metallic-roughness texture, occlusion texture) -> packed texture
@@ -266,7 +270,7 @@ impl Pass for PackOrm {
                     let mut tally = Tally::default();
                     let image = self
                         .pack(
-                            primase_core::parallel::threads(world),
+                            threads,
                             source(mr.texture, "metallic-roughness")?,
                             source(ao.texture, "occlusion")?,
                             &mut tally,
@@ -353,6 +357,9 @@ mod tests {
     fn run(pass: PackOrm, w: &mut World) -> Result<RunReport, String> {
         let mut report = RunReport::default();
         PassManager::new(PassRegistry::new())
+            .with_settings(primase_core::pass::Settings {
+                threads: primase_core::parallel::Threads::ONE,
+            })
             .run(
                 w,
                 &Pipeline {
@@ -520,6 +527,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .texcoord = 1;
+        w.insert_resource(primase_core::parallel::Threads::ONE);
         let mut log = PassLog::default();
         assert!(
             MR.run(&mut w, &mut log)

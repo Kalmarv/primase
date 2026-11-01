@@ -235,6 +235,7 @@ fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
 #[test]
 fn decals_on_a_plane_cover_their_footprints_with_the_engines_coordinates() {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     // the plane z = (x + 2 y) / 16
     terrain(&mut w, |gx, gy| (gx + 2 * gy) as i32);
     let plane = |x: f64, y: f64| (x + 2.0 * y) * UNIT;
@@ -394,6 +395,7 @@ fn decals_on_a_plane_cover_their_footprints_with_the_engines_coordinates() {
 #[test]
 fn decals_lie_on_the_ground_lower_anvil_terrain_draws() {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     // heights jumping by up to 0.5 m between samples
     let hash = |gx: i64, gy: i64| ((gx * 7919 + gy * 104_729).rem_euclid(9) * 3 + 1000) as i32;
     terrain(&mut w, hash);
@@ -522,6 +524,7 @@ fn game_models(dir: &std::path::Path) -> World {
     ];
     let mut archive = Archive::open(&order.map(|f| dir.join(f))).expect("archive");
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     terrain(&mut w, |_, _| 0);
     let mut names = std::collections::BTreeSet::new();
     for forge in [0, 1] {
@@ -562,6 +565,7 @@ fn game_models(dir: &std::path::Path) -> World {
 fn the_terrain_family_blends_at_its_quantised_factors() {
     use primase_core::{DrawLayer, DrawOrder};
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     terrain(&mut w, |gx, gy| (gx + 2 * gy) as i32);
     let plane = |x: f64, y: f64| (x + 2.0 * y) * UNIT;
     let at = |x: f32, y: f32| [x, y, plane(f64::from(x), f64::from(y)) as f32];

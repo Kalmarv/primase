@@ -70,6 +70,9 @@ fn raise_keeps_source_identities_when_some_or_all_triangles_are_omitted() {
         .unwrap();
     let mut report = RunReport::default();
     PassManager::new(registry)
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .run(&mut world, &steps, &mut report)
         .unwrap();
     assert_eq!(report.steps.len(), 1);

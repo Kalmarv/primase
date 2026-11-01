@@ -33,6 +33,7 @@ use primase_reskate::passes::{
 /// energies repeating (so a cap meets ties of priority).
 fn map() -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     // six slabs, each its own material and texture, the k-th k + 1 times as wide (as high: the floor sees them alike)
     let protos: Vec<Entity> = (0..6u8)
         .map(|k| {
@@ -360,7 +361,9 @@ fn in_parts(parts: usize, order: &[usize], program: Program) -> Result<Captured>
             next: 0,
         },
         Box::new(Capture(got.clone())),
-        &PassManager::new(PassRegistry::new()),
+        &PassManager::new(PassRegistry::new()).with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        }),
         &Pipeline { passes: Vec::new() },
         &Summarized {
             registry: &registry,
@@ -517,6 +520,7 @@ fn the_map_summary_sums_over_parts() {
     primase_reskate::register_summaries(&mut registry);
     let part = |other_cull_ids: usize, cull_ids: usize| {
         let mut w = World::new();
+        w.insert_resource(primase_core::parallel::Threads::ONE);
         w.insert_resource(SkateMapSummary {
             grouping,
             cull_ids,
@@ -598,7 +602,9 @@ fn the_region_clip_over_parts_is_the_whole_maps() {
                 next: 0,
             },
             Box::new(Got(got.clone())),
-            &PassManager::new(PassRegistry::new()),
+            &PassManager::new(PassRegistry::new()).with_settings(primase_core::pass::Settings {
+                threads: primase_core::parallel::Threads::ONE,
+            }),
             &Pipeline { passes: Vec::new() },
             &Pipeline {
                 passes: vec![Box::new(clip())],
@@ -656,7 +662,9 @@ fn water_clipped_to_the_content_over_parts_is_the_whole_maps() {
                 next: 0,
             },
             Box::new(Got(got.clone())),
-            &PassManager::new(PassRegistry::new()),
+            &PassManager::new(PassRegistry::new()).with_settings(primase_core::pass::Settings {
+                threads: primase_core::parallel::Threads::ONE,
+            }),
             &Pipeline { passes: Vec::new() },
             &Summarized {
                 registry: &registry,
@@ -731,7 +739,9 @@ fn the_spawn_over_parts_is_placed_once_where_the_whole_map_places_it() {
                 next: 0,
             },
             Box::new(Got(got.clone())),
-            &PassManager::new(PassRegistry::new()),
+            &PassManager::new(PassRegistry::new()).with_settings(primase_core::pass::Settings {
+                threads: primase_core::parallel::Threads::ONE,
+            }),
             &Pipeline { passes: Vec::new() },
             &Summarized {
                 registry: &registry,
@@ -832,7 +842,9 @@ fn the_pause_picture_over_parts_is_drawn_over_the_whole_maps_content() {
                 next: 0,
             },
             Box::new(Got(got.clone())),
-            &PassManager::new(PassRegistry::new()),
+            &PassManager::new(PassRegistry::new()).with_settings(primase_core::pass::Settings {
+                threads: primase_core::parallel::Threads::ONE,
+            }),
             &Pipeline { passes: Vec::new() },
             &Summarized {
                 registry: &registry,

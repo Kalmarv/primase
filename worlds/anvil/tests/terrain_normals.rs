@@ -16,6 +16,7 @@ use primase_core::{
 /// height `height(gx, gy)` metres (`range` 2^26 makes a stored value one metre at level 2).
 fn world(frame: SourceFrame, height: impl Fn(i64, i64) -> i64) -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let noise = w.spawn();
     w.insert(
         noise,

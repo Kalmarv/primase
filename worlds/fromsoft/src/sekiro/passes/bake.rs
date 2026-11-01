@@ -106,8 +106,12 @@ impl Pass for BakeFromSoftLayers {
     fn approximates(&self) -> &'static str {
         "layer inputs as constant per-triangle levels; base-mip bilinear-wrap sampling; static frame at the sample time"
     }
+    fn settings(&self) -> &[primase_core::pass::Setting] {
+        &[primase_core::parallel::THREADS]
+    }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         use crate::sekiro::source::TexturePayloads;
+        let threads = primase_core::parallel::threads(world).map_err(|e| e.to_string())?;
         // the meshes it bakes: placed source prototypes'; inputs elsewhere are refused (a form) or left (unplaced)
         let placed: BTreeSet<Entity> = world.iter::<Instance>().map(|(_, i)| i.prototype).collect();
         let forms: BTreeSet<Entity> = world
@@ -151,6 +155,7 @@ impl Pass for BakeFromSoftLayers {
                 self.max_size.get(),
                 self.sample_time.get(),
                 &baked_text,
+                threads,
                 world,
             )
         });

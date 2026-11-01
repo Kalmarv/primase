@@ -59,6 +59,7 @@ fn prop(w: &mut World, name: &str, surface: u16) -> Entity {
 /// places; a spawn.
 fn map() -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut surfaces = Surfaces::default();
     let concrete = surfaces.index("concrete").unwrap();
     w.insert_resource(surfaces);

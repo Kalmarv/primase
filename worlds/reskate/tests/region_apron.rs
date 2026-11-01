@@ -60,6 +60,7 @@ fn place(w: &mut World, proto: Entity, east: f32, north: f32) -> Entity {
 /// region) and from 200 m west (past the apron), raised, with a spawn.
 fn world() -> (World, [Entity; 4]) {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let proto = strip(&mut w);
     let placed = [
         place(&mut w, proto, 30.0, 50.0),

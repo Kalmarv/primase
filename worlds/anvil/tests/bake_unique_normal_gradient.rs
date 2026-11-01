@@ -98,6 +98,7 @@ fn unique_normal_gradient_bakes_as_the_notes_formulas() {
     }
     println!("UniqueNormalGradient Materials: {}", ids.len());
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut placed = Placed::default();
     let materials: Vec<Entity> = {
         let mut placer =

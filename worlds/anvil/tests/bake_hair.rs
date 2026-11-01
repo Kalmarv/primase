@@ -74,6 +74,7 @@ fn rider(archive: &mut Archive, part: &str, colour: &str) -> World {
         ],
     };
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut placed = Placed::default();
     let rider = Placer::new(archive, &mut w, SourceFrame::WORLD, InstancedLevels::Selector)
         .with_materials()
@@ -332,7 +333,7 @@ fn kept_by_the_alpha_tested_program(w: &World, m: &AnvilMaterial, size: u32) -> 
         (("COLOR".to_owned(), 0), constant([0.0, 1.0, 1.0, 1.0])),
     ]);
     let raw = evaluate_raw_with(
-        primase_core::parallel::threads(w),
+        primase_foundations::parallel::Threads::ONE,
         &shader,
         &constants,
         &textures,

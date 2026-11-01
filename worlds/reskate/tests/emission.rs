@@ -34,6 +34,7 @@ fn tmp(name: &str) -> PathBuf {
 /// plain material, placed once over ground collision, with a spawn on it.
 fn world() -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let texture = w.spawn();
     w.insert(texture, Name("lamp_emissive".into()));
     w.insert(

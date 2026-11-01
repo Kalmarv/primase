@@ -19,6 +19,7 @@ use primase_reskate::{EncodingOptions, write_map};
 
 fn map() -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let material = w.spawn();
     w.insert(material, Name("stone".into()));
     w.insert(material, PbrMaterial::default());

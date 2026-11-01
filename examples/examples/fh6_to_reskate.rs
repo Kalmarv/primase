@@ -127,7 +127,12 @@ fn main() -> Result<()> {
     let mut registry = PassRegistry::new();
     primase_forzatech::register(&mut registry);
     let writer = Box::new(MapSink::new(Path::new(""), &e));
-    let report = convert(&mut reader, writer, &PassManager::new(registry), &select, &prepare)?;
+    // the passes run on the machine's threads, as the program states them (each step's report says them)
+    let settings = primase_core::pass::Settings {
+        threads: primase_core::parallel::Threads::new(std::thread::available_parallelism()?.get())
+            .ok_or("no threads")?,
+    };
+    let report = convert(&mut reader, writer, &PassManager::new(registry).with_settings(settings), &select, &prepare)?;
     for notice in report.notices() {
         println!("{notice}");
     }

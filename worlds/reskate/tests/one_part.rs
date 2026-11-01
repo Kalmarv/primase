@@ -27,6 +27,7 @@ use primase_reskate::passes::{
 /// east 300, north 10).
 fn unraised() -> (World, [Entity; 2]) {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut surfaces = Surfaces::default();
     let concrete = surfaces.index("concrete").unwrap();
     w.insert_resource(surfaces);
@@ -264,6 +265,9 @@ fn the_preparation_passes_run_under_the_pass_manager() {
     let n = pipeline.passes.len();
     let mut report = RunReport::default();
     PassManager::new(registry)
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .with_conservation(primase_core::pass::Conservation::Enforce)
         .run(&mut w, &pipeline, &mut report)
         .unwrap();

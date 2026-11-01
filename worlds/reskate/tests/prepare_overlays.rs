@@ -81,6 +81,7 @@ struct Fixture {
 /// placed once (merged), raised, with a spawn at a stated height.
 fn fixture() -> Fixture {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let material = |w: &mut World, name: &str, decal: bool| {
         let m = w.spawn();
         w.insert(m, Name(name.into()));

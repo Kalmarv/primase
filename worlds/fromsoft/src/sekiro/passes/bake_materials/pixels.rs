@@ -378,7 +378,8 @@ pub(super) fn prepare<'a>(
     })
 }
 
-pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, String> {
+/// Run the prepared program over its grid on `threads` and decode its outputs: the same bytes on any count.
+pub(super) fn bake(prepared: Prepared<'_>, threads: Threads) -> Result<Baked, String> {
     let Prepared {
         pixel: _,
         vertex: _,
@@ -402,7 +403,7 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
     let constant = cut.as_ref().is_some_and(|compare| compare.constant(&textures));
     let textures = iridia_exec::Views::refusing(textures.iter().map(|(&slot, t)| (slot, t.view())).collect());
     let raw = evaluate_raw_with(
-        primase_core::parallel::threads(world),
+        threads,
         &shader,
         &constants,
         &textures,
@@ -421,7 +422,7 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
     let mut policies = policies;
     // the program's own compare, evaluated over the same grid from the same inputs and textures, its test on
     let tested = cut.as_ref().and_then(|compare| {
-        match tested_values(world, &shader, compare, &constants, &textures, &inputs, size)
+        match tested_values(threads, &shader, compare, &constants, &textures, &inputs, size)
             .and_then(|(values, discarded)| compare.carry(&values, &discarded, constant))
         {
             Ok(Carried::Cut(values)) => {
@@ -445,7 +446,7 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
         tested: tested.as_ref().map(|(_, values)| values.as_slice()),
         size,
     }
-    .surfaces(&raw, primase_core::parallel::threads(world))?;
+    .surfaces(&raw, threads)?;
     let mut result = Baked {
         size,
         requested_size,
@@ -475,7 +476,7 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
 /// program discarded the texel, in row-major order: the program run once a texel with its test on (the bake's
 /// `constants` but for the material's reference, [`Compare::test_on`]) ([`cut::Tested`]), each run's samples its own.
 fn tested_values(
-    world: &World,
+    threads: Threads,
     shader: &iridia_exec::ProgramShader,
     compare: &Compare,
     constants: &iridia_exec::evaluate::Constants,
@@ -484,7 +485,7 @@ fn tested_values(
     size: u32,
 ) -> Result<(Vec<f32>, Vec<bool>), String> {
     let raw = evaluate_raw_with(
-        primase_core::parallel::threads(world),
+        threads,
         &cut::Tested {
             program: shader,
             compare,

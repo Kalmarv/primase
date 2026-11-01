@@ -24,6 +24,7 @@ use primase_reskate::passes::{PrepareReskateUvRepeats, RaiseOptions, RepeatBlend
 /// The prototype's entity.
 fn world(class: MaterialClass, blend: bool, over: bool) -> (World, Entity) {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let tex = w.spawn();
     w.insert(tex, Name("stone_d".into()));
     w.insert(

@@ -34,6 +34,7 @@ fn spawn() -> SkateMarker {
 /// A raised map of one placed triangle per name, each of its own size and material.
 fn raised(names: &[&str]) -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     for (k, name) in names.iter().enumerate() {
         let material = w.spawn();
         w.insert(material, Name(format!("m{k}")));

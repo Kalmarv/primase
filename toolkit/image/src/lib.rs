@@ -105,6 +105,9 @@ pub enum Error {
     Encode(#[from] png::EncodingError),
     #[error("image allocation failed")]
     Allocation,
+    /// A run setting the world does not state (its thread count).
+    #[error(transparent)]
+    Unstated(#[from] primase_core::pass::Unstated),
 }
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -128,6 +128,7 @@ fn linear(byte: u8) -> f64 {
 #[test]
 fn tints_are_multiplied_into_texture_copies() {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let base = texture(&mut w, "brick", 4, [200, 100, 50, 128]);
     let red = [255, 128, 128];
     let (a, b) = (
@@ -230,6 +231,7 @@ fn quad(w: &mut World, m: Entity, side: f32, x: f32) {
 fn the_budget_keeps_the_heaviest_textures() {
     let make = |reverse: bool| {
         let mut w = World::new();
+        w.insert_resource(primase_core::parallel::Threads::ONE);
         // areas 9, 4, 4 (a tie) and 1 square metres
         let mut specs = vec![
             ("big", 3.0, [10, 20, 30, 255]),
@@ -284,6 +286,7 @@ fn the_budget_keeps_the_heaviest_textures() {
 #[test]
 fn the_writer_writes_textures_as_prepared() {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let t = texture(&mut w, "big", 512, [90, 90, 90, 255]);
     let m = material(&mut w, "m", Some(t), Some([255, 0, 0]));
     quad(&mut w, m, 2.0, 0.0);
@@ -374,6 +377,7 @@ fn the_writer_writes_textures_as_prepared() {
 #[test]
 fn a_texture_that_cannot_be_decoded_keeps_its_tint() {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let broken = texture(&mut w, "broken", 4, [200, 100, 50, 255]);
     w.get_mut::<Texture>(broken).unwrap().levels = vec![vec![1, 2, 3]];
     let fine = texture(&mut w, "fine", 4, [50, 50, 50, 255]);

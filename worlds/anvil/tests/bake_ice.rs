@@ -181,6 +181,7 @@ fn hero_ice_bakes_as_the_notes_formulas() {
     let mut archive = Archive::open(&ORDER.map(|f| dir.join(f))).expect("archive");
     let ids = ice(&mut archive, "MAD_Hero_Ice");
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut placed = Placed::default();
     let materials: Vec<Entity> = {
         let mut placer =
@@ -255,6 +256,7 @@ fn ice_brick_bakes_as_the_notes_formulas() {
     let mut archive = Archive::open(&ORDER.map(|f| dir.join(f))).expect("archive");
     let ids = ice(&mut archive, "MAD_IceBrick");
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut placed = Placed::default();
     let materials: Vec<Entity> = {
         let mut placer =

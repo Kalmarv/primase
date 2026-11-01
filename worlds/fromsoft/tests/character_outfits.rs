@@ -90,11 +90,15 @@ fn character_outfits(
     primase_fromsoft::sekiro::passes::register(&mut registry);
     let pipeline = registry
         .parse("select-fromsoft-initializer-outfits{initializer=all,presentation=both,level=prefer-low}")?;
-    primase_core::pass::PassManager::new(registry).run(
-        &mut world,
-        &pipeline,
-        &mut primase_core::pass::RunReport::default(),
-    )?;
+    primase_core::pass::PassManager::new(registry)
+        .with_settings(primase_core::pass::Settings {
+            threads: common::threads(),
+        })
+        .run(
+            &mut world,
+            &pipeline,
+            &mut primase_core::pass::RunReport::default(),
+        )?;
     Ok(world
         .resource::<OutfitVariants>()
         .ok_or("no outfit variants")?
@@ -213,7 +217,9 @@ fn warrior_confessor_and_wolf_assemble_against_their_authored_animation_hierarch
             let mut registry = PassRegistry::new();
             primase_fromsoft::sekiro::passes::register(&mut registry);
             primase_animation::register(&mut registry);
-            let manager = PassManager::new(registry);
+            let manager = PassManager::new(registry).with_settings(primase_core::pass::Settings {
+                threads: common::threads(),
+            });
             let pipeline = "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program},assemble-character{correspondence=by-name,reference-pose=assembled,tolerance=0.001,reference-tolerance=0.0001,unweighted-rests=report,weighted-rests=report,name=player}";
             let mut report = RunReport::default();
             manager.run(&mut world, &manager.registry.parse(pipeline)?, &mut report)?;
@@ -310,7 +316,11 @@ fn an_outfit_read_without_animations_assembles_against_the_players_skeleton() ->
     primase_core::register(&mut registry);
     primase_animation::register(&mut registry);
     primase_fromsoft::sekiro::passes::register(&mut registry);
-    let manager = PassManager::new(registry).with_missing_inputs(MissingInputs::Skip);
+    let manager = PassManager::new(registry)
+        .with_settings(primase_core::pass::Settings {
+            threads: common::threads(),
+        })
+        .with_missing_inputs(MissingInputs::Skip);
 
     // the candidates, and the registered selection of initializer 3002, presentation f
     let asset = StandaloneAsset::Character {
@@ -454,7 +464,11 @@ fn an_installed_npc_outfit_of_several_parts_assembles_without_a_reference() -> R
     primase_core::register(&mut registry);
     primase_animation::register(&mut registry);
     primase_fromsoft::sekiro::passes::register(&mut registry);
-    let manager = PassManager::new(registry).with_missing_inputs(MissingInputs::Skip);
+    let manager = PassManager::new(registry)
+        .with_settings(primase_core::pass::Settings {
+            threads: common::threads(),
+        })
+        .with_missing_inputs(MissingInputs::Skip);
     let asset = StandaloneAsset::Character {
         id: "c0000".to_owned(),
         role: CharacterRole::Npc,
@@ -632,7 +646,9 @@ fn all_elden_starting_classes_bind_cloth_against_their_assembled_hierarchy() -> 
                 let mut registry = PassRegistry::new();
                 primase_fromsoft::sekiro::passes::register(&mut registry);
                 primase_animation::register(&mut registry);
-                let manager = PassManager::new(registry);
+                let manager = PassManager::new(registry).with_settings(primase_core::pass::Settings {
+                    threads: common::threads(),
+                });
                 let pipeline = manager.registry.parse("lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program},assemble-character{correspondence=by-name,reference-pose=assembled,tolerance=0.001,reference-tolerance=0.0001,unweighted-rests=report,weighted-rests=report,name=player}").map_err(|e| e.to_string())?;
                 let mut report = RunReport::default();
                 let assembled = manager.run(&mut world, &pipeline, &mut report);

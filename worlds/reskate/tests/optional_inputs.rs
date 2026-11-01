@@ -16,6 +16,7 @@ use primase_reskate::passes::RaiseOptions;
 fn a_map_without_the_optional_features_is_prepared_and_written() {
     // collision and a spawn, nothing drawn
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut surfaces = Surfaces::default();
     let concrete = surfaces.index("concrete").unwrap();
     w.insert_resource(surfaces);
@@ -71,6 +72,9 @@ fn a_map_without_the_optional_features_is_prepared_and_written() {
         .unwrap();
     let mut report = RunReport::default();
     PassManager::new(registry)
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .run(&mut w, &pipeline, &mut report)
         .unwrap();
     let count = |pass: &str, what: &str| {

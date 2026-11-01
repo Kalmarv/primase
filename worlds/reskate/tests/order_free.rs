@@ -125,6 +125,7 @@ fn grid(material: primase_core::Entity) -> Mesh {
 #[test]
 fn instanced_prototypes_are_named_by_what_they_draw() {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let material = |w: &mut World, name: &str, base: [f32; 4]| {
         let m = w.spawn();
         w.insert(m, Name(name.into()));
@@ -200,6 +201,7 @@ fn instanced_prototypes_are_named_by_what_they_draw() {
     let scene = tmp("scene");
     primase_reskate::write::interchange::write(&w, &scene).unwrap();
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     primase_reskate::read::interchange::read(&scene, &mut w).unwrap();
     primase_reskate::read::interchange::load(&scene, &mut w).unwrap();
     // the markers snapped before the writer, which snaps nothing

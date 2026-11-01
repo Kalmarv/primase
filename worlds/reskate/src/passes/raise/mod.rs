@@ -1106,6 +1106,9 @@ impl primase_core::pass::Pass for RaiseSkate {
     fn approximates(&self) -> &'static str {
         "light energy as Studio watts (4 pi^2 candela x the calibration); emission as Studio's by the same calibration; base colour alpha factors with a texture not kept (all counted)"
     }
+    fn settings(&self) -> &[primase_core::pass::Setting] {
+        &[primase_core::parallel::THREADS]
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let l = raise_skate(w, &self.options).map_err(|e| e.to_string())?;
         log.absorb(l);

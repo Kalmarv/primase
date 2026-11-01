@@ -225,6 +225,7 @@ fn blended(w: &mut World) -> Entity {
 /// an unnamed trainer spot, one water surface.
 fn map() -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut surfaces = Surfaces::default();
     let concrete = surfaces.index("concrete").unwrap();
     let wood = surfaces.index("wood").unwrap();
@@ -583,7 +584,9 @@ fn in_parts_of(
         &mut Planned(w),
         &mut PlannedParts::default(),
         Box::new(Sink(Some(MapSink::new(Path::new(""), e)), report.clone())),
-        &PassManager::new(PassRegistry::new()),
+        &PassManager::new(PassRegistry::new()).with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        }),
         &Pipeline { passes: Vec::new() },
         &Summarized {
             registry: &registry,
@@ -841,6 +844,7 @@ fn the_collision_plan_over_parts_is_the_whole_maps_leaf_by_leaf() {
 /// in two parts (`partition-grid{cell=200,tile=200}`: the 200 m columns 0 and 1), and a spawn.
 fn pairs(n: usize) -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut surfaces = Surfaces::default();
     let metal = surfaces.index("metal").unwrap();
     w.insert_resource(surfaces);
@@ -1035,7 +1039,9 @@ fn converted_whole_of(
     let converted = primase_core::convert::convert(
         &mut Planned(w),
         Box::new(Sink(Some(MapSink::new(Path::new(""), e)), report.clone())),
-        &PassManager::new(PassRegistry::new()),
+        &PassManager::new(PassRegistry::new()).with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        }),
         &Pipeline { passes: Vec::new() },
         &Pipeline { passes },
     )

@@ -555,7 +555,7 @@ pub fn bake(
     s: &Splat,
     tile_colour: ColorSpace,
 ) -> Result<Vec<(Texture, Baked)>, String> {
-    let threads = primase_core::parallel::threads(w);
+    let threads = primase_core::parallel::threads(w).map_err(|e| e.to_string())?;
     let mut baker = Baker::new(w, t, s, tile_colour)?;
     let mut results = Vec::with_capacity(rects.len());
     for &[x0, y0, x1, y1] in rects {

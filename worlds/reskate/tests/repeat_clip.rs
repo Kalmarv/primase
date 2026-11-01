@@ -66,6 +66,9 @@ fn world(area: f32, uv: [[f32; 2]; 3], scale: f32) -> (World, Entity, Entity) {
         .parse("prepare-reskate-laid-layers, raise-skate{name=measured,light_scale=standard,unclassified=leave-out}")
         .unwrap();
     PassManager::new(reg)
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .run(&mut w, &pipe, &mut RunReport::default())
         .unwrap();
     w.get_mut::<SkateMaterial>(m).unwrap().class = MaterialClass::Decal;
@@ -79,6 +82,9 @@ fn run(w: &mut World) -> Result<RunReport, String> {
         .unwrap();
     let mut report = RunReport::default();
     PassManager::new(reg)
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .run(w, &pipe, &mut report)
         .map_err(|e| e.to_string())?;
     Ok(report)
@@ -237,6 +243,9 @@ fn shared_prototype_clips_once_in_local_coordinates() {
         .parse("prepare-reskate-repeat-clipping{min_instances=2,min_instance_tris=0,max_render_edge=0}")
         .unwrap();
     PassManager::new(registry)
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .run(&mut w, &pipeline, &mut RunReport::default())
         .unwrap();
     let rec = w

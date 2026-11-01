@@ -162,6 +162,7 @@ const LIGHTS: [(f32, f32, f32); 5] = [
 /// The world, made in `order`, raised: ground over east -10..1000, north -10..100, the spawn beside "left".
 fn world(order: Order) -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut surfaces = Surfaces::default();
     let concrete = surfaces.index("concrete").unwrap();
     w.insert_resource(surfaces);
@@ -329,6 +330,9 @@ fn map(order: Order, blend_objects: Option<usize>) -> BTreeMap<String, Vec<u8>> 
     primase_reskate::register(&mut registry);
     let pipeline = registry.parse(RECIPE).unwrap();
     PassManager::new(registry)
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .run(&mut w, &pipeline, &mut RunReport::default())
         .unwrap();
     // the budget, planned last

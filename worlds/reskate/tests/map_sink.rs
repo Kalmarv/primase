@@ -39,6 +39,7 @@ fn map() -> World {
 /// A raised map: a slab of each texture (named after it), placed twice, and a spawn.
 fn map_of(slabs: Vec<(String, Texture)>) -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     for (k, (name, texture)) in slabs.into_iter().enumerate() {
         let tex = w.spawn();
         w.insert(tex, Name(format!("{name}_d")));

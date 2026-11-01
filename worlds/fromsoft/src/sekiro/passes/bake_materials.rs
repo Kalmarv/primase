@@ -126,7 +126,11 @@ impl Pass for BakeFromSoftMaterials {
     fn approximates(&self) -> &'static str {
         "static flat tangent frame and white vertex colour; secondary UV sets replaced by UV0; base-mip bilinear sampling; per-light gloss correction omitted; UNORM8 output quantization"
     }
+    fn settings(&self) -> &[primase_core::pass::Setting] {
+        &[primase_core::parallel::THREADS]
+    }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let threads = primase_core::parallel::threads(world).map_err(|e| e.to_string())?;
         let memo = if self.cache {
             world.resource::<primase_core::pass::memo::Memo>().cloned()
         } else {
@@ -181,7 +185,7 @@ impl Pass for BakeFromSoftMaterials {
                 pixels::Form::Own,
             )
             .map_err(cache::Error::Refused)
-            .and_then(|prepared| cache::bake(prepared, world, memo.as_ref(), log))
+            .and_then(|prepared| cache::bake(prepared, threads, memo.as_ref(), log))
             {
                 Ok(b) => b,
                 Err(cache::Error::Failed(e)) => return Err(e),
@@ -206,7 +210,7 @@ impl Pass for BakeFromSoftMaterials {
                     pixels::Form::Low,
                 )
                 .map_err(cache::Error::Refused)
-                .and_then(|prepared| cache::bake(prepared, world, memo.as_ref(), log))
+                .and_then(|prepared| cache::bake(prepared, threads, memo.as_ref(), log))
                 {
                     Ok(low) if low.same_outputs(&baked) => {
                         log.count("materials baked over their low-resolution twins too", 1);

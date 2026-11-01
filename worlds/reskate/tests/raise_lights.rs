@@ -31,6 +31,7 @@ fn spot_transform() -> Transform {
 #[test]
 fn raise_then_lower_restores_core_lights() {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let lights = [
         (
             Light {
@@ -128,6 +129,7 @@ fn raise_then_lower_restores_core_lights() {
 #[test]
 fn pass_lowers_once_and_builds_an_orthonormal_basis() {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let e = w.spawn();
     w.insert(
         e,
@@ -219,6 +221,7 @@ fn raise_skate_calibrates_light_energy() {
     ] {
         let scale = calibration.scale();
         let mut w = World::new();
+        w.insert_resource(primase_core::parallel::Threads::ONE);
         let e = light(&mut w);
         let log = raise_skate(
             &mut w,

@@ -41,6 +41,7 @@ fn tmp(name: &str) -> PathBuf {
 /// layer is a chain overlay.
 fn world(corners: [[f32; 3]; 4], at: [f32; 3]) -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let layer = |w: &mut World, name: &str, base: [f32; 4]| {
         let m = w.spawn();
         w.insert(m, Name(name.into()));
@@ -605,6 +606,7 @@ fn the_budget_options_round_trip_and_are_checked() {
 /// vertex-alpha decals.
 fn decals() -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let material = |w: &mut World, name: &str, decal: bool| {
         let m = w.spawn();
         w.insert(m, Name(name.into()));

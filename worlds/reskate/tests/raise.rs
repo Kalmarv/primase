@@ -44,6 +44,7 @@ fn texture(role: TexRole) -> Texture {
 
 fn world() -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let base = w.spawn();
     w.insert(base, Name("rock albedo".into()));
     w.insert(base, texture(TexRole::Color));
@@ -244,6 +245,7 @@ fn a_core_world_becomes_a_scene() {
     let out = tmp("scene");
     write::interchange::write(&w, &out).unwrap();
     let mut back = World::new();
+    back.insert_resource(primase_core::parallel::Threads::ONE);
     read::interchange::read(&out, &mut back).unwrap();
     let protos: Vec<(primase_core::Entity, &SkatePrototype)> = back.iter::<SkatePrototype>().collect();
     assert_eq!(
@@ -568,6 +570,7 @@ fn packed_masks_preserve_channels_mips_and_material_bindings() {
     let out = tmp("mask-scene");
     write::interchange::write(&w, &out).unwrap();
     let mut read = World::new();
+    read.insert_resource(primase_core::parallel::Threads::ONE);
     read::interchange::read(&out, &mut read).unwrap();
     let material = read
         .iter::<SkateMaterial>()
@@ -1087,6 +1090,7 @@ fn a_prototype_that_collides_without_drawing() {
     let out = tmp("collision_only_scene");
     write::interchange::write(&w, &out).unwrap();
     let mut back = World::new();
+    back.insert_resource(primase_core::parallel::Threads::ONE);
     read::interchange::read(&out, &mut back).unwrap();
     let (e, p) = back
         .iter::<SkatePrototype>()

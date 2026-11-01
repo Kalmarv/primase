@@ -140,13 +140,14 @@ fn source_materials(
 /// replace the grouped parts by their levels' parts ([`World::rebuild_primitives`], every per-primitive component
 /// following). Returns the report and the primitives (prototype, index after the rebuild) the baked parts became.
 /// `baked_text` is what the bake itself approximates, as the pass's declaration puts it for this run: recorded once on
-/// every material the bake makes ([`primase_core::pass::PassLog::approximate_on`]).
+/// every material the bake makes ([`primase_core::pass::PassLog::approximate_on`]). The groups are baked on `threads`.
 pub(super) fn assemble(
     bake: &AreaBake,
     prototypes: &BTreeMap<String, Entity>,
     max_size: u32,
     sample_time: f32,
     baked_text: &str,
+    threads: primase_foundations::parallel::Threads,
     world: &mut World,
 ) -> Result<(BakeReport, BTreeSet<(Entity, usize)>)> {
     let mut report = BakeReport::default();
@@ -157,7 +158,6 @@ pub(super) fn assemble(
     // Each group's reasons and the materials it made, applied once the bake has removed the materials nothing kept:
     // an attributed material has to be alive after the pass (`PassLog::approximated_on`).
     let mut records: Vec<(Vec<Entity>, primase_core::pass::PassLog)> = Vec::new();
-    let threads = primase_core::parallel::threads(world);
     for (group_index, group) in bake.groups.iter().enumerate() {
         // What this group's bake approximates, and the materials it makes: merged into the report at the group's end,
         // each reason on the materials it concerns.

@@ -203,6 +203,9 @@ pub enum Error {
     /// A scene's texture file that the image toolkit refused.
     #[error(transparent)]
     Image(#[from] primase_image::Error),
+    /// A run setting the world does not state (its thread count).
+    #[error(transparent)]
+    Unstated(#[from] primase_core::pass::Unstated),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

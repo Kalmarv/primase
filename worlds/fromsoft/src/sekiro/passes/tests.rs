@@ -47,6 +47,9 @@ fn far_placements_are_declared_drops() {
     }
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .with_conservation(Conservation::Enforce)
         .run(
             &mut world,
@@ -145,6 +148,7 @@ fn the_bake_refuses_two_placed_prototypes_of_one_source_id() {
         world.insert(placement, Transform::IDENTITY);
     }
     let before = world.clone();
+    world.insert_resource(primase_core::parallel::Threads::ONE);
     let bake = BakeFromSoftLayers::new(PixelCap::new(64).unwrap(), Seconds::new(0.).unwrap());
     let err = bake.run(&mut world, &mut PassLog::default()).unwrap_err();
     assert!(
@@ -189,6 +193,7 @@ fn the_bake_refuses_level_of_detail_forms_before_changing_anything_and_leaves_un
     );
     world.insert(placement, Transform::IDENTITY);
     let before = world.clone();
+    world.insert_resource(primase_core::parallel::Threads::ONE);
     let bake = BakeFromSoftLayers::new(PixelCap::new(64).unwrap(), Seconds::new(0.).unwrap());
     let err = bake.run(&mut world, &mut PassLog::default()).unwrap_err();
     assert!(err.contains("select-lod"), "{err}");
@@ -214,6 +219,7 @@ fn the_bake_refuses_level_of_detail_forms_before_changing_anything_and_leaves_un
             far: false,
         },
     );
+    world.insert_resource(primase_core::parallel::Threads::ONE);
     let mut log = PassLog::default();
     bake.run(&mut world, &mut log).unwrap();
     assert_eq!(log.counts["unplaced meshes whose layer inputs stay"], 1);
@@ -330,6 +336,9 @@ fn a_lowered_material_carries_what_its_source_class_states_about_its_surfaces() 
     );
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .run(
             &mut world,
             &Pipeline {
@@ -462,6 +471,9 @@ fn an_additive_blend_is_a_light_volume_in_sekiro_and_an_additive_surface_in_elde
     );
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .run(
             &mut world,
             &Pipeline {
@@ -518,6 +530,9 @@ fn a_lowered_material_is_as_sided_as_the_face_sets_drawing_it_and_split_when_the
     );
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .run(
             &mut world,
             &Pipeline {
@@ -596,6 +611,9 @@ fn fromsoft_textures_lose_their_transforms_and_other_materials_keep_theirs() {
     world.insert(other, material.clone());
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .run(
             &mut world,
             &Pipeline {
@@ -643,6 +661,9 @@ fn object_collision_is_skipped_where_no_placed_model_has_collision() {
     let mut world = World::new();
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .run_part(&mut world, &Pipeline { passes: vec![pass] }, &mut report)
         .unwrap();
     assert_eq!(report.steps[0].skipped, ["fromsoft.object_collision"]);
@@ -659,6 +680,9 @@ fn rigid_skinning_is_skipped_where_the_world_holds_no_model() {
     let mut world = World::new();
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .run_part(&mut world, &Pipeline { passes: vec![pass] }, &mut report)
         .unwrap();
     assert_eq!(report.steps[0].skipped, ["fromsoft.flver"]);
@@ -688,6 +712,9 @@ fn the_material_bake_runs_where_no_material_has_a_binding() {
     world.insert(mesh, Mesh::new(vec![primitive(material)]));
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .run_part(&mut world, &Pipeline { passes: vec![pass] }, &mut report)
         .expect("a bake with no binding anywhere is not refused");
     assert!(report.steps[0].skipped.is_empty(), "it ran");

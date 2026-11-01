@@ -31,12 +31,12 @@ pub const LEGACY_GEOMETRY: &str = "drop-fromsoft-far, fromsoft-apply-rigid-skinn
     lower-fromsoft-geometry{pose=rigid,uv-tiling=apply,winding=normals,degenerates=drop,leave-out=sky+light-volume+shadow+billboard,blocker-cards=record,speedtree-frame=program}, \
     select-lod{form=finest}";
 
-/// The FromSoft passes and `select-lod`.
+/// The FromSoft passes and `select-lod`, run on the configuration's threads ([`threads`]).
 pub fn manager() -> PassManager {
     let mut registry = PassRegistry::new();
     primase_fromsoft::sekiro::passes::register(&mut registry);
     registry.add(&primase_core::SELECT_LOD);
-    PassManager::new(registry)
+    PassManager::new(registry).with_settings(primase_core::pass::Settings { threads: threads() })
 }
 
 /// Run `pipeline` on `world`, with the conservation check enforced: every placement, primitive, triangle and
@@ -114,7 +114,8 @@ pub fn quad(
 pub fn image_passes(world: &mut primase_core::World, pipeline: &str) -> primase_core::pass::RunReport {
     let mut registry = primase_core::pass::PassRegistry::new();
     primase_image::register(&mut registry);
-    let manager = primase_core::pass::PassManager::new(registry);
+    let manager = primase_core::pass::PassManager::new(registry)
+        .with_settings(primase_core::pass::Settings { threads: threads() });
     let mut report = primase_core::pass::RunReport::default();
     manager
         .run(

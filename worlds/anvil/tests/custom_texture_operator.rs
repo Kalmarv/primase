@@ -129,6 +129,7 @@ fn the_area_52_tex2_blends_lower_with_their_unset_masks_white() {
     let mut archive = Archive::open(&ORDER.map(|f| dir.join(f))).expect("archive");
     let ids: Vec<u64> = AREA_52.iter().map(|n| material(&mut archive, n)).collect();
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut placed = Placed::default();
     let mut entities = Vec::new();
     {
@@ -198,6 +199,7 @@ fn custom_operator_bindings_name_the_set_slot_their_materials_texture_comes_from
     let waterfall = material(&mut archive, "MAD_MAT_Waterfall");
     let cactus = material(&mut archive, "VEG-Des-CactusSkin01");
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut placed = Placed::default();
     let (wf, cs) = {
         let mut placer = Placer::new(&mut archive, &mut w, SourceFrame::WORLD, InstancedLevels::Slot);

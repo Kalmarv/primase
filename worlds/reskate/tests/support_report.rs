@@ -39,6 +39,7 @@ fn light(w: &mut World, x: f32) -> primase_core::Entity {
 /// A raised map: a prototype of one triangle placed once, a light raised with it, and a spawn.
 fn raised() -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let material = w.spawn();
     w.insert(material, Name("stone".into()));
     w.insert(material, PbrMaterial::default());

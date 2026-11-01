@@ -69,6 +69,7 @@ fn place(w: &mut World, prototype: Entity, east: f32, north: f32) -> Entity {
 /// everything from 10 m.
 fn map() -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut surfaces = Surfaces::default();
     let concrete = surfaces.index("concrete").unwrap();
     w.insert_resource(surfaces);
@@ -271,7 +272,9 @@ fn context_by_area_holds_what_each_parts_markers_read() {
         &mut Planned(w),
         &mut PlannedParts::default(),
         Box::new(Capture(got.clone())),
-        &PassManager::new(PassRegistry::new()),
+        &PassManager::new(PassRegistry::new()).with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        }),
         &Pipeline { passes: Vec::new() },
         &Summarized {
             registry: &registry,

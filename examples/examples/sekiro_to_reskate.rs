@@ -111,7 +111,13 @@ fn main() -> Result<()> {
 
     // Read, lower, prepare, write `out/ashina`; what was left out or approximated comes back as notices.
     let writer = Box::new(MapSink::new(Path::new(""), &e));
-    let report = convert(&mut reader, writer, &PassManager::new(PassRegistry::new()), &lower, &prepare)?;
+    // the passes run on the machine's threads, as the program states them (each step's report says them)
+    let settings = primase_core::pass::Settings {
+        threads: primase_core::parallel::Threads::new(std::thread::available_parallelism()?.get())
+            .ok_or("no threads")?,
+    };
+    let manager = PassManager::new(PassRegistry::new()).with_settings(settings);
+    let report = convert(&mut reader, writer, &manager, &lower, &prepare)?;
     for notice in report.notices() {
         println!("{notice}");
     }

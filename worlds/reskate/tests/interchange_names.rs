@@ -20,6 +20,7 @@ use primase_reskate::{read, write};
 /// A raised map: two slabs, each drawn with a texture named "diffuse", their pixels different; and a spawn.
 fn map() -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     for (k, grey) in [(0.0f32, 60u8), (10.0, 200)] {
         let tex = w.spawn();
         w.insert(tex, Name("diffuse".into()));
@@ -152,6 +153,7 @@ fn same_named_images_are_written_under_names_of_their_own_and_read_back() {
     );
     // it reads back, loaded, and draws the same texture files as the world it came from
     let mut back = World::new();
+    back.insert_resource(primase_core::parallel::Threads::ONE);
     read::interchange::read(&out, &mut back).unwrap();
     read::interchange::load(&out, &mut back).unwrap();
     assert_eq!(texture_files(&back, "back"), texture_files(&w, "direct"));

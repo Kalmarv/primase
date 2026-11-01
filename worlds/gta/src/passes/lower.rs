@@ -1311,6 +1311,7 @@ mod tests {
             (t.role, t.color_space, t.normal),
             (TexRole::Normal, ColorSpace::Linear, Some(super::GTA_NORMALS))
         );
+        w.insert_resource(primase_core::parallel::Threads::ONE);
         primase_image::normalize_normals(&mut w).unwrap();
         let t = w.get::<Texture>(n).unwrap();
         assert_eq!(t.normal, Some(primase_core::NormalConvention::GLTF));

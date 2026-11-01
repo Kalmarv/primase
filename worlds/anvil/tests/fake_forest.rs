@@ -55,6 +55,7 @@ fn triangle(material: Entity, colour: [[u8; 4]; 3]) -> Primitive {
 #[test]
 fn fake_forest_takes_its_vertex_colour_decoded() {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let forest = material(&mut w, "MAD_FakeForest");
     let other = material(&mut w, "MAD_Unknown");
     let colour = [[255, 128, 0, 200], [51, 51, 51, 255], [0, 0, 0, 0]];
@@ -115,6 +116,7 @@ fn grass_ao_takes_its_vertex_alpha_as_occlusion() {
     use primase_anvil::components::{BoundTexture, MaterialBinding, MaterialValue, TextureFrom};
     use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let texture = |w: &mut World| {
         let e = w.spawn();
         w.insert(

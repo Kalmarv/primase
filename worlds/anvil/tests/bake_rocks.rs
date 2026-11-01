@@ -128,6 +128,7 @@ fn rocks_bake_as_the_notes_formulas() {
     println!("Rocks Materials: {}", ids.len());
 
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut placed = Placed::default();
     let materials: Vec<Entity> = {
         let mut placer =

@@ -20,6 +20,7 @@ fn texture() -> Texture {
 #[test]
 fn normalization_all_levels_provenance_and_idempotence() {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let e = w.spawn();
     w.insert(e, texture());
     w.insert(
@@ -49,6 +50,7 @@ fn normalization_all_levels_provenance_and_idempotence() {
 #[test]
 fn normalization_moves_x_from_alpha() {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let e = w.spawn();
     let mut t = texture();
     // DXT5nm: X in alpha, red and blue unused
@@ -72,6 +74,7 @@ fn normalization_moves_x_from_alpha() {
 #[test]
 fn normalization_errors_before_any_mutation() {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let a = w.spawn();
     w.insert(a, texture());
     let b = w.spawn();
@@ -100,6 +103,7 @@ fn load_png_dds_preserves_levels_and_files() {
     )
     .unwrap();
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let a = w.spawn();
     w.insert(
         a,
@@ -148,6 +152,7 @@ fn rgb_png_has_no_alpha_channel() {
 #[test]
 fn normalization_swaps_source_basis_after_channel_and_sign_decode() {
     let mut world = World::new();
+    world.insert_resource(primase_core::parallel::Threads::ONE);
     let e = world.spawn();
     let mut t = texture();
     t.levels = vec![[255, 64, 0, 200].repeat(4), vec![255, 128, 0, 128]];
@@ -185,6 +190,7 @@ fn rebuild_projects_outside_disk_on_every_mip_without_changing_alpha() {
         vec![0, 255, 2, 55],
     ];
     let mut world = World::new();
+    world.insert_resource(primase_core::parallel::Threads::ONE);
     let e = world.spawn();
     world.insert(e, t);
     let log = normalize_normals(&mut world).unwrap();
@@ -263,8 +269,11 @@ fn normalize_normals_runs_on_a_world_without_textures() {
     let mut registry = pass::PassRegistry::new();
     registry.add(&primase_image::NORMALIZE_NORMALS);
     let pipeline = registry.parse("normalize-normals").unwrap();
-    let manager = pass::PassManager::new(registry);
+    let manager = pass::PassManager::new(registry).with_settings(primase_core::pass::Settings {
+        threads: primase_core::parallel::Threads::ONE,
+    });
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut report = pass::RunReport::default();
     manager.run(&mut w, &pipeline, &mut report).unwrap();
 }

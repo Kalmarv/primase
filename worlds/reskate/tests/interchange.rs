@@ -460,6 +460,7 @@ fn layered_cell_closure_keeps_textures_and_mask_lowering() {
     primase_reskate::passes::LowerLayeredPbr
         .run(&mut cell, &mut PassLog::default())
         .unwrap();
+    cell.insert_resource(primase_core::parallel::Threads::ONE);
     primase_image::normalize_normals(&mut cell).unwrap();
     let material = cell.get::<Mesh>(prototype).unwrap().primitives()[0]
         .material
@@ -1318,7 +1319,9 @@ fn lowering_to_pbr() {
     );
     let mut reg = PassRegistry::new();
     primase_reskate::register(&mut reg);
-    let m = PassManager::new(reg);
+    let m = PassManager::new(reg).with_settings(primase_core::pass::Settings {
+        threads: primase_core::parallel::Threads::ONE,
+    });
     let mut report = RunReport::default();
     m.run(&mut w, &m.registry.parse("lower-skate-pbr").unwrap(), &mut report)
         .unwrap();

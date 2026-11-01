@@ -487,7 +487,7 @@ impl LowerSkatebirdVoronoi {
             n.clamp(1, self.max_texels)
         };
         let shared = colour.is_some() && colour == bump && tiling(m, "_MainTex") == tiling(m, "_BumpMap");
-        let threads = primase_core::parallel::threads(w);
+        let threads = primase_core::parallel::threads(w).map_err(|e| e.to_string())?;
         let mut baked = BTreeMap::new();
         if let Some(n) = colour {
             let t = texels(n);
@@ -630,6 +630,9 @@ impl Pass for LowerSkatebirdVoronoi {
     fn approximates(&self) -> &'static str {
         "Bumped Specular Voronoi's stochastic tiling baked as a K x K-cell block that tiles, its first cell \
          cross-faded; its surface recovered from five lit evaluations"
+    }
+    fn settings(&self) -> &[primase_core::pass::Setting] {
+        &[primase_core::parallel::THREADS]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let colour_space = match self.colour_space {

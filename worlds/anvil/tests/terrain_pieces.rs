@@ -19,6 +19,7 @@ use primase_core::{
 /// one endpoint), a flat noise.
 fn world() -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let noise = w.spawn();
     w.insert(
         noise,

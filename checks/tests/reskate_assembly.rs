@@ -82,7 +82,9 @@ fn legion_materials_are_the_same_encoded_or_identified() -> Result<()> {
     convert(
         &mut reader,
         Box::new(Both { got: got.clone() }),
-        &PassManager::new(registry),
+        &PassManager::new(registry).with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        }),
         &select,
         &passes,
     )?;

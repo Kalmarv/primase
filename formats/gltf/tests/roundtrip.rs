@@ -638,6 +638,7 @@ fn load_mesh_files_restores_meshes() {
             .unwrap() as u32
     };
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let m1 = w.spawn();
     let p1 = w.spawn();
     let p2 = w.spawn();
@@ -672,6 +673,7 @@ fn load_mesh_files_restores_meshes() {
     assert_eq!(w.get::<Mesh>(p2).unwrap().primitives()[1].material, Some(m1));
 
     let mut w2 = World::new();
+    w2.insert_resource(primase_core::parallel::Threads::ONE);
     let p = w2.spawn();
     w2.insert(
         p,
@@ -814,6 +816,8 @@ fn memory_textures_embed_exact_pixels_and_require_normal_conversion() {
             .to_string()
             .contains("normalize-normals")
     );
+    b.world
+        .insert_resource(primase_foundations::parallel::Threads::ONE);
     primase_image::normalize_normals(&mut b.world).unwrap();
     assert!(written(&b).1.textures_skipped.is_empty());
 }
@@ -859,6 +863,7 @@ fn the_writer_invents_no_material_and_no_texture_coordinates() {
     };
     let build = |uv: bool| {
         let mut w = World::new();
+        w.insert_resource(primase_core::parallel::Threads::ONE);
         let texture = w.spawn();
         w.insert(
             texture,
@@ -917,7 +922,10 @@ fn the_writer_invents_no_material_and_no_texture_coordinates() {
     // the program's choices fill both
     let mut registry = primase_core::pass::PassRegistry::new();
     primase_gltf::register(&mut registry);
-    let manager = primase_core::pass::PassManager::new(registry);
+    let manager =
+        primase_core::pass::PassManager::new(registry).with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        });
     let mut run = primase_core::pass::RunReport::default();
     manager
         .run(

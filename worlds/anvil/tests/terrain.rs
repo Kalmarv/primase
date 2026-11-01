@@ -84,7 +84,11 @@ fn the_campus_ground_reads_and_lowers() {
         normals: GroundNormals::None,
         steep: Steep::None,
     };
-    let manager = PassManager::new(PassRegistry::new()).with_pass_checks(true);
+    let manager = PassManager::new(PassRegistry::new())
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
+        .with_pass_checks(true);
     let mut report = RunReport::default();
     manager
         .run(

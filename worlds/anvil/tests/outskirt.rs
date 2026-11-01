@@ -50,6 +50,7 @@ fn outskirt_maps_each_placement_by_its_world_position() {
         }
     }
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut placed = Placed::default();
     let material = Placer::new(&mut archive, &mut w, SourceFrame::ENU, InstancedLevels::Slot)
         .material(id.expect("the Outskirt Material"), &mut placed)
@@ -158,6 +159,7 @@ fn outskirt_maps_each_placement_by_its_world_position() {
 fn world_uv_is_skipped_where_no_material_is_world_mapped() {
     use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mesh = w.spawn();
     w.insert(
         mesh,
@@ -173,6 +175,9 @@ fn world_uv_is_skipped_where_no_material_is_world_mapped() {
     );
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .run(
             &mut w,
             &Pipeline {

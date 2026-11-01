@@ -54,7 +54,12 @@ fn main() -> Result<(), BoxError> {
     let scene = world.resource::<SkateScene>().ok_or("no scene")?;
     let scene_name = scene.display_name.clone().unwrap_or_else(|| scene.name.clone());
 
-    let manager = PassManager::new(registry());
+    // the passes run on the machine's threads, as the program states them (each step's report says them)
+    let settings = primase_core::pass::Settings {
+        threads: primase_core::parallel::Threads::new(std::thread::available_parallelism()?.get())
+            .ok_or("no threads")?,
+    };
+    let manager = PassManager::new(registry()).with_settings(settings);
     manager.verify(&world, "the reader")?;
     // the finest form of each prototype, then only what is left loaded
     let select = manager.registry.parse("select-lod{form=finest}")?;

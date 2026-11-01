@@ -42,6 +42,7 @@ fn curve(w: &mut World, points: Vec<[f32; 3]>, surface: u32) -> Entity {
 /// 1 m up along east (scene x) 0..2, a rail with a right-angled corner, and one of two equal points.
 fn world() -> (World, [Entity; 3]) {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut surfaces = Surfaces::default();
     let concrete = surfaces.index("concrete").unwrap();
     w.insert_resource(surfaces);
@@ -205,6 +206,9 @@ fn a_world_without_curves_gets_nothing() {
     }
     let mut report = primase_core::pass::RunReport::default();
     primase_core::pass::PassManager::new(primase_core::pass::PassRegistry::new())
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .run(
             &mut w,
             &primase_core::pass::Pipeline {

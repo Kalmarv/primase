@@ -55,6 +55,7 @@ fn source_mask_channels_match_independent_pixels() -> Result<(), Box<dyn std::er
         };
         assert_eq!((image.width, image.height), (case.width, case.height));
         let mut world = World::new();
+        world.insert_resource(primase_core::parallel::Threads::ONE);
         let source = world.spawn();
         world.insert(
             source,

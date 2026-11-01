@@ -217,7 +217,14 @@ fn main() -> Result<(), BoxError> {
     ));
     passes.push(Box::new(primase_reskate::passes::PlanReskateBlendBudget::pool()));
     let mut prepared = RunReport::default();
-    PassManager::new(PassRegistry::new()).run(&mut w, &Pipeline { passes }, &mut prepared)?;
+    // the passes run on the machine's threads, as the program states them (each step's report says them)
+    let settings = primase_core::pass::Settings {
+        threads: primase_core::parallel::Threads::new(std::thread::available_parallelism()?.get())
+            .ok_or("no threads")?,
+    };
+    PassManager::new(PassRegistry::new())
+        .with_settings(settings)
+        .run(&mut w, &Pipeline { passes }, &mut prepared)?;
     for step in lods.steps.iter().chain(&dropped.steps).chain(&prepared.steps) {
         if !step.log.counts.is_empty() {
             println!("{}: {:?}", step.pass, step.log.counts);

@@ -255,6 +255,9 @@ impl Pass for PrepareReskateWater {
     fn requires(&self) -> &[&'static str] {
         &["skate.scene"]
     }
+    fn settings(&self) -> &[primase_core::pass::Setting] {
+        &[primase_core::parallel::THREADS]
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         // every choice is the surface's own but the content extent, which a map in parts takes from its merged
         // content bounds (skate.content_bounds)
@@ -496,6 +499,7 @@ mod tests {
             |p| p,
         );
         w.insert(ground, c);
+        w.insert_resource(primase_core::parallel::Threads::ONE);
         crate::passes::raise_skate(
             &mut w,
             &crate::passes::RaiseOptions::new(

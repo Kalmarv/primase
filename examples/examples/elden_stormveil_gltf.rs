@@ -17,7 +17,9 @@ use std::path::Path;
 use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::{Game, Install, Keys};
 use primase_core::convert::Reader;
-use primase_core::pass::{MissingInputs, PassManager, PassRegistry, Pipeline, RunReport, Stages, pass_text, text_form};
+use primase_core::pass::{
+    MissingInputs, PassManager, PassRegistry, Pipeline, RunReport, Settings, Stages, pass_text, text_form,
+};
 use primase_core::{LodChoice, SelectLod};
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::materials::SkipClass;
@@ -199,8 +201,8 @@ fn registry() -> PassRegistry {
 }
 
 /// A step the world cannot feed (a pass whose input the area lacks) is skipped and reported, never refused.
-fn manager() -> PassManager {
-    PassManager::new(registry()).with_missing_inputs(MissingInputs::Skip)
+fn manager(settings: Settings) -> PassManager {
+    PassManager::new(registry()).with_missing_inputs(MissingInputs::Skip).with_settings(settings)
 }
 
 /// Each pass of `pipeline` as it states itself.
@@ -228,7 +230,9 @@ fn main() -> Result<(), Error> {
         Install::new(&root, game, Keys::from_folder(keys, game, game.param_key_sha256())?).with_threads(threads);
     let oodle = sekiro::decoder::load_installed(&root)?;
     let decoder = Decoder { oodle: Some(oodle), max_output: 1 << 30 };
-    let manager = manager();
+    // the passes run on the machine's threads, as the program states them (each step's report says them)
+    let manager =
+        manager(Settings { threads: primase_core::parallel::Threads::new(threads.get()).ok_or("no threads")? });
 
     // The candidates: where the area's drawn parts stand and which draw-param files it holds.
     let mut candidates = sekiro::read_area_candidates(&install.open()?, &decoder, game, AREA)?;
@@ -284,7 +288,7 @@ mod tests {
     /// is one the passes' own declarations accept.
     #[test]
     fn the_stated_pipelines_parse_and_order() -> Result<(), Error> {
-        let manager = manager();
+        let manager = manager(Settings { threads: primase_core::parallel::Threads::ONE });
         manager.registry.parse(&selection())?.check()?;
         manager.registry.parse(&[lowering()?, writer()].concat().join(", "))?.check()?;
         Ok(())

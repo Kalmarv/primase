@@ -65,6 +65,7 @@ fn decal_fx_is_its_team_colour_cut_out_at_its_cell() {
     }
     assert_eq!(ids.len(), 1, "the notes find one");
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut placed = Placed::default();
     let e = Placer::new(&mut archive, &mut w, SourceFrame::WORLD, InstancedLevels::Slot)
         .material(ids[0], &mut placed)

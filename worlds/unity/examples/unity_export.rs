@@ -161,13 +161,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             mirrors: primase_meshops::Mirrors::Bake,
         }),
     ];
+    // the passes run on the machine's threads, as the program states them (each step's report says them)
+    let settings = primase_core::pass::Settings {
+        threads: primase_core::parallel::Threads::new(std::thread::available_parallelism()?.get())
+            .ok_or("no threads")?,
+    };
     let mut lowering = Vec::new();
     for p in passes {
         // a pass's input may come from an earlier pass (terrain textures for normalize-normals)
         let present = |w: &World, p: &dyn Pass| p.requires().iter().all(|r| w.has_component_named(r));
         if present(&w, p.as_ref()) {
             let mut report = RunReport::default();
-            PassManager::new(PassRegistry::new()).run(&mut w, &Pipeline { passes: vec![p] }, &mut report)?;
+            PassManager::new(PassRegistry::new())
+                .with_settings(settings)
+                .run(&mut w, &Pipeline { passes: vec![p] }, &mut report)?;
             lowering.extend(report.steps);
         } else {
             println!("{}: nothing to lower", p.name());

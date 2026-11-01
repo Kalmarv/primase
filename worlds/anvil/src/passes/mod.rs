@@ -1817,6 +1817,9 @@ impl Pass for LowerAnvilTerrain {
          stated choices; its normals, where stated, the near-camera normal at every distance; its steep ground, where \
          charted, above a threshold of this pass's choice (the game's triangle class rule is not read)"
     }
+    fn settings(&self) -> &[primase_core::pass::Setting] {
+        &[primase_core::parallel::THREADS]
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let terrains: Vec<Entity> = w.iter::<AnvilTerrain>().map(|(e, _)| e).collect();
         for e in terrains {

@@ -115,7 +115,9 @@ fn convert(
         &mut Prepared(world),
         &mut Given(parts, 0),
         Box::new(Capture(got.clone(), seen)),
-        &PassManager::new(PassRegistry::new()),
+        &PassManager::new(PassRegistry::new()).with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        }),
         &Pipeline { passes: Vec::new() },
         &Summarized {
             registry: &registry,
@@ -177,6 +179,7 @@ fn kept(w: &World) -> Wrote {
 #[test]
 fn lights_reached_through_roots_are_owned_once_and_context_is_not() {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     w.insert_resource(SkateScene {
         name: "own".into(),
         ..Default::default()
@@ -289,6 +292,7 @@ fn floor_and_textures(w: &World) -> Wrote {
 #[test]
 fn a_placement_reached_through_a_root_is_measured_and_weighed() {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let wide = slab(&mut w, 40.0, 30);
     let small = slab(&mut w, 2.0, 120);
     let other = slab(&mut w, 3.0, 220);
@@ -373,6 +377,7 @@ impl Pass for Spark {
 #[test]
 fn made_lights_are_owned_as_conversion_writes_them() {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     w.insert_resource(SkateScene {
         name: "own".into(),
         ..Default::default()

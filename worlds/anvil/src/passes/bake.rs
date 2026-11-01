@@ -112,14 +112,14 @@ use iridia_exec::{
     evaluate::Constants, evaluate_raw_with,
 };
 use iridia_interface::SamplerState;
-use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec, Setting};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
 use primase_core::shader::NormalEncoding;
 use primase_core::{
     ColorSpace, Component, Entity, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat,
     TexRole, Texture, VertexColor, World,
 };
-use primase_foundations::{sampling::Address, sampling::Transfer};
+use primase_foundations::{parallel::Threads, sampling::Address, sampling::Transfer};
 
 use super::material::{Green, NORMAL_GREEN, SHADER_UV, ShaderUv, UNSET, Unset, uv_transform};
 use crate::components::{AnvilMaterial, AnvilShaders, MaterialBinding, MaterialValue};
@@ -888,8 +888,15 @@ fn decode_normal(o1: [f32; 3]) -> ([f64; 3], u8) {
 }
 
 impl BakeAnvilMaterial {
-    /// Run `program` for `m` (whose recipe is `recipe`) over the texture square.
-    fn bake(&self, w: &World, m: &AnvilMaterial, recipe: &Recipe, program: &[u8]) -> Result<Baked, String> {
+    /// Run `program` for `m` (whose recipe is `recipe`) over the texture square, on `threads`.
+    fn bake(
+        &self,
+        w: &World,
+        threads: Threads,
+        m: &AnvilMaterial,
+        recipe: &Recipe,
+        program: &[u8],
+    ) -> Result<Baked, String> {
         let shader = iridia_exec::ProgramShader::new(iridia_dxbc::lift(program).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
         let mut rows = material_rows(m)?;
@@ -1127,7 +1134,7 @@ impl BakeAnvilMaterial {
         }
         let textures = iridia_exec::Views::refusing(textures);
         let raw = evaluate_raw_with(
-            primase_core::parallel::threads(w),
+            threads,
             &shader,
             &constants,
             &textures,
@@ -1343,7 +1350,11 @@ impl Pass for BakeAnvilMaterial {
         "Materials baked from their G-buffer shader at a stated size: the bake's own trilinear sampling at the stated \
          addressing, a plain draw, 8-bit outputs"
     }
+    fn settings(&self) -> &[Setting] {
+        &[primase_core::parallel::THREADS]
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let threads = primase_core::parallel::threads(w).map_err(|e| e.to_string())?;
         let materials: Vec<Entity> = w
             .iter::<AnvilMaterial>()
             .filter(|(_, m)| {
@@ -1380,7 +1391,7 @@ impl Pass for BakeAnvilMaterial {
                     .map(<[u8]>::to_vec)
                     .ok_or_else(|| format!("its template has no pixel permutation {key:#x}")),
             };
-            let baked = program.and_then(|p| self.bake(w, m, recipe, &p));
+            let baked = program.and_then(|p| self.bake(w, threads, m, recipe, &p));
             let baked = match baked {
                 Ok(b) => b,
                 Err(why) => {

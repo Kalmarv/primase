@@ -127,6 +127,7 @@ fn sampling(entity: Entity, slot: TextureRef) -> Result<Wrap> {
 }
 
 pub(super) fn prepare(world: &World, materials: &[(Entity, PbrMaterial)]) -> Result<Materials> {
+    let threads = primase_core::parallel::threads(world)?;
     let mut plan = Materials {
         masks: Vec::new(),
         mask_names: Vec::new(),
@@ -293,7 +294,7 @@ pub(super) fn prepare(world: &World, materials: &[(Entity, PbrMaterial)]) -> Res
             // any texel rounded: an OR over the texels, which no thread's order changes
             let quantized = std::sync::atomic::AtomicBool::new(false);
             let texture = primase_image::map_rgba8_levels_with(
-                primase_core::parallel::threads(world),
+                threads,
                 source,
                 0..source.levels.len(),
                 primase_image::TextureMetadata {

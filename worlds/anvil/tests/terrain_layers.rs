@@ -60,6 +60,7 @@ fn solid_bc1(c: [u8; 4]) -> Vec<u8> {
 /// The hand-made terrain, `undetailed` a material without a detail diffuse.
 fn world(undetailed: Option<u8>) -> (World, Vec<Entity>) {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let texture = |w: &mut World, rgba: Vec<u8>, side: u32| {
         let e = w.spawn();
         w.insert(

@@ -525,8 +525,13 @@ impl Resource for PartScope {
     }
 }
 
-/// The resources a conversion makes for its own work, never content a writer is to write.
-pub const OPERATIONAL_RESOURCES: &[&str] = &[PartitionPlan::NAME, PartScope::NAME];
+/// The resources a conversion makes for its own work, and the run settings the pass manager states
+/// ([`crate::pass::PassManager::with_settings`]): never content a writer is to write.
+pub const OPERATIONAL_RESOURCES: &[&str] = &[
+    PartitionPlan::NAME,
+    PartScope::NAME,
+    <primase_foundations::parallel::Threads as Resource>::NAME,
+];
 
 impl Resource for PartitionPlan {
     const NAME: &'static str = "core.partition_plan";

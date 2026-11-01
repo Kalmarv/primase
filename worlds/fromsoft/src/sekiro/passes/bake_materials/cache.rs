@@ -2,10 +2,9 @@
 use super::pixels::{self, Baked, BoundTexture, Prepared};
 use iridia_exec::{Filtering, Input, Lane, SampledTexture};
 use primase_cache::{Key, KeyBuilder, source_hash};
-use primase_core::World;
 use primase_core::pass::PassLog;
 use primase_core::pass::memo::{Key as MemoKey, Memo};
-use primase_foundations::{sampling::Address, sampling::Subtexel, sampling::Transfer};
+use primase_foundations::{parallel::Threads, sampling::Address, sampling::Subtexel, sampling::Transfer};
 use std::collections::BTreeMap;
 
 /// The files that compute a bake's bytes in this crate: editing one retires every entry made before.
@@ -293,12 +292,12 @@ pub(super) enum Error {
 
 pub(super) fn bake(
     prepared: Prepared<'_>,
-    world: &World,
+    threads: Threads,
     memo: Option<&Memo>,
     log: &mut PassLog,
 ) -> Result<Product, Error> {
     let Some(memo) = memo else {
-        return Product::finish(pixels::bake(prepared, world).map_err(Error::Refused)?)
+        return Product::finish(pixels::bake(prepared, threads).map_err(Error::Refused)?)
             .map_err(Error::Failed);
     };
     let key = MemoKey(prepared.key(&memo.build).map_err(Error::Failed)?.bytes());
@@ -311,7 +310,7 @@ pub(super) fn bake(
     }
     log.count("program bake cache misses", 1);
     let baked =
-        Product::finish(pixels::bake(prepared, world).map_err(Error::Refused)?).map_err(Error::Failed)?;
+        Product::finish(pixels::bake(prepared, threads).map_err(Error::Refused)?).map_err(Error::Failed)?;
     // A failed advisory write cannot change a successful bake. The program reads its store's error statistics.
     memo.store.put(&key, &frame(&baked).map_err(Error::Failed)?);
     Ok(baked)
@@ -424,7 +423,7 @@ mod tests {
         ConstantBinding, ConstantRole, InputBinding, InputRole, LaneStream, NormalEncoding, NormalSpace,
         OutputBinding, OutputRole, ScalarEncoding,
     };
-    use primase_core::{ColorSpace, Entity, TexFormat, TexRole, Texture};
+    use primase_core::{ColorSpace, Entity, TexFormat, TexRole, Texture, World};
     use primase_core::{shader::Shader, shader::StageBinding, shader::TextureBinding, shader::TextureSource};
 
     struct Fixture {
@@ -638,8 +637,8 @@ mod tests {
         let low = pixels::prepare(&f.world, f.stages(), &f.material, 4, 0., pixels::Form::Low).unwrap();
         assert_eq!((low.source_size, low.size), ([1, 1], 1));
         let mut log = PassLog::default();
-        let full = bake(f.prepare(4), &f.world, None, &mut log).unwrap();
-        let low = bake(low, &f.world, None, &mut log).unwrap();
+        let full = bake(f.prepare(4), Threads::ONE, None, &mut log).unwrap();
+        let low = bake(low, Threads::ONE, None, &mut log).unwrap();
         assert_eq!((full.size, low.size, low.albedo.len()), (2, 1, 4));
         assert!(
             full.same_outputs(&low),
@@ -661,14 +660,14 @@ mod tests {
         let f = Fixture::new();
         let dir = directory("roundtrip");
         let mut fresh_log = PassLog::default();
-        let fresh = bake(f.prepare(2), &f.world, None, &mut fresh_log).unwrap();
+        let fresh = bake(f.prepare(2), Threads::ONE, None, &mut fresh_log).unwrap();
         fresh.report(&mut fresh_log, f.texture);
         let expected = frame(&fresh).unwrap();
         let cache = Arc::new(Cache::open(&dir, 1 << 20).unwrap());
         let mut miss_log = PassLog::default();
         let miss = bake(
             f.prepare(2),
-            &f.world,
+            Threads::ONE,
             Some(&memo(&cache, "build-a")),
             &mut miss_log,
         )
@@ -684,7 +683,7 @@ mod tests {
         let mut hit_log = PassLog::default();
         let hit = bake(
             f.prepare(2),
-            &f.world,
+            Threads::ONE,
             Some(&memo(&cache, "build-a")),
             &mut hit_log,
         )
@@ -706,7 +705,7 @@ mod tests {
         let dir = directory("invalidation");
         let cache = Arc::new(Cache::open(&dir, 1 << 20).unwrap());
         let original = f.prepare(2).key("build-a").unwrap();
-        let product = Product::finish(pixels::bake(f.prepare(2), &f.world).unwrap()).unwrap();
+        let product = Product::finish(pixels::bake(f.prepare(2), Threads::ONE).unwrap()).unwrap();
         cache.put(&original, &frame(&product).unwrap()).unwrap();
         assert!(cache.get(&original).is_some());
         let ConstantRole::Material(words) = &mut f.pixel.constants[0].role else {
@@ -781,13 +780,19 @@ mod tests {
         let dir = directory("build");
         let cache = Arc::new(Cache::open(&dir, 1 << 20).unwrap());
         let mut a = PassLog::default();
-        bake(f.prepare(2), &f.world, Some(&memo(&cache, "build-a")), &mut a).unwrap();
+        bake(f.prepare(2), Threads::ONE, Some(&memo(&cache, "build-a")), &mut a).unwrap();
         assert_eq!(a.counts["program bake cache misses"], 1);
         let mut again = PassLog::default();
-        bake(f.prepare(2), &f.world, Some(&memo(&cache, "build-a")), &mut again).unwrap();
+        bake(
+            f.prepare(2),
+            Threads::ONE,
+            Some(&memo(&cache, "build-a")),
+            &mut again,
+        )
+        .unwrap();
         assert_eq!(again.counts["program bake cache hits"], 1);
         let mut b = PassLog::default();
-        bake(f.prepare(2), &f.world, Some(&memo(&cache, "build-b")), &mut b).unwrap();
+        bake(f.prepare(2), Threads::ONE, Some(&memo(&cache, "build-b")), &mut b).unwrap();
         assert_eq!(b.counts["program bake cache misses"], 1);
         assert!(!b.counts.contains_key("program bake cache hits"));
         assert_ne!(
@@ -807,7 +812,13 @@ mod tests {
         let key = f.prepare(2).key("build-a").unwrap();
         cache.put(&key, b"not a bake payload").unwrap();
         let mut log = PassLog::default();
-        let product = bake(f.prepare(2), &f.world, Some(&memo(&cache, "build-a")), &mut log).unwrap();
+        let product = bake(
+            f.prepare(2),
+            Threads::ONE,
+            Some(&memo(&cache, "build-a")),
+            &mut log,
+        )
+        .unwrap();
         assert_eq!(log.counts["program bake cache invalid payloads"], 1);
         assert_eq!(log.counts["program bake cache misses"], 1);
         let payload = frame(&product).unwrap();

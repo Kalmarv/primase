@@ -20,6 +20,9 @@ use primase_reskate::passes::{
 fn run(w: &mut World, passes: Vec<Box<dyn Pass>>) -> Result<PassLog, String> {
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
         .with_conservation(Conservation::Enforce)
         .run(w, &Pipeline { passes }, &mut report)
         .map_err(|e| e.to_string())?;

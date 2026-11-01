@@ -63,6 +63,7 @@ fn place(w: &mut World, prototype: Entity, at: [f32; 3]) {
 /// first cell; ground at 0 over the region; a water outline at east 2000..2100; the spawn snapped (as a program does).
 fn world() -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let grey = w.spawn();
     w.insert(grey, Name("grey".into()));
     w.insert(

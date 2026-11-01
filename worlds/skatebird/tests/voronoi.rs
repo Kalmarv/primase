@@ -71,7 +71,9 @@ fn the_baked_maps_of_a_level() {
         .iter()
         .map(|text| registry.parse(text).unwrap())
         .collect();
-    let manager = PassManager::new(registry);
+    let manager = PassManager::new(registry).with_settings(primase_core::pass::Settings {
+        threads: primase_core::parallel::Threads::ONE,
+    });
     let started = std::time::Instant::now();
     let mut report = RunReport::default();
     for pipeline in &pipelines {

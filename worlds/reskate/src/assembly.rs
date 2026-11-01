@@ -1353,6 +1353,7 @@ mod tests {
         }
         let ground = w.spawn();
         w.insert(ground, c);
+        w.insert_resource(primase_core::parallel::Threads::ONE);
         crate::passes::raise_skate(
             &mut w,
             &crate::passes::RaiseOptions::new(
@@ -1442,6 +1443,7 @@ mod tests {
             t.cols[3] = [10.0 * k as f32, 0.0, 0.0];
             w.insert(p, t);
         }
+        w.insert_resource(primase_core::parallel::Threads::ONE);
         crate::passes::raise_skate(
             &mut w,
             &crate::passes::RaiseOptions::new(

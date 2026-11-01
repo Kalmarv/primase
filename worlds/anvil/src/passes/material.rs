@@ -1200,7 +1200,7 @@ fn derived(
         .ok_or("a texture entity without a texture")?;
     let srgb = srgb(w, source);
     map_rgba8_levels_with(
-        primase_core::parallel::threads(w),
+        primase_core::parallel::threads(w).map_err(|e| e.to_string())?,
         t,
         0..t.levels.len(),
         TextureMetadata {
@@ -1273,6 +1273,9 @@ impl Pass for LowerAnvilMaterial {
     }
     fn approximates(&self) -> &'static str {
         "Riders Republic materials as metal-rough PBR: no vertex-colour factor or translucency, UV transforms only of the forms seen, other templates a placeholder; alpha-tested Decals1 Materials in the decal layer or not as decals1-cutout states (the template does not decide it)"
+    }
+    fn settings(&self) -> &[primase_core::pass::Setting] {
+        &[primase_core::parallel::THREADS]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let materials: Vec<Entity> = w.iter::<AnvilMaterial>().map(|(e, _)| e).collect();

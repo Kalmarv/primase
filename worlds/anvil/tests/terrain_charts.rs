@@ -126,6 +126,7 @@ fn pass(steep: Steep) -> LowerAnvilTerrain {
 
 fn lowered(steep: Steep) -> (World, PassLog) {
     let mut w = world();
+    w.insert_resource(primase_foundations::parallel::Threads::ONE);
     let mut log = PassLog::default();
     pass(steep).run(&mut w, &mut log).expect("lower");
     (w, log)

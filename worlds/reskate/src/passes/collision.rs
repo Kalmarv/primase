@@ -173,6 +173,9 @@ impl Pass for PrepareReskateCellCollision {
     fn approximates(&self) -> &'static str {
         "minor collision surfaces of a leaf written as its most common one"
     }
+    fn settings(&self) -> &[primase_core::pass::Setting] {
+        &[primase_core::parallel::THREADS]
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         if w.resource::<SkateCollisionPlan>().is_some() {
             return Err(

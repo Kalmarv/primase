@@ -39,6 +39,7 @@ impl Resource for ForeignState {
 /// A 10 m triangle placed twice, raised, with a spawn, its markers snapped: (the world, the first placement).
 fn world() -> (World, Entity) {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let material = w.spawn();
     w.insert(material, Name("stone".into()));
     w.insert(material, PbrMaterial::default());
@@ -202,6 +203,7 @@ fn geometry_that_is_not_finite_is_refused_naming_it() {
 #[test]
 fn the_environment_and_its_ambient_are_reported_not_written() {
     let mut w = primase_core::World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     assert!(
         primase_reskate::target()
             .check_prepared(&w)

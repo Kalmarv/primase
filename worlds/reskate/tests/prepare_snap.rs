@@ -55,6 +55,7 @@ struct Fixture {
 /// one with a height and no snap.
 fn fixture() -> Fixture {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut surfaces = Surfaces::default();
     let concrete = surfaces.index("concrete").unwrap();
     w.insert_resource(surfaces);

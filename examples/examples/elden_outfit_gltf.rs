@@ -17,7 +17,9 @@ use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::{Game, Install, Keys};
 use primase_animation::simulation_schedule::{ConfigureSimulations, SimulationSchedule};
 use primase_animation::{AssembleCharacter, Correspondence, ReferencePose, UnweightedRests, WeightedRests};
-use primase_core::pass::{MissingInputs, PassManager, PassRegistry, Pipeline, RunReport, Stages, pass_text, text_form};
+use primase_core::pass::{
+    MissingInputs, PassManager, PassRegistry, Pipeline, RunReport, Settings, Stages, pass_text, text_form,
+};
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro;
 use primase_fromsoft::sekiro::passes::bake_materials::BakeFromSoftMaterials;
@@ -177,8 +179,8 @@ fn registry() -> PassRegistry {
 }
 
 /// A step the world cannot feed (a pass whose input the model lacks) is skipped and reported, never refused.
-fn manager() -> PassManager {
-    PassManager::new(registry()).with_missing_inputs(MissingInputs::Skip)
+fn manager(settings: Settings) -> PassManager {
+    PassManager::new(registry()).with_missing_inputs(MissingInputs::Skip).with_settings(settings)
 }
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -206,11 +208,14 @@ fn main() -> Result<(), Error> {
 /// writer: the world the program writes, and the stages it ran.
 fn outfit(root: &Path, keys: &Path) -> Result<(primase_core::World, Stages), Error> {
     let game = Game::EldenRing;
-    let install = Install::new(root, game, Keys::from_folder(keys, game, game.param_key_sha256())?)
-        .with_threads(std::thread::available_parallelism()?);
+    let threads = std::thread::available_parallelism()?;
+    let install =
+        Install::new(root, game, Keys::from_folder(keys, game, game.param_key_sha256())?).with_threads(threads);
     let oodle = sekiro::decoder::load_installed(root)?;
     let decoder = || Decoder { oodle: Some(oodle), max_output: 1 << 30 };
-    let manager = manager();
+    // the passes run on the machine's threads, as the program states them (each step's report says them)
+    let manager =
+        manager(Settings { threads: primase_core::parallel::Threads::new(threads.get()).ok_or("no threads")? });
 
     // The candidates: every variant the install lists for the stated initializer, with no choice made by the reader.
     let stated = read();
@@ -269,7 +274,7 @@ mod tests {
     /// pipeline is one the passes' own declarations accept.
     #[test]
     fn the_stated_pipelines_parse_and_order() -> Result<(), Error> {
-        let manager = manager();
+        let manager = manager(Settings { threads: primase_core::parallel::Threads::ONE });
         manager.registry.parse(&SELECT.join(", "))?.check()?;
         manager.registry.parse(&[lowering()?, writer()].concat().join(", "))?.check()?;
         Ok(())

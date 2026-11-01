@@ -82,7 +82,9 @@ const PLAIN: [[f32; 2]; 4] = [[0., 0.], [1., 0.], [0., 1.], [1., 1.]];
 fn run(world: &mut World, pipeline: &str) -> Result<RunReport, String> {
     let mut registry = PassRegistry::new();
     primase_image::register(&mut registry);
-    let manager = PassManager::new(registry);
+    let manager = PassManager::new(registry).with_settings(primase_core::pass::Settings {
+        threads: primase_core::parallel::Threads::ONE,
+    });
     let mut report = RunReport::default();
     manager
         .run(

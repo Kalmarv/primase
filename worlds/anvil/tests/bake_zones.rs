@@ -75,6 +75,7 @@ fn rider(archive: &mut Archive, parts: &[&str]) -> World {
             .collect(),
     };
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut placed = Placed::default();
     Placer::new(archive, &mut w, SourceFrame::WORLD, InstancedLevels::Selector)
         .with_materials()
@@ -302,7 +303,11 @@ fn a_rider_lowers_with_its_zones_baked_and_its_skin_left_to_the_placeholder() {
     );
     let mut registry = PassRegistry::new();
     primase_anvil::register(&mut registry);
-    let manager = PassManager::new(registry).with_pass_checks(true);
+    let manager = PassManager::new(registry)
+        .with_settings(primase_core::pass::Settings {
+            threads: primase_core::parallel::Threads::ONE,
+        })
+        .with_pass_checks(true);
     let pipeline = manager
         .registry
         .parse(

@@ -27,11 +27,9 @@ fn noise(n: usize, seed: u32) -> Vec<u8> {
 
 /// Five placed prototypes, each with its own mask source (sizes not whole blocks, BC1 or RGBA8, two to three levels)
 /// and factors that do and do not quantize.
-fn world(threads: Option<usize>) -> World {
+fn world(threads: usize) -> World {
     let mut w = World::new();
-    if let Some(n) = threads {
-        w.insert_resource(Threads::new(n).unwrap());
-    }
+    w.insert_resource(Threads::new(threads).unwrap());
     for k in 0..5u32 {
         let (width, height) = (40 + 12 * k, 33 + 6 * k);
         let bc1 = k % 2 == 0;
@@ -108,7 +106,7 @@ fn world(threads: Option<usize>) -> World {
 
 #[test]
 fn the_masks_on_any_thread_count_are_the_serial_ones() {
-    let raised = |threads: Option<usize>| {
+    let raised = |threads: usize| {
         let mut w = world(threads);
         let log = raise_skate(
             &mut w,
@@ -123,10 +121,10 @@ fn the_masks_on_any_thread_count_are_the_serial_ones() {
         let textures: Vec<(Entity, Texture)> = w.iter::<Texture>().map(|(e, t)| (e, t.clone())).collect();
         (textures, log)
     };
-    let (serial, log) = raised(None);
+    let (serial, log) = raised(1);
     assert!(log.counts["derived MSK textures"] >= 4, "{log:?}");
-    for n in [1, 2, 8] {
-        let (textures, l) = raised(Some(n));
+    for n in [2, 8] {
+        let (textures, l) = raised(n);
         assert_eq!(textures, serial, "{n} threads");
         assert_eq!(l, log, "{n} threads: the log");
     }

@@ -49,6 +49,7 @@ fn the_baked_materials_of_the_usnat_forge() {
         }
     }
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let mut placed = Placed::default();
     let mut materials: Vec<(u64, Entity)> = Vec::new();
     {

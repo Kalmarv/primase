@@ -30,6 +30,7 @@ fn tmp(name: &str) -> PathBuf {
 /// Two materials on a two-primitive prototype placed twice, ground collision and a spot light.
 fn world() -> World {
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     let material = |w: &mut World, name: &str, base: [f32; 4]| {
         let m = w.spawn();
         w.insert(m, Name(name.into()));
@@ -176,6 +177,7 @@ fn a_loaded_scene_writes_what_its_world_writes() {
     primase_reskate::write::interchange::write(&w, &scene).unwrap();
     // read but not loaded: the writer reads no GLB
     let mut unloaded = World::new();
+    unloaded.insert_resource(primase_core::parallel::Threads::ONE);
     primase_reskate::read::interchange::read(&scene, &mut unloaded).unwrap();
     let e = primase_reskate::write_map(
         &unloaded,
@@ -191,6 +193,7 @@ fn a_loaded_scene_writes_what_its_world_writes() {
     let build = |source: Option<&World>| {
         let out_root = tmp(if source.is_some() { "world" } else { "loaded" });
         let mut read = World::new();
+        read.insert_resource(primase_core::parallel::Threads::ONE);
         let w = match source {
             Some(w) => w,
             None => {
@@ -262,6 +265,7 @@ fn a_spawn_over_no_ground_is_refused() {
         let scene = tmp(&format!("{tag}-scene"));
         primase_reskate::write::interchange::write(&w, &scene).unwrap();
         let mut w = World::new();
+        w.insert_resource(primase_core::parallel::Threads::ONE);
         primase_reskate::read::interchange::read(&scene, &mut w).unwrap();
         primase_reskate::read::interchange::load(&scene, &mut w).unwrap();
         // the markers snapped before the writer, which snaps nothing
@@ -330,6 +334,7 @@ fn a_prototype_that_collides_without_drawing_is_written_as_collision() {
     let scene = tmp("collides-scene");
     primase_reskate::write::interchange::write(&w, &scene).unwrap();
     let mut w = World::new();
+    w.insert_resource(primase_core::parallel::Threads::ONE);
     primase_reskate::read::interchange::read(&scene, &mut w).unwrap();
     primase_reskate::read::interchange::load(&scene, &mut w).unwrap();
     // the markers snapped before the writer, which snaps nothing
@@ -409,6 +414,7 @@ fn the_write_needs_no_scene_file_after_the_load() {
     let scene = tmp("once-scene");
     primase_reskate::write::interchange::write(&w, &scene).unwrap();
     let mut read = World::new();
+    read.insert_resource(primase_core::parallel::Threads::ONE);
     primase_reskate::read::interchange::read(&scene, &mut read).unwrap();
     let distinct =
         |paths: Vec<PathBuf>| paths.into_iter().collect::<std::collections::BTreeSet<_>>().len() as u64;

@@ -309,7 +309,9 @@ fn check_chain_objects(
 
 #[test]
 fn layered_terrain_lowers_to_pbr_keeping_every_triangle() -> Result<()> {
-    let m = PassManager::new(registry());
+    let m = PassManager::new(registry()).with_settings(primase_core::pass::Settings {
+        threads: primase_core::parallel::Threads::ONE,
+    });
     let Some(mut world) = vespucci(&m, LOWERED)? else {
         return Ok(());
     };
@@ -343,7 +345,9 @@ fn layered_terrain_lowers_to_pbr_keeping_every_triangle() -> Result<()> {
 
 #[test]
 fn layered_terrain_builds_with_vertex_blend_overlays() -> Result<()> {
-    let m = PassManager::new(registry());
+    let m = PassManager::new(registry()).with_settings(primase_core::pass::Settings {
+        threads: primase_core::parallel::Threads::ONE,
+    });
     let raised = format!(
         "{LOWERED}, prepare-reskate-laid-layers, raise-skate{{name=vespucci,light_scale=0.0003007,unclassified=default}}"
     );
