@@ -8,10 +8,10 @@
 //! h|^2) and normalised: the albedo that blend x `_Color`, the normal the same blend of the normal map, unpacked. Its
 //! pattern never repeats, so no texture holds it exactly over a surface.
 //!
-//! The program's choices, all required options (no defaults): the variant (`keywords`, the renderer's global keywords
-//! Unity draws it with, `;`-separated, and `tier`, the hardware tier; [`UnityPrograms::variant`]), the player's colour
-//! space (`colour-space`, its PlayerSettings': what the program reads of the material's colours,
-//! [`primase_unity::colour`]), the block (`cells`,
+//! The program's choices, required options (no defaults) but for the colour space: the variant (`keywords`, the
+//! renderer's global keywords Unity draws it with, `;`-separated, and `tier`, the hardware tier;
+//! [`UnityPrograms::variant`]), the player's colour space (`colour-space`, its PlayerSettings': what the program reads
+//! of the material's colours, [`primase_unity::colour`]; left out, the read's recorded one), the block (`cells`,
 //! K >= 2 cells a side) and the resolution (`max-texels`, at most this many texels per cell; a map larger is baked at
 //! it, counted). The evaluation grid, (K + 1) x texels a side, is at most 4096, an option beyond it refused.
 //!
@@ -576,7 +576,7 @@ impl LowerSkatebirdVoronoi {
 }
 
 /// `lower-skatebird-voronoi`'s declaration ([`primase_core::pass::PassRegistry::add`]): the variant, block and
-/// resolution are the program's choices, every option required.
+/// resolution are the program's choices, every option required but the colour space.
 pub const LOWER_SKATEBIRD_VORONOI: PassSpec = PassSpec {
     name: "lower-skatebird-voronoi",
     options: &[
@@ -757,7 +757,8 @@ mod tests {
         assert_eq!(declared_default("gray"), None);
     }
 
-    /// Every option is required and checked; the grid bound refuses a block too large to evaluate.
+    /// Every option but the colour space is required and checked (the colour space, left out, follows the player's
+    /// recorded one); the grid bound refuses a block too large to evaluate.
     #[test]
     fn options_are_the_programs_choices() {
         let o = |kv: &[(&str, &str)]| -> Options {
@@ -783,8 +784,13 @@ mod tests {
         assert_eq!(pass.options(), o(&all));
         for missing in 0..all.len() {
             let mut fewer = all.to_vec();
-            fewer.remove(missing);
-            assert!(make(&o(&fewer)).is_err());
+            let (key, _) = fewer.remove(missing);
+            if key == "colour-space" {
+                // the one optional choice: left out, the pass follows the colour space the read recorded
+                assert_eq!(make(&o(&fewer)).unwrap().options().get("colour-space"), None);
+            } else {
+                assert!(make(&o(&fewer)).is_err(), "{key}");
+            }
         }
         let with = |k: &str, v: &str| {
             let mut changed = all.to_vec();
