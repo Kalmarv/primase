@@ -211,10 +211,7 @@ pub fn of(type_id: u32) -> Coverage {
                 Status::Read,
                 "CollisionMaterialRef identity/name; full physical material parameters not decoded",
             ),
-            _ => (
-                Status::Read,
-                "typed Anvil/core components",
-            ),
+            _ => (Status::Read, "typed Anvil/core components"),
         };
         return Coverage {
             type_id,
