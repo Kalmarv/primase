@@ -17,7 +17,7 @@ use primase_core::Component;
 use primase_core::convert::Reader;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
-use primase_core::{ColorSpace, Entity, Instance, Mesh, TexFormat, TexRole, Texture};
+use primase_core::{ColorSpace, DrawLayer, DrawOrder, Entity, Instance, Mesh, TexFormat, TexRole, Texture};
 use primase_forzatech::components::{ForzaMaterial, MaterialTextures, Value};
 use primase_forzatech::passes::LowerForzaMaterials;
 use primase_forzatech::read::convert::ForzaReader;
@@ -41,7 +41,12 @@ fn shibuya_materials() {
     let mut reader = ForzaReader::new(track, scope());
     let (world, _) = reader.read().unwrap();
     let prototypes: BTreeSet<Entity> = world.iter::<Instance>().map(|(_, i)| i.prototype).collect();
-    let sample: BTreeSet<Entity> = prototypes.iter().copied().step_by(20).collect();
+    // STEP=1 reads the whole box; the counts asserted below are those of the default sample
+    let step = std::env::var("STEP")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20);
+    let sample: BTreeSet<Entity> = prototypes.iter().copied().step_by(step).collect();
     let (mut part, _) = reader.load(&world, &sample).unwrap();
 
     let mut triangles: BTreeMap<Entity, u64> = BTreeMap::new();
@@ -79,20 +84,24 @@ fn shibuya_materials() {
     println!("approximations: {:#?}", log.approximations);
     println!("omitted: {:#?}", log.omitted);
 
-    // the four families with a rule are lowered whole, bar the foliage billboard and impostor
+    // the families with a rule are lowered whole, bar the foliage billboard and impostor
     let summary = |m: &BTreeMap<String, (u64, u64)>| -> Vec<(String, u64, u64)> {
         m.iter().map(|(f, (n, t))| (f.clone(), *n, *t)).collect()
     };
-    assert_eq!(
-        summary(&lowered),
-        [
-            ("environment".to_owned(), 758, 55_464),
-            ("projection_lod".to_owned(), 59, 10_002),
-            ("uber_branch".to_owned(), 6, 8_213),
-            ("uber_foliage".to_owned(), 16, 13_670),
-        ]
-    );
-    assert_eq!(unlowered["uber_foliage"], (2, 4));
+    if step == 20 {
+        assert_eq!(
+            summary(&lowered),
+            [
+                ("environment".to_owned(), 758, 55_464),
+                ("environmentdeferreddecal".to_owned(), 70, 1_549),
+                ("projection_lod".to_owned(), 59, 10_002),
+                ("uber_branch".to_owned(), 6, 8_213),
+                ("uber_foliage".to_owned(), 16, 13_670),
+                ("uber_roaddecal".to_owned(), 2, 146),
+            ]
+        );
+        assert_eq!(unlowered["uber_foliage"], (2, 4));
+    }
     for (family, (n, _)) in &lowered {
         assert_eq!(log.counts[&format!("{family} materials lowered")], *n);
     }
@@ -100,6 +109,26 @@ fn shibuya_materials() {
     // every lowered material holds the ranges and references `pbr.material` documents
     for (e, pbr) in part.iter::<PbrMaterial>() {
         pbr.verify(e, &part).unwrap();
+    }
+
+    // the decal families draw in the decal layer, without writing depth; no other family has a draw order
+    for (e, _) in part.iter::<PbrMaterial>() {
+        let family = part
+            .get::<ForzaMaterial>(e)
+            .and_then(|m| m.shader.as_ref())
+            .map(|s| s.family.as_str());
+        let decal = matches!(
+            family,
+            Some("environmentdeferreddecal" | "uber_roaddecal" | "uber_roaddecalretro")
+        );
+        match part.get::<DrawOrder>(e) {
+            Some(order) => {
+                assert!(decal, "{family:?} has a draw order");
+                assert_eq!(order.layer, DrawLayer::Decal, "{e:?}");
+                assert!(!order.depth_write, "{e:?}");
+            }
+            None => assert!(!decal, "{family:?} has none"),
+        }
     }
 
     // the environment's packed maps: R occlusion, G roughness, B metallic, one map in both slots
@@ -131,6 +160,7 @@ fn shibuya_materials() {
     // projection_lod's signed roughness-metalness maps: how much of the negative half they use (a decoded byte below 120
     // is a value below -0.06)
     let (mut negative, mut channels, mut signed_maps) = (0u64, 0u64, BTreeSet::new());
+    let (mut lowest, mut maps_with_negative) = (255u8, 0u64);
     for (e, m) in part.iter::<ForzaMaterial>() {
         if m.shader.as_ref().map(|s| s.family.as_str()) != Some("projection_lod") {
             continue;
@@ -155,14 +185,17 @@ fn shibuya_materials() {
             let primase_image::Samples::U8(px) = &image.samples else {
                 panic!("not 8-bit")
             };
+            let before = negative;
             for texel in px.chunks(4) {
                 channels += 2;
                 negative += u64::from(texel[0] < 120) + u64::from(texel[1] < 120);
+                lowest = lowest.min(texel[0]).min(texel[1]);
             }
+            maps_with_negative += u64::from(negative > before);
         }
     }
     println!(
-        "signed roughness-metalness maps: {}; channels below -0.06: {negative}/{channels}",
+        "signed roughness-metalness maps: {}; channels below -0.06: {negative}/{channels}, in {maps_with_negative} maps, lowest decoded byte {lowest}",
         signed_maps.len()
     );
     // the negative half is unused: 19 of the 36 maps' 34,701,312 channels

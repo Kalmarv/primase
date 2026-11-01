@@ -21,8 +21,9 @@
 //!
 //! `tests/shibuya_materials.rs` runs the pass on every 20th prototype of the box (x -1550..-1100, z -5000..-4566.67,
 //! summer: 77 prototypes, 90,430 shaded triangles). Lowered (materials, triangles): `environment` 758, 55,464 (61.3%);
-//! `projection_lod` 59, 10,002; `uber_foliage` 16, 13,670; `uber_branch` 6, 8,213:
-//! 87,349 of the box's 90,430 triangles (96.6%). Each lowered material passes `pbr.material`'s own verification.
+//! `projection_lod` 59, 10,002; `uber_foliage` 16, 13,670; `uber_branch` 6, 8,213; `environmentdeferreddecal` 70, 1,549;
+//! `uber_roaddecal` 2, 146: 89,044 of the box's 90,430 triangles (98.5%). Each lowered material passes
+//! `pbr.material`'s own verification, and the decal families alone have a draw order (the decal layer, no depth write).
 //!
 //! The `environment` rule packs 85 distinct RoughMetAoPor maps and makes normal maps of 83 distinct textures (7 more,
 //! 838 triangles, are BC5 SNORM, which the shader's `2 r - 1` does not read: left out, counted). The packed maps'
@@ -39,10 +40,21 @@
 //! animation 6, 8,213; `projection_lod` baked occlusion 59, 10,002, swatch tint 59, 10,002, emission 44, 9,820, the
 //! alpha-test reference 4, 1,636, and one material (72 triangles) with no normal map.
 //!
-//! Left unlowered, with no rule yet (materials, triangles): `environmentdeferreddecal` 70, 1,549; `pylon_cables` 2,
-//! 532; `environment_signage` 88, 520; `glass` 8, 188; `uber_roaddecal` 2, 146; `window_linecastroom` 51, 78;
-//! `emissiveonly` 2, 64; and the `uber_foliage` billboard and impostor, 2, 4. The normal maps are made in
-//! `NormalZ::Rebuild`: `normalize-normals` converts them to glTF's before a writer.
+//! The three decal rules (`uber_roaddecal`, `uber_roaddecalretro`, `environmentdeferreddecal`) over the whole box
+//! (`STEP=1`): `uber_roaddecal` 291 materials, 20,743 triangles; `uber_roaddecalretro` 130, 46,996;
+//! `environmentdeferreddecal` 1,438, 38,263; none of the three is left unlowered (the projected permutation, which no
+//! box material has, is). They make 64 colour maps (22 resample the mask to the diffuse's size) and 9 roughness-metalness
+//! maps (5 resample), each shared by the materials that name the same textures. Left out by name (materials, triangles; a
+//! material may carry several): the dithered alpha test taken as a plain test 418, 67,509; far fade and wetness 421,
+//! 67,739; the vertex colour's blue tint 267, 52,196, red modulate 292, 52,407 and green fade 152, 50,968; the
+//! world-space alpha mask 149, 50,344; parallax occlusion mapping 80, 2,393; retro-reflection and the retro distance
+//! fade 130, 46,996; a road decal with `Enabled` off, drawn 1,161 triangles; and for the deferred decals the blend and
+//! roughness reading 1,438, 38,263 (the decal buffer's resolve is in no file) and relaxed cone-step mapping 100
+//! triangles.
+//!
+//! Left unlowered, with no rule yet (materials, triangles): `pylon_cables` 2, 532; `environment_signage` 88, 520;
+//! `glass` 8, 188; `window_linecastroom` 51, 78; `emissiveonly` 2, 64; and the `uber_foliage` billboard and impostor,
+//! 2, 4. The normal maps are made in `NormalZ::Rebuild`: `normalize-normals` converts them to glTF's before a writer.
 //!
 //! The ground families are in the whole box (`tests/shibuya_ground.rs`, every prototype) and all are lowered (materials,
 //! triangles): `environment_plot` 286, 91,811; `terr_mega` 12, 14,462; `terr_distant` 13, 10,481;
@@ -56,17 +68,19 @@
 mod branch;
 mod environment;
 mod environment_plot;
+mod environmentdeferreddecal;
 mod foliage;
 mod projection_lod;
 mod terrain;
 mod uber_road;
+mod uber_roaddecal;
 
 use crate::components::{ForzaMaterial, MaterialTextures, PlanarUv, Value};
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
-    ColorSpace, Component, Entity, LayeredMaterial, Mesh, Name, NormalBasis, NormalConvention, NormalGreen,
-    NormalX, NormalZ, TexFormat, TexRole, Texture, World,
+    ColorSpace, Component, DrawOrder, Entity, LayeredMaterial, Mesh, Name, NormalBasis, NormalConvention,
+    NormalGreen, NormalX, NormalZ, TexFormat, TexRole, Texture, World,
 };
 use primase_foundations::color::srgb_to_linear;
 use std::collections::{BTreeMap, HashMap};
@@ -113,6 +127,15 @@ impl<'a> Params<'a> {
         match self.by_name.get(name)? {
             Value::Int(i) => Some(*i),
             _ => None,
+        }
+    }
+
+    /// Whether a switch the material holds is off (an `Int` or `Bool` parameter of 0).
+    fn off(&self, name: &str) -> bool {
+        match self.by_name.get(name) {
+            Some(Value::Int(i)) => *i == 0,
+            Some(Value::Bool(b)) => *b == 0,
+            _ => false,
         }
     }
 
@@ -172,6 +195,8 @@ struct Lowering {
     triangles: BTreeMap<Entity, u64>,
     /// Source texture and the re-encoding made of it to the texture that holds it.
     derived: BTreeMap<(Entity, Derived), Entity>,
+    /// The road decals' maps made of two textures, made once per pair and recipe.
+    decal_maps: BTreeMap<uber_roaddecal::DecalMap, Entity>,
 }
 
 /// A glTF-layout map made from one channel set of a source texture.
@@ -197,6 +222,8 @@ enum Derived {
     /// coordinates `(x, z)` of the game's ground plane: red `x`, green `-z` (the world's frame negates `z`, and
     /// the coordinates' `v` runs down the image), blue the rebuilt `y`.
     WorldNormalXz,
+    /// Occlusion in blue and roughness in red: R occlusion, G roughness.
+    OcclusionRoughnessRed,
 }
 
 /// The value a shader reads from a texel channel `x` of a texture in `space`: decoded to linear when it is sRGB (the
@@ -265,6 +292,7 @@ impl Lowering {
             Derived::RedRoughness(_) => ("roughness-in-red", "roughness"),
             Derived::SquaredAlphaOcclusion => ("occlusion-in-alpha, squared,", "occlusion"),
             Derived::WorldNormalXz => ("world-space normal", "normal"),
+            Derived::OcclusionRoughnessRed => ("occlusion-in-blue roughness-in-red", "occlusion roughness"),
         };
         let Some(t) = w.get::<Texture>(source) else {
             log.count(&format!("{what} textures left out: no pixels"), 1);
@@ -335,6 +363,7 @@ impl Lowering {
                         };
                         [255, byte(read(r)), byte(read(g)), 255]
                     }
+                    Derived::OcclusionRoughnessRed => [byte(seen(space, b)), byte(seen(space, r)), 0, 255],
                 })
             },
         )
@@ -382,6 +411,10 @@ impl Lowering {
 /// lightmap and blend coordinates a layered road reads).
 const PLANAR_TEXCOORD: u8 = 3;
 
+/// The queue of the decal layer: after the alpha-tested surfaces, before the blended ones (core's convention for the
+/// source's decal bucket; the draw sequence of the game's own passes is not in any file).
+const DECAL_QUEUE: i32 = 2500;
+
 /// The alpha-test reference of a masked material, in the absence of one in the material: the middle of the range.
 const ALPHA_REFERENCE: f32 = 0.5;
 
@@ -413,6 +446,7 @@ impl Pass for LowerForzaMaterials {
             PlanarUv::NAME,
             Texture::NAME,
             Name::NAME,
+            DrawOrder::NAME,
         ]
     }
     fn modifies(&self) -> &[&'static str] {
@@ -420,7 +454,9 @@ impl Pass for LowerForzaMaterials {
     }
     fn approximates(&self) -> &'static str {
         "environment materials by their texture maps alone: the swatch tint, modulate, deposits, triplanar, \
-         parallax and emission of a permutation are left out, wetness and lighting are run-time state"
+         parallax and emission of a permutation are left out, wetness and lighting are run-time state; decals as \
+         alpha-tested or blended materials in the decal layer: the dither is a plain test at one half and the \
+         vertex colour, the far fade and the decal buffer's blend are left out"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         let mut triangles: BTreeMap<Entity, u64> = BTreeMap::new();
@@ -439,6 +475,7 @@ impl Pass for LowerForzaMaterials {
         let mut lowering = Lowering {
             triangles,
             derived: BTreeMap::new(),
+            decal_maps: BTreeMap::new(),
         };
         let mut left: BTreeMap<String, (u64, u64)> = BTreeMap::new();
         for (e, m) in &materials {
@@ -451,12 +488,16 @@ impl Pass for LowerForzaMaterials {
                 Some("uber_foliage") => lowering.uber_foliage(world, *e, m, log)?,
                 Some("uber_branch") => lowering.uber_branch(world, *e, m, log)?,
                 Some("projection_lod") => lowering.projection_lod(world, *e, m, log)?,
+                Some("uber_roaddecal") => lowering.uber_roaddecal(world, *e, m, log)?,
+                Some("uber_roaddecalretro") => lowering.uber_roaddecalretro(world, *e, m, log)?,
+                Some("environmentdeferreddecal") => lowering.environmentdeferreddecal(world, *e, m, log)?,
                 _ => None,
             };
             let Some(pbr) = lowered else {
                 let name = match family {
                     Some("uber_foliage") => "uber_foliage billboard or impostor",
                     Some("uber_branch") => "uber_branch with a second set of maps",
+                    Some("environmentdeferreddecal") => "environmentdeferreddecal projected",
                     other => other.unwrap_or("no shader family"),
                 };
                 let entry = left.entry(name.to_owned()).or_default();

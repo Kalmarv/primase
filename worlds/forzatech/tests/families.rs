@@ -156,6 +156,32 @@ fn census(part: &World, family: &str) {
     for (sig, (n, t)) in sigs.iter().take(60) {
         println!("  {n:>4} {t:>8}  {sig}");
     }
+    // the constants a rule reads: each distinct value with the triangles that have it
+    println!("-- constants (value: triangles)");
+    let mut constants: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
+    for (e, m) in part.iter::<ForzaMaterial>() {
+        let Some(s) = &m.shader else { continue };
+        if s.family != family {
+            continue;
+        }
+        let t = triangles.get(&e).copied().unwrap_or(0);
+        for (_, p) in m.resolved() {
+            let value = match &p.value {
+                Value::Float(f) => format!("{f}"),
+                Value::Vector2(v) => format!("{v:?}"),
+                Value::Vector(v) | Value::Colour(v) => format!("{v:?}"),
+                _ => continue,
+            };
+            let name = p.name.clone().unwrap_or_else(|| format!("{:#010x}", p.hash));
+            *constants.entry(name).or_default().entry(value).or_default() += t;
+        }
+    }
+    for (name, values) in &constants {
+        let mut v: Vec<_> = values.iter().collect();
+        v.sort_by_key(|(_, t)| std::cmp::Reverse(**t));
+        let shown: Vec<String> = v.iter().take(8).map(|(k, t)| format!("{k}: {t}")).collect();
+        println!("  {name} ({} distinct): {}", v.len(), shown.join(", "));
+    }
     println!("-- formats of the textures bound to each parameter (triangles by format, colour space)");
     let mut formats: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
     for (e, m) in part.iter::<ForzaMaterial>() {

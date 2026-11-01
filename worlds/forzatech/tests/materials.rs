@@ -8,7 +8,9 @@
 
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform};
-use primase_core::{ColorSpace, Entity, Name, NormalGreen, NormalZ, TexFormat, TexRole, Texture, World};
+use primase_core::{
+    ColorSpace, DrawLayer, DrawOrder, Entity, Name, NormalGreen, NormalZ, TexFormat, TexRole, Texture, World,
+};
 use primase_forzatech::components::{
     ForzaMaterial, InstanceLevel, MaterialLevel, MaterialTexture, MaterialTextures, Parameter, ShaderLevel,
     Value,
@@ -466,4 +468,253 @@ fn projection_lod_reads_its_atlas_cell_and_signed_roughness_metalness() {
     assert_eq!(pbr.alpha_mode, AlphaMode::Mask { cutoff: 0.5 });
     assert_eq!(log.approximations["emission left out"], 1);
     assert_eq!(log.counts["projection_lod materials lowered"], 1);
+}
+
+/// The road decal built of a diffuse (roughness in its alpha), a mask, a metalness map and a normal map.
+fn road_decal(
+    world: &mut World,
+    family: &str,
+    parameters: Vec<Parameter>,
+    maps: [Option<Entity>; 4],
+) -> Entity {
+    let e = world.spawn();
+    let mut parameters = parameters;
+    parameters.extend([
+        tex("DecalDiffuseATexture", 1),
+        tex("DecalMaskATexture", 2),
+        tex("Mask_MetalnessATexture", 3),
+        tex("DecalNormalA", 4),
+        parameter("RoadUVMultiplierA", 20, Value::Vector([1.0, 1.0, 1.0, 1.0])),
+    ]);
+    world.insert(e, material(family, "Decal", parameters));
+    world.insert(
+        e,
+        MaterialTextures(maps.iter().zip(1..).map(|(m, h)| bound(h, *m)).collect()),
+    );
+    e
+}
+
+#[test]
+fn road_decal_bakes_mask_tint_and_roughness_metalness_and_draws_as_a_decal() {
+    let mut world = World::new();
+    // linear 0.5 grey with roughness 0.5 in the alpha, sRGB
+    let diffuse = texture(&mut world, "paint", ColorSpace::Srgb, [188, 188, 188, 128]);
+    let mask = texture(&mut world, "mask", ColorSpace::Linear, [204, 0, 0, 255]);
+    let metal = texture(&mut world, "metal", ColorSpace::Linear, [255, 0, 0, 255]);
+    let normal = texture(&mut world, "normal", ColorSpace::Linear, [128, 128, 255, 255]);
+    let e = road_decal(
+        &mut world,
+        "uber_roaddecal",
+        vec![
+            parameter("AlphaMask", 10, Value::Int(1)),
+            parameter("Metalness", 11, Value::Int(1)),
+            parameter("PerObjectTint0OnOff", 12, Value::Int(1)),
+            parameter("ObjectTintColor", 13, Value::Colour([0.5, 0.5, 0.5, 1.0])),
+            parameter("Modulate", 14, Value::Int(1)),
+            parameter("WorldSpaceAlphaOnOff", 15, Value::Int(1)),
+        ],
+        [Some(diffuse), Some(mask), Some(metal), Some(normal)],
+    );
+    let mut log = PassLog::default();
+    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+
+    let pbr = world.get::<PbrMaterial>(e).unwrap();
+    assert_eq!(pbr.alpha_mode, AlphaMode::Mask { cutoff: 0.5 });
+    // the alpha is the mask's red; the colour is overlay(a, 0.5^(1/2.2)) back in sRGB
+    let colour = world
+        .get::<Texture>(pbr.base_color_texture.unwrap().texture)
+        .unwrap();
+    assert_eq!(colour.color_space, ColorSpace::Srgb);
+    let linear = ((188.0f64 / 255.0 + 0.055) / 1.055).powf(2.4);
+    let tint = 0.5f64.powf(1.0 / 2.2);
+    let overlaid = if linear > 0.5 {
+        1.0 - 2.0 * (1.0 - linear) * (1.0 - tint)
+    } else {
+        2.0 * linear * tint
+    };
+    let expected = i32::from(primase_foundations::color::linear_to_srgb8(overlaid));
+    assert!(
+        (i32::from(colour.levels[0][0]) - expected).abs() <= 1,
+        "{:?}",
+        colour.levels[0]
+    );
+    assert_eq!(colour.levels[0][3], 204);
+    // G the diffuse alpha, B the metalness map's red
+    let packed = world
+        .get::<Texture>(pbr.metallic_roughness_texture.unwrap().texture)
+        .unwrap();
+    assert_eq!(packed.levels[0], vec![255, 128, 255, 255]);
+    assert_eq!((pbr.metallic, pbr.roughness), (1.0, 1.0));
+    assert_eq!(
+        world
+            .get::<Texture>(pbr.normal_texture.unwrap().texture)
+            .unwrap()
+            .role,
+        TexRole::Normal
+    );
+    assert_eq!(world.get::<DrawOrder>(e).unwrap().layer, DrawLayer::Decal);
+    assert_eq!(log.approximations["modulate (vertex colour's red) left out"], 1);
+    assert_eq!(log.approximations["world-space alpha mask left out"], 1);
+    assert_eq!(log.counts["uber_roaddecal materials lowered"], 1);
+}
+
+#[test]
+fn road_decal_without_an_alpha_mask_is_opaque_and_keeps_its_diffuse() {
+    let mut world = World::new();
+    let diffuse = texture(&mut world, "paint", ColorSpace::Srgb, [200, 100, 50, 64]);
+    let mask = texture(&mut world, "mask", ColorSpace::Linear, [0, 0, 0, 255]);
+    let e = road_decal(
+        &mut world,
+        "uber_roaddecal",
+        vec![
+            parameter("AlphaMask", 10, Value::Int(0)),
+            parameter("Enabled", 11, Value::Int(0)),
+        ],
+        [Some(diffuse), Some(mask), None, None],
+    );
+    let mut log = PassLog::default();
+    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    let pbr = world.get::<PbrMaterial>(e).unwrap();
+    assert_eq!(pbr.alpha_mode, AlphaMode::Opaque);
+    assert_eq!(pbr.base_color_texture.unwrap().texture, diffuse);
+    // roughness from the diffuse alpha, no metal
+    let packed = world
+        .get::<Texture>(pbr.metallic_roughness_texture.unwrap().texture)
+        .unwrap();
+    assert_eq!(packed.levels[0][1], 64);
+    assert_eq!(pbr.metallic, 0.0);
+    assert_eq!(world.get::<DrawOrder>(e).unwrap().layer, DrawLayer::Decal);
+    assert_eq!(log.approximations["no normal map"], 1);
+    assert_eq!(
+        log.approximations["decal switched off (Enabled) drawn: no pixel shader reads it"],
+        1
+    );
+}
+
+#[test]
+fn retro_road_decal_height_alpha_is_the_mask_over_its_range() {
+    let mut world = World::new();
+    let diffuse = texture(&mut world, "paint", ColorSpace::Srgb, [255, 255, 255, 255]);
+    // mask 26 / 255 = 0.102: sat(0.102 / 0.3) = 0.34
+    let mask = texture(&mut world, "mask", ColorSpace::Linear, [26, 0, 0, 255]);
+    let e = road_decal(
+        &mut world,
+        "uber_roaddecalretro",
+        vec![
+            parameter("HeightAlpha", 10, Value::Int(1)),
+            parameter("MaxHeightAlpha", 11, Value::Float(0.3)),
+            parameter("PerObjectTint0OnOff", 12, Value::Int(0)),
+        ],
+        [Some(diffuse), Some(mask), None, None],
+    );
+    let mut log = PassLog::default();
+    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    let pbr = world.get::<PbrMaterial>(e).unwrap();
+    assert_eq!(pbr.alpha_mode, AlphaMode::Mask { cutoff: 0.5 });
+    let colour = world
+        .get::<Texture>(pbr.base_color_texture.unwrap().texture)
+        .unwrap();
+    // 26 / 255 / 0.3 = 0.3398 -> 87 (the float32 range is 0.3 less a hair)
+    assert!(
+        (i32::from(colour.levels[0][3]) - 87).abs() <= 1,
+        "{:?}",
+        colour.levels[0]
+    );
+    assert_eq!(&colour.levels[0][..3], &[255, 255, 255]);
+    assert_eq!(
+        log.approximations["retro-reflection and the distance fade of the alpha (scene constants) left out"],
+        1
+    );
+    assert_eq!(log.counts["uber_roaddecalretro materials lowered"], 1);
+}
+
+#[test]
+fn deferred_decal_is_blended_in_the_decal_layer_and_projected_ones_are_left() {
+    let mut world = World::new();
+    let diffuse = texture(&mut world, "diffuse", ColorSpace::Srgb, [200, 100, 50, 255]);
+    let normal = texture(&mut world, "normal", ColorSpace::Linear, [128, 128, 255, 255]);
+    // roughness 0.2, occlusion 0.5
+    let rmao = texture(&mut world, "rmao", ColorSpace::Linear, [51, 255, 128, 0]);
+    let build = |world: &mut World, intensity: f32, nao: i32, projected: i32| {
+        let e = world.spawn();
+        world.insert(
+            e,
+            material(
+                "environmentdeferreddecal",
+                "Standard",
+                vec![
+                    tex("DiffAlphaTex", 1),
+                    tex("NormalTex", 2),
+                    tex("RoughMetAOTex", 3),
+                    parameter("DiffAlphaUVTiling", 10, Value::Vector2([0.5, 0.5])),
+                    parameter("Uv0Offset", 11, Value::Vector2([0.5, 0.0])),
+                    parameter("DiffRoughIntensity", 12, Value::Float(0.75)),
+                    parameter("NormalAOIntensity", 13, Value::Float(intensity)),
+                    parameter("NormalAO", 14, Value::Int(nao)),
+                    parameter("Projected", 15, Value::Int(projected)),
+                    parameter("SwatchTint", 16, Value::Int(1)),
+                ],
+            ),
+        );
+        world.insert(
+            e,
+            MaterialTextures(vec![
+                bound(1, Some(diffuse)),
+                bound(2, Some(normal)),
+                bound(3, Some(rmao)),
+            ]),
+        );
+        e
+    };
+    let with_normal = build(&mut world, 1.0, 1, 0);
+    let without_normal = build(&mut world, 0.0, 1, 0);
+    let plain = build(&mut world, 1.0, 0, 0);
+    let projected = build(&mut world, 1.0, 1, 1);
+    let mut log = PassLog::default();
+    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+
+    let pbr = world.get::<PbrMaterial>(with_normal).unwrap();
+    assert_eq!(pbr.alpha_mode, AlphaMode::Blend);
+    assert_eq!(pbr.base_color[3], 0.75);
+    assert_eq!(
+        pbr.base_color_texture.unwrap().transform,
+        Some(UvTransform {
+            offset: [0.25, 0.0],
+            scale: [0.5, 0.5],
+            rotation: 0.0
+        })
+    );
+    // R occlusion (blue), G roughness (red), no metal; one map in both slots
+    let slot = pbr.metallic_roughness_texture.unwrap();
+    assert_eq!(pbr.occlusion_texture, Some(slot));
+    assert_eq!(
+        world.get::<Texture>(slot.texture).unwrap().levels[0],
+        vec![128, 51, 0, 255]
+    );
+    assert!(pbr.normal_texture.is_some());
+    assert_eq!(
+        world.get::<DrawOrder>(with_normal).unwrap().layer,
+        DrawLayer::Decal
+    );
+    assert!(!world.get::<DrawOrder>(with_normal).unwrap().depth_write);
+
+    // a zero normal weight leaves the normal out, not the occlusion
+    let pbr = world.get::<PbrMaterial>(without_normal).unwrap();
+    assert!(pbr.normal_texture.is_none() && pbr.occlusion_texture.is_some());
+    // no NAO: roughness only
+    let pbr = world.get::<PbrMaterial>(plain).unwrap();
+    assert!(pbr.normal_texture.is_none() && pbr.occlusion_texture.is_none());
+    let slot = pbr.metallic_roughness_texture.unwrap();
+    assert_eq!(
+        world.get::<Texture>(slot.texture).unwrap().levels[0],
+        vec![255, 51, 0, 255]
+    );
+
+    assert!(!world.has::<PbrMaterial>(projected));
+    assert_eq!(
+        log.omitted["materials of shader family environmentdeferreddecal projected left unlowered"],
+        1
+    );
+    assert_eq!(log.approximations["swatch tint left out"], 3);
+    assert_eq!(log.counts["environmentdeferreddecal materials lowered"], 3);
 }
