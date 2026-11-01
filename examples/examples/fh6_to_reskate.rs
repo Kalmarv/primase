@@ -58,10 +58,13 @@ fn main() -> Result<()> {
     // textures at: the larger tiers are not loaded and the lowerings derive their maps at that size
     let scope = Scope { area, season: Season::Summer, textures: TextureScope::Reaching(256) };
     let mut reader = ForzaReader::new(track, scope);
+    // the box written about the map's origin: Tokyo lies kilometres from the game's, past Studio's half extent
+    // (`limit`, 4,780 m), where the writer writes nothing
     let e = EncodingOptions {
         out_root: "out".into(),
         name: Some("shibuya".into()),
         max_render_edge: Some(48.0),
+        offset: [-f64::from(region[0] + region[2]) / 2.0, -f64::from(region[1] + region[3]) / 2.0],
         ..EncodingOptions::default()
     };
 
