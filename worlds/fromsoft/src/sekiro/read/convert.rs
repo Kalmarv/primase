@@ -25,8 +25,6 @@ use fromsoft_formats::dcx::Decoder;
 pub const EMITTED_NAMES: &[&str] = &[
     "core.condition",
     "core.instance",
-    "core.content_note",
-    "core.irradiance_volume",
     "fromsoft.environment_catalog",
     "fromsoft.environment_region",
     "fromsoft.environment_payloads",
