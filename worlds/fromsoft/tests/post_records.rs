@@ -187,14 +187,14 @@ fn installed_ashina_colour_lookup_matches_the_captured_cube() -> Result<(), Box<
     assert_eq!(actual.texture, "m11_01_CGrading0000");
     assert_eq!(actual.side, 16);
     assert_eq!(actual.values.len(), 4096);
-    let frame = frames.join("sek2/cap/frame_13604");
+    let frame = frames.join("sek5/cap/frame_3394");
     let events: Vec<serde_json::Value> = std::fs::read_to_string(frame.join("events.jsonl"))?
         .lines()
         .map(serde_json::from_str)
         .collect::<Result<_, _>>()?;
     let readback = events
         .iter()
-        .find(|event| event["seq"] == 994)
+        .find(|event| event["seq"] == 6701)
         .expect("native LUT readback");
     let expected = std::fs::read(frame.join(readback["file"].as_str().expect("readback file")))?;
     assert_eq!(expected.len(), 4096 * 16);
