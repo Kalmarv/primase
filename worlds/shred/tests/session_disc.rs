@@ -4,14 +4,12 @@ mod inputs;
 
 use inputs::{Game, install, install_file};
 use primase_core::{Instance, convert::Reader, frame::SourceFrame};
+use primase_foundations::sqlite::{Database, Value};
 use primase_shred::{
     components::{SessionGraph, SourcePlacement},
     read::convert::ShredReader,
 };
-use rme_formats::{
-    database::{Database, Value},
-    pak::Pak,
-};
+use rme_formats::pak::Pak;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[test]

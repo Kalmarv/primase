@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use primase_core::World;
 use primase_core::frame::SourceFrame;
-use rme_formats::database::Database;
+use primase_foundations::sqlite::Database;
 use rme_formats::disc::Disc;
 use rme_formats::manifest::{self, LayerPak, Manifest};
 use rme_formats::{pak::Pak, surfaces::SurfaceTable};

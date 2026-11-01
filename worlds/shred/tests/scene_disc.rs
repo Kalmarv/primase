@@ -5,12 +5,12 @@ mod inputs;
 
 use inputs::{Game, Query, expect_found, install, install_file};
 use primase_core::{Marker, frame::SourceFrame};
+use primase_foundations::sqlite::Database;
 use primase_shred::{
     components::{Locator, Occluder, SceneLight, Spline, Spot, SpotCamera},
     read::{level, manifest as manifest_join, names},
 };
 use rme_formats::{
-    database::Database,
     manifest::{self, Difficulty, Manifest},
     names as rme_names,
     pak::Pak,
