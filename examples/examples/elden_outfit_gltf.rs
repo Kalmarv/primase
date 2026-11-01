@@ -3,7 +3,8 @@
 //!
 //! Usage: `elden_outfit_gltf <output.glb>`. The install and the archive keys come from the `GAME_DATA` configuration
 //! (`tests/inputs/mod.rs`, `elden`). Prints what the selection, the lowering and the writer's preparation did, and what
-//! the writer left out.
+//! the writer left out, and writes the passes the lowering and the writer's preparation ran beside the output
+//! (`<output>.passes.txt`, one per line).
 //!
 //! The program reads in three steps, each one a choice stated below: the candidate outfits (nothing is chosen by the
 //! reader), the registered selection passes that choose among them, and the selected model scope, which is then lowered
@@ -15,7 +16,7 @@ use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::{Game, Install, Keys};
 use primase_animation::simulation_schedule::{ConfigureSimulations, SimulationSchedule};
 use primase_animation::{AssembleCharacter, Correspondence, ReferencePose, UnweightedRests, WeightedRests};
-use primase_core::pass::{MissingInputs, PassManager, PassRegistry, RunReport};
+use primase_core::pass::{MissingInputs, PassManager, PassRegistry, Pipeline, RunReport, pass_text};
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro;
 use primase_fromsoft::sekiro::passes::bake_materials::BakeFromSoftMaterials;
@@ -159,15 +160,26 @@ fn main() -> Result<(), Error> {
     let out = std::env::args().nth(1).ok_or("usage: elden_outfit_gltf <output.glb>")?;
     let root = inputs::install(inputs::Game::Elden).ok_or("GAME_DATA states no `elden` install")?;
     let keys = inputs::keys(inputs::Game::Elden).ok_or("GAME_DATA states no `elden` keys")?;
-    let world = outfit(&root, &keys)?;
+    let (world, pipeline) = outfit(&root, &keys)?;
     let report = primase_gltf::write_file(&world, &options(), Path::new(&out))?;
     println!("glTF {out}:\n{report}");
+    write_passes(Path::new(&out), &pipeline)?;
+    Ok(())
+}
+
+/// The passes `pipeline` runs, one per line as each pass states itself, written beside the output `out` as
+/// `<out>.passes.txt`: the preparation another program runs to prepare the same read the same way.
+fn write_passes(out: &Path, pipeline: &Pipeline) -> Result<(), Error> {
+    let path = out.with_extension("passes.txt");
+    let texts: String = pipeline.passes.iter().map(|pass| pass_text(pass.as_ref()) + "\n").collect();
+    std::fs::write(&path, texts)?;
+    println!("passes {}", path.display());
     Ok(())
 }
 
 /// The outfit read from the install at `root` with the archive keys in `keys`, selected and lowered: the world the
-/// program writes.
-fn outfit(root: &Path, keys: &Path) -> Result<primase_core::World, Error> {
+/// program writes, and the lowering it ran (its passes depend on how many parts the outfit has).
+fn outfit(root: &Path, keys: &Path) -> Result<(primase_core::World, Pipeline), Error> {
     let game = Game::EldenRing;
     let install = Install::new(root, game, Keys::from_folder(keys, game, game.param_key_sha256())?)
         .with_threads(std::thread::available_parallelism()?);
@@ -207,13 +219,12 @@ fn outfit(root: &Path, keys: &Path) -> Result<primase_core::World, Error> {
     let mut lowered = RunReport::default();
     manager.run(&mut world, &pipeline, &mut lowered)?;
     println!("{lowered}");
-    Ok(world)
+    Ok((world, pipeline))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use primase_core::pass::pass_text;
 
     /// Every stated pass text names a registered pass with the options it declares, and the order of the whole
     /// pipeline is one the passes' own declarations accept.
@@ -264,7 +275,7 @@ mod tests {
             eprintln!("skipped: GAME_DATA states no `elden` install and keys");
             return Ok(());
         };
-        let world = outfit(&root, &keys)?;
+        let (world, _) = outfit(&root, &keys)?;
         let (glb, written) = primase_gltf::write(&world, &options())?;
         assert_eq!((written.rigs, written.joint_nodes), (1, 238));
         let mut read = primase_core::World::new();

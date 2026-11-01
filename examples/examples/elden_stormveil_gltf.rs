@@ -3,7 +3,8 @@
 //!
 //! Usage: `elden_stormveil_gltf <output.glb>`. The install and the archive keys come from the `GAME_DATA` configuration
 //! (`tests/inputs/mod.rs`, `elden`). Prints what the selection, the lowering and the writer's preparation did, and what
-//! the writer left out.
+//! the writer left out, and writes the passes the lowering and the writer's preparation ran beside the output
+//! (`<output>.passes.txt`, one per line).
 //!
 //! The program reads in four steps: the area's candidates (its parts' positions and the draw-param files it holds, no
 //! payload), the registered `select-fromsoft-area` pass that turns the stated region and environment into a load
@@ -15,7 +16,7 @@ use std::path::Path;
 use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::{Game, Install, Keys};
 use primase_core::convert::Reader;
-use primase_core::pass::{MissingInputs, PassManager, PassRegistry, RunReport};
+use primase_core::pass::{MissingInputs, PassManager, PassRegistry, RunReport, pass_text};
 use primase_core::{LodChoice, SelectLod};
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::materials::SkipClass;
@@ -193,6 +194,16 @@ fn manager() -> PassManager {
     PassManager::new(registry()).with_missing_inputs(MissingInputs::Skip)
 }
 
+/// The passes `pipeline` runs, one per line as each pass states itself, written beside the output `out` as
+/// `<out>.passes.txt`: the preparation another program runs to prepare the same read the same way.
+fn write_passes(out: &Path, pipeline: &primase_core::pass::Pipeline) -> Result<(), Error> {
+    let path = out.with_extension("passes.txt");
+    let texts: String = pipeline.passes.iter().map(|pass| pass_text(pass.as_ref()) + "\n").collect();
+    std::fs::write(&path, texts)?;
+    println!("passes {}", path.display());
+    Ok(())
+}
+
 fn main() -> Result<(), Error> {
     let out = std::env::args().nth(1).ok_or("usage: elden_stormveil_gltf <output.glb>")?;
     let root = inputs::install(inputs::Game::Elden).ok_or("GAME_DATA states no `elden` install")?;
@@ -233,6 +244,7 @@ fn main() -> Result<(), Error> {
     let mut lowered = RunReport::default();
     manager.run(&mut world, &pipeline, &mut lowered)?;
     println!("{lowered}");
+    write_passes(Path::new(&out), &pipeline)?;
 
     let options = primase_gltf::WriteOptions {
         scene_name: Some(AREA.to_owned()),
@@ -247,7 +259,6 @@ fn main() -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use primase_core::pass::pass_text;
 
     /// Every stated pass text names a registered pass with the options it declares, and the order of the whole pipeline
     /// is one the passes' own declarations accept.
