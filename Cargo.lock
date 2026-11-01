@@ -365,6 +365,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
+name = "cmac"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac78aa94ce13e432b332a4d1bf2eff167d3a2520188ee05b337180a42fd2e62e"
+dependencies = [
+ "cipher",
+ "dbl",
+ "digest",
+]
+
+[[package]]
+name = "cmov"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
+
+[[package]]
 name = "codespan-reporting"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -464,6 +481,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctutils"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2376ffd6f96d8a9db59875b4b6b0237d6900b5baf64279714e05493ce64828a"
+dependencies = [
+ "cmov",
+]
+
+[[package]]
+name = "dbl"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0d7a944e61df464668c5f51f56cc667396a8821434273112948ea0b66e405d7"
+dependencies = [
+ "hybrid-array",
+]
+
+[[package]]
 name = "digest"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -471,6 +506,7 @@ checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "ctutils",
 ]
 
 [[package]]
@@ -589,6 +625,20 @@ name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
+name = "forzatech-formats"
+version = "0.1.0"
+source = "git+https://github.com/Kalmarv/forzatech-formats?rev=a3c1e5c5b1fdd0c0c4115e9925695b46a703e061#a3c1e5c5b1fdd0c0c4115e9925695b46a703e061"
+dependencies = [
+ "aes",
+ "cmac",
+ "hkdf",
+ "primase-foundations",
+ "quick-xml",
+ "sha2",
+ "thiserror",
+]
 
 [[package]]
 name = "fromsoft-formats"
@@ -771,6 +821,24 @@ source = "git+https://github.com/Kalmarv/havok-formats?rev=eb2aba273217c2ece6e5a
 dependencies = [
  "primase-foundations",
  "thiserror",
+]
+
+[[package]]
+name = "hkdf"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aaa26c720c68b866f2c96ef5c1264b3e6f473fe5d4ce61cd44bbe913e553018"
+dependencies = [
+ "hmac",
+]
+
+[[package]]
+name = "hmac"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
+dependencies = [
+ "digest",
 ]
 
 [[package]]
@@ -1300,10 +1368,12 @@ version = "0.1.0"
 name = "primase-examples"
 version = "0.1.0"
 dependencies = [
+ "forzatech-formats",
  "fromsoft-formats",
  "frostbite-formats",
  "primase-animation",
  "primase-core",
+ "primase-forzatech",
  "primase-foundations",
  "primase-fromsoft",
  "primase-frostbite",
@@ -1313,6 +1383,19 @@ dependencies = [
  "primase-reskate",
  "primase-testdata",
  "primase-web",
+]
+
+[[package]]
+name = "primase-forzatech"
+version = "0.1.0"
+dependencies = [
+ "forzatech-formats",
+ "primase-core",
+ "primase-foundations",
+ "primase-testdata",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

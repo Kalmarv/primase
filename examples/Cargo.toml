@@ -21,6 +21,8 @@ primase-foundations = { workspace = true, features = ["compress"] }
 fromsoft-formats.workspace = true
 primase-fromsoft.workspace = true
 primase-frostbite.workspace = true
+forzatech-formats.workspace = true
+primase-forzatech.workspace = true
 primase-image.workspace = true
 primase-meshops.workspace = true
 primase-reskate.workspace = true

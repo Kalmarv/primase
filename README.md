@@ -23,6 +23,7 @@ data that prevents valid output. Compilation, stitching and other later stages r
 | [`worlds/monogame`](worlds/monogame/), [`worlds/stuntboost`](worlds/stuntboost/) | MonoGame (XNA 4.0, FNA) content, and STUNTBOOST's levels |
 | [`worlds/shred`](worlds/shred/) | Tony Hawk: SHRED's archives and scenes |
 | [`worlds/trackmania`](worlds/trackmania/) | TrackMania Nations Forever maps, placed from the install's block models |
+| [`worlds/forzatech`](worlds/forzatech/) | Forza Horizon 6 tracks: a box's placements, models, material chains and textures, as stored |
 | [`worlds/reskate`](worlds/reskate/) | skate. maps: preparation passes, the map folder ReSkate Studio compiles, and the compile and post-compile finishing |
 | [`formats/gltf`](formats/gltf/), [`formats/web`](formats/web/) | glTF 2.0 / GLB, and tiled glTF scenes for web viewers |
 

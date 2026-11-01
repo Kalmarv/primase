@@ -29,6 +29,7 @@ members = [
     "worlds/anvil",
     "worlds/shaunwhite",
     "worlds/trackmania",
+    "worlds/forzatech",
 ]
 
 [workspace.package]
@@ -102,9 +103,11 @@ primase-anvil = { path = "worlds/anvil" }
 primase-shaunwhite = { path = "worlds/shaunwhite" }
 primase-shred = { path = "worlds/shred" }
 primase-trackmania = { path = "worlds/trackmania" }
+primase-forzatech = { path = "worlds/forzatech" }
 anvil-formats = { git = "https://github.com/Kalmarv/anvil-formats", rev = "77b898230d491dcdfc8c8fcdb858801132e4ca40" }
 dxil-reader = { git = "https://github.com/Kalmarv/dx", rev = "39883bd084ad1db1f66416f41b25cf2529f9eec1" }
 frostbite-formats = { git = "https://github.com/Kalmarv/frostbite-formats", rev = "c362662975d4cc57a1b4e836c7f1e96740bc8a5a" }
+forzatech-formats = { git = "https://github.com/Kalmarv/forzatech-formats", rev = "a3c1e5c5b1fdd0c0c4115e9925695b46a703e061", version = "0.1.0" }
 rage-engine-formats = { git = "https://github.com/Kalmarv/rage-engine-formats", rev = "9fe86c00c30a77febe50ed05d9a70349f30444fb" }
 
 thiserror = { version = "=2.0.21", default-features = false, features = ["std"] }
