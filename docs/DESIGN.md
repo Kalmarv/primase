@@ -42,8 +42,8 @@ and writers ask for (section 3).
 
 **Storage:** an entity-component store (entities + typed components + queries). **Our own small store** (`core/src/world.rs`), not `hecs`: every column iterates in entity order, so output is a function of
 the world's contents (determinism, principle 6); components carry a stable namespaced name and a schema version
-(serialisation and pass declarations use the name); unknown components are held as opaque values (JSON or bytes) and
-written back untouched; ids are never reused. A reader spawns entities and attaches components; a pass queries
+(serialisation and pass declarations use the name); unknown components are held as opaque values (JSON or bytes),
+which core's own serialisation writes back untouched; ids are never reused. A reader spawns entities and attaches components; a pass queries
 `(Mesh, LayeredMaterial)` and inserts `BakedPbr`.
 
 **Registry, verification, references** (from MLIR, see `docs/research/MLIR.md`). Each crate
@@ -85,12 +85,12 @@ a list).
   distances: what the ReSkate writer needs.
 - `pbr::` baked metal-rough material (the common lowering target for glTF/USD/skate).
 
-A component type carries a schema version. Unknown components are carried through serialisation untouched unless their
-kind is marked **required**, in which case a reader that doesn't know it fails (glTF's `extensionsRequired`).
-**Lower and keep:** a lowering may keep its source component next to its result (the bake keeps
-`fromsoft.layered_material` beside `pbr.material`), and a writer marks the source `LowerAndCarry`: carried by a writer
-whose format holds it, and lowered too, so the planner runs the lowering. The glTF writer writes standard glTF alone:
-what glTF has no form for is counted, not put in extras.
+A component type carries a schema version. Core's own serialisation (v2 tables, the `.pwt` text form) carries unknown
+components untouched unless their kind is marked **required**, in which case a reader that doesn't know it fails. No
+other writer carries them: core is the interchange, and a format writer writes its format's meaning only (CONTRIBUTING.md,
+the laws). **Lower and keep:** a lowering may keep its source component next to its result in the world (the bake keeps
+`fromsoft.layered_material` beside `pbr.material`); a format writer writes the result its format expresses and reports
+the source as left out.
 
 **On disk:** the world serialises as "core + named component tables" (v2, `docs/SPEC.md`): a small manifest plus
 little-endian binary tables, generalising the skate-scene v1 interchange format (a JSON manifest, binary tables and
@@ -107,9 +107,10 @@ builds only when the program opts in with `PassManager::with_pass_checks(true)`:
 list every component a dropped placement or a discarded form may carry; a name a surviving entity lost must still be in
 `removes`, and the planner counts on `removes` alone. A writer declares a **target** (MLIR's conversion
 target): per component name `Legal`, `Dynamic` (a per-value check: texture format, TRS-decomposable transform),
-`Illegal`, `Carry` (written through untouched) or `LowerAndCarry` (carried, and lowered as well), and what it does
-with unknown names. Full conversion requires every name Legal or carried; partial conversion keeps unknown names per
-the target. A pass also declares what it **legalizes** (lowers), by default what it removes: a pass whose removals are
+`Illegal`, and what it does with unknown names: a format writer leaves them out and reports them. `Carry` (written
+through untouched) and `LowerAndCarry` (carried, and lowered as well) belong to core's own serialisation only, never to a
+format writer's target. Full conversion requires every name Legal (or, for core's serialisation, carried); partial
+conversion leaves unknown names out and reports them. A pass also declares what it **legalizes** (lowers), by default what it removes: a pass whose removals are
 side effects (the file link of a texture it rewrote) or that keeps its source says what it lowers.
 
 Pipelines are explicit lists in a text form (`load-texture-files,bake-fromsoft-layered{size=1024}`). The planner
@@ -205,7 +206,9 @@ than a whole-scene load should hold. That laziness is to move behind the `core.m
 **The web writer** is the glTF writer plus a web lowering: KTX2 (Basis Universal) textures, meshopt-compressed and
 quantised vertices (`EXT_meshopt_compression`), prototypes and placements as `EXT_mesh_gpu_instancing` (three.js
 `InstancedMesh`), baked PBR as `MeshStandardMaterial`, one GLB per 200 m tile with a distance-based tile loader,
-collision soups for `@react-three/rapier`, grind curves, spawns and markers as glTF extras.
+collision soups for `@react-three/rapier`. The web writer is its own writer: what the viewer needs beyond glTF's
+standard (grind curves, spawns, markers, provenance) is web's own data, produced by web passes and encoded by web's
+writer through the glTF writer's extension hook, never by the generic glTF writer.
 
 **The plotter writer** (later) hands a world to a hidden-line renderer to draw it as pen-plotter lines: silhouette and
 crease edges picked by dihedral angle, optional hatching from baked colour or normals, per-material pens.
@@ -215,7 +218,9 @@ crease edges picked by dihedral angle, optional hatching from baked colour or no
   change affects; exact where the format defines it, else a stated tolerance.
 - **Reader census:** a reader can run over all assets of its kind in a game and report decode failures by count, when
   a change needs that breadth; it is not run for every change.
-- **Writer round trips:** write -> read back -> compare by meaning; omitted features are reported.
+- **Writer round trips:** write -> read back -> compare by meaning; omitted features are reported. A round trip through
+  our own reader detects change; correctness of the output is checked by a consumer we didn't write (a validator, the
+  destination program).
 - **World validators:** identity rules ("texture name -> one image", "EBX name -> one partition"), frame sanity,
   non-finite and degenerate checks.
 
@@ -225,12 +230,12 @@ are unset (CONTRIBUTING.md).
 ## 7. Roadmap
 
 **v1.** Readers: Forza Horizon 6, a Unity game, Sekiro, GTA V (from existing scene-interchange folders first). Writers:
-ReSkate (skate. maps), Blender via glTF (standard glTF: the baked PBR materials and group empties; what glTF has no
-form for counted), and three.js / react-three-fiber.
+ReSkate (skate. maps), Blender via generic glTF (the baked PBR materials and group empties; what glTF has no form
+for is reported), and three.js / react-three-fiber (the web writer).
 
 **After v1:** Sunset Overdrive, Sonic Adventure 2, STL/3MF, the plotter writer, and rich Blender output: the games'
-real material setups (layered materials, shading recipes, spec/normal workflows) rebuilt as Blender node trees by a
-Blender-side importer reading our glTF plus a materials extension.
+real material setups (layered materials, shading recipes, spec/normal workflows) rebuilt as Blender node trees: its
+own writer, which may build on the glTF writer, fed by Blender passes from core and the games' namespaced data.
 Also after v1: a **native skate. level writer** that writes the game's own level data directly instead of going
 through ReSkate Studio: first test fixtures, deterministic identities and a round-trip harness, then replacing one
 mesh in a small test level and loading it in game.

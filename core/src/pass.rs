@@ -617,12 +617,12 @@ pub enum Legality {
     Covered(fn(&World, Entity) -> bool),
     /// Must be lowered before writing.
     Illegal,
-    /// Not interpreted, passed through untouched to the writer (a v2 opaque table holds it; a writer whose format has
-    /// no form for it counts it).
+    /// Not interpreted, passed through untouched. Core's own serialisation only (v2 opaque tables): a format writer's
+    /// target never carries, it writes its format's meaning and reports the rest (CONTRIBUTING.md, law 4).
     Carry,
     /// Passed through untouched as [`Legality::Carry`], and lowered too: the writer carries it but draws only what a
-    /// pass lowers it to (a dialect material kept beside the PBR material lowered from it). A pass that
-    /// legalizes it must run; the name may stay.
+    /// pass lowers it to (a dialect material kept beside the PBR material lowered from it). A pass that legalizes it
+    /// must run; the name may stay. Core's own serialisation only.
     LowerAndCarry,
 }
 

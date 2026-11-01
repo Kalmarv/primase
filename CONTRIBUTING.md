@@ -4,6 +4,40 @@ What primase is, the role of every piece, and the rules every crate follows. Thi
 document, rule, `architecture.toml` entry or older decision disagrees with it, this page wins. The design notes are
 `docs/DESIGN.md`.
 
+## The laws
+
+The rest of this page explains and applies these. Review checks every change against them.
+
+1. **Core is the interchange.** Everything meets in core's world: core components plus each reader's namespaced data.
+   No format, file or sidecar stands in for it, and no primase output is read back to rebuild a world.
+2. **Readers read.** The requested scope, faithfully, into core or the reader's own namespace; every candidate as
+   authored. Never lower, bake, approximate, select or shape for a destination.
+3. **Passes transform.** Lowering, baking, selecting, approximating and preparing for a destination are registered
+   passes the program states, each reporting what it approximated and left out. Passes are where decisions happen.
+   No reader, core type or writer makes a pass's decision or is written for one pass: a new decision is one new pass
+   (blended terrain for a plain glTF is a bake pass before the generic writer). When a pass produces something no
+   shared meaning expresses yet, the meaning is added to core for every pass and writer, and each writer whose format
+   can express it encodes it.
+4. **Writers write their format's meaning.** Encode what the format expresses of the prepared world; omit and report
+   the rest. Never choose, adapt or fall back, and never carry another namespace's data through extensions or extras.
+5. **A richer output is its own writer.** A destination that needs more than a format's standard gets its own writer
+   in its own crate (it may build on that format's writer), fed by components its own passes produce. Such a writer
+   is specific to its destination (ReSkate's skate. maps), and that is its role: only a format's own writer is generic.
+6. **Programs choose.** Anything that changes what is produced (level of detail, state, layer, region, quality, base
+   or bake) is a pass or option the program states. Libraries document implementation defaults only. Primase is a
+   library: a program lives with the project that uses it, pins primase and may register its own passes (the SkateBIRD
+   conversion keeps its rail choice in its own repository). Primase takes what more than one program shares; nothing
+   is forced into it. primase-lab is not such a project: it is the neutral platform that renders primase's output to
+   prove core works, so it states options and holds no reader, pass, selection or policy logic of its own.
+7. **Every crate keeps its role.** Core: shared meanings and machinery, no game, destination or tool names. Toolkit:
+   shared mechanisms. Formats: formats that are not one game's or destination's. Worlds: one game, engine or
+   destination each. Names and namespaces are owned.
+8. **Nothing is lost silently.** Every omission, approximation, selection and refusal is in a report the program sees.
+9. **Correct means checked against something we didn't write:** the game, the consumer, a third-party tool or a
+   hand-worked fixture. A baseline of our own output detects change; it proves nothing.
+10. **Laws become checks.** A law a test can enforce is a test; breaks are listed in `architecture.toml`, and that
+    list only shrinks.
+
 ## The model
 
 primase is a library. Readers bring a game's data in, passes transform it, writers write it out, and a **program**
@@ -27,7 +61,10 @@ composes them and makes the choices.
   what they can write: an unsupported feature is omitted and reported, not a failure. They never adapt: baking,
   resizing, generating collision or moving placements is a pass. Encoding prepared data in their format is writing
   (vertex packing, file-sized splits, index layout, texture encoding). Invalid data that prevents valid output is an
-  error; an unsupported feature is not.
+  error; an unsupported feature is not. A writer writes its own format's meaning only: another namespace's
+  components are never serialised into the format's extension or extras slots, and a writer never picks among
+  alternatives (a layered material's layer, a level of detail) or falls back; a pass the program states does that
+  first. A destination that needs more than the format's standard gets its own writer (law 5).
 - **Further stages** a program runs after writing (a Studio compile, stitching) stay visible stages; they don't
   justify hidden adaptation in a writer.
 - **When things move into core.** A standard, broadly useful concept can enter core with one current reader. More
@@ -72,10 +109,10 @@ Every piece of code has one of these roles. Each rule is checked by the normal g
 |---|---|---|---|
 | **reader** | read the source it is given; attach core components and its own namespace (`gta.*`, `fromsoft.*`); keep the source as authored (bone-space geometry with its skeleton and pose, every level of detail, every state); report what it tolerated or can't read; load the heavy data (meshes, textures) of the parts it is asked for | lower, bake, approximate, apply poses, pick levels of detail or states, select what a destination draws, shape for a destination (another namespace's components, destination units), read options from the environment | I/O only in modules that opt in as `reader I/O` (clippy); the namespaces a reader declares, checked by `convert` (core) for every reader |
 | **pass** | transform the world it is given: lower, bake, approximate, select, split, merge, prepare for a destination; declare what it requires, provides, removes and modifies; report every approximation and exclusion by name | touch files, the environment or processes; run outside the pass manager | clippy's file/environment ban; every pass registered by name and every public lowering run by a pass (`checks/tests/architecture.rs`) |
-| **writer** | encode the prepared data its format supports, laying it out as its encoding needs (files, tiles, splits by encoded size) without changing what it means; omit and report what it doesn't support; refuse invalid prepared data with the reason | lower, approximate, resize, select, merge, generate or move content (a pass does that first), read other files, change the world | writer entry points take `&World` (`checks/tests/architecture.rs`); I/O only in modules that opt in as `writer I/O` |
+| **writer** | encode the prepared data its format supports, laying it out as its encoding needs (files, tiles, splits by encoded size) without changing what it means; omit and report what it doesn't support; refuse invalid prepared data with the reason | lower, approximate, resize, select, merge, generate or move content (a pass does that first), choose among alternatives or fall back, carry other namespaces' data (component dumps in extras or private extensions), read other files, change the world | writer entry points take `&World` (`checks/tests/architecture.rs`); I/O only in modules that opt in as `writer I/O` |
 | **core** | shared meanings, the store, frames, the pass machinery and its generic passes, gates | game or destination names, renderer tuning, file access, dependencies on other crates | crate dependencies, game names, clippy's file ban (`checks/tests/architecture.rs`) |
 | **toolkit** | shared mechanisms that games supply data to | game branches, depending on formats or worlds | crate dependencies, game names |
-| **formats** | file formats that are not one game's: their readers, writers and passes | depending on worlds or on formats other than `formats/gltf` | crate dependencies, game names |
+| **formats** | file formats that are not one game's: their readers, writers and passes | depending on worlds or on formats other than `formats/gltf`; encoding one destination's needs (that destination's writer does, through the format writer's extension hook) | crate dependencies, game names |
 | **test-input registry** (primase-testdata) | name and describe the real-data inputs tests read, games and third-party tools included; resolve them | game logic, depending on workspace crates, being a normal dependency of any crate | crate dependencies (not excusable in `architecture.toml`); `real_data_variables_are_declared` |
 | **examples** | compose readers, passes, writers and `convert` as a program does, to show the library | data logic of their own (reimplementing a step, querying or editing world components, reading a format, running a pass past the manager); hiding a recipe's choices | `checks/tests/architecture.rs` (`entry_points`) |
 
@@ -124,6 +161,13 @@ with its role (`allow(clippy::disallowed_*, reason = "<role>: ...")`).
   correctness.
 - **A lost report.** An approximation, exclusion or omission that a pass or writer knew about and the program can't
   see.
+- **A format used as a carrier.** Core or namespaced data dumped into a format's extras or private extensions so
+  something downstream can recover it. Core is the interchange; a consumer that needs that data gets its own writer.
+- **Reading our own output back.** A primase-written file read to rebuild a world for further conversion, as if it
+  were a source, or a reader that recognises names only primase writes. Reading a format's files made by others is a
+  reader; ours are an export. A round-trip test through our own reader detects change (law 9); it checks nothing more.
+- **Destination code in a format or toolkit crate.** A web-only extension in the glTF writer, Blender hints in the
+  GLB encoder: they belong to the destination's writer.
 
 ## Priorities: work, then correct, then fast
 
