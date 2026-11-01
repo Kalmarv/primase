@@ -80,6 +80,8 @@ fn main() -> Result<(), BoxError> {
         threads: primase_foundations::parallel::Threads::ONE,
         images: None,
         verified: false,
+        // standard glTF alone: no format's extension
+        extensions: primase_gltf::extend::Extensions::default(),
     };
     let written = write_file(&world, &options, &out)?;
     println!(
