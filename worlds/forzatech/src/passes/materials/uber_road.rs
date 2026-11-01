@@ -28,7 +28,7 @@
 //! `ModulateNormal`, `ModulateUV`), the terrain blend, frost and snow (run-time state, `Winter`), the deformable
 //! tracks, parallax, noise and the custom surfaces. The weights are per pixel; a consumer that bakes them to the
 //! vertices says so.
-use super::{Binding, Derived, Lowering, PLANAR_TEXCOORD, Params, approximate, left_out};
+use super::{Binding, Derived, Lowered, Lowering, PLANAR_TEXCOORD, Params, approximate, left_out};
 use crate::components::{ForzaMaterial, MaterialTextures, PlanarUv};
 use primase_core::layered::{Channel, Composition, Source};
 use primase_core::pass::PassLog;
@@ -73,7 +73,7 @@ impl Lowering {
         e: Entity,
         m: &ForzaMaterial,
         log: &mut PassLog,
-    ) -> Result<PbrMaterial, String> {
+    ) -> Result<Lowered, String> {
         let bound = w.get::<MaterialTextures>(e).cloned();
         let p = Params::new(m, bound.as_ref());
         let triangles = self.triangles.get(&e).copied().unwrap_or(0);
@@ -149,7 +149,10 @@ impl Lowering {
                 if other.is_none() && count > 1 {
                     approximate(log, e, "no blend map: the first layer alone", triangles);
                 }
-                return Ok(alone(w, layers.first().and_then(Option::as_ref)));
+                return Ok(Lowered::Plain(Box::new(alone(
+                    w,
+                    layers.first().and_then(Option::as_ref),
+                ))));
             }
         };
         let smoothness = p.float("BlendSmoothness").unwrap_or(0.0).max(0.001);
@@ -215,8 +218,7 @@ impl Lowering {
             triangles,
         );
         log.count("uber_road layered materials made", 1);
-        // the layered material is the one that is drawn; a placeholder stands for it as a plain one
-        Ok(PbrMaterial::default())
+        Ok(Lowered::Blend)
     }
 
     /// One road layer: its material, how it maps its textures, and its height as a mask.

@@ -399,6 +399,10 @@ fn a_two_layer_road_is_a_layered_material_over_its_layers_coordinates() {
 
     let layered = world.get::<LayeredMaterial>(e).unwrap();
     layered.verify(e, &world).unwrap();
+    assert!(
+        !world.has::<PbrMaterial>(e),
+        "the blend is drawn, with no plain material beside it"
+    );
     assert_eq!(layered.layers.len(), 2);
     assert_eq!(layered.weights.composition, Composition::Over);
     // A is mapped by position (TexCoord(3), the world scale), B by TexCoord(0) at its tiling

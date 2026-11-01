@@ -465,6 +465,13 @@ fn alpha_tested(m: &ForzaMaterial) -> bool {
     m.material.as_ref().map_or(m.instance.atst, |x| x.atst)[0] != 0
 }
 
+/// What a rule made of a material: a plain one, which the pass inserts, or a blend of layers (`core.layered`), which
+/// the rule inserted itself and which is drawn with no plain material beside it.
+enum Lowered {
+    Plain(Box<PbrMaterial>),
+    Blend,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct LowerForzaMaterials;
 
@@ -539,7 +546,13 @@ impl Pass for LowerForzaMaterials {
             let family = m.shader.as_ref().map(|s| s.family.as_str());
             let lowered = match family {
                 Some("environment") => Some(lowering.environment(world, *e, m, log)?),
-                Some("uber_road") => Some(lowering.uber_road(world, *e, m, log)?),
+                Some("uber_road") => match lowering.uber_road(world, *e, m, log)? {
+                    Lowered::Plain(pbr) => Some(*pbr),
+                    Lowered::Blend => {
+                        log.count("uber_road materials lowered", 1);
+                        continue;
+                    }
+                },
                 Some("terr_mega" | "terr_distant") => Some(lowering.terrain(world, *e, m, log)?),
                 Some("environment_plot") => Some(lowering.environment_plot(world, *e, m, log)?),
                 Some("anim_flag") => Some(lowering.anim_flag(world, *e, m, log)?),
