@@ -13,31 +13,153 @@
 //! furniture layers with parallax) is an interior mapping done in the pixel shader from the world position, and
 //! reaches the lit colour (target 1 XYZ), not the albedo. The only `discard` compares a constant of the draw with one.
 //!
+//! The room's atlas (`BoxUseAtlas`, `RoomAtlasCount` cells, the cell of `RoomAtlasIndex`, or any cell where
+//! `RoomRandomisationOnOff`) holds in each cell four columns of tiles in two rows: the two side walls in the first
+//! column, the back wall in the lower tile of the second (its upper tile, the front, is black), the floor and the
+//! ceiling in the next two. Without `BoxUseAtlas` the whole texture is one cell.
+//!
 //! The rule: the frame is the surface, sampled on `TEXCOORD2` alone (a material is sampled through one coordinate set, and the
 //! frame is the one that carries the glass normal and roughness): the base colour is `FrameDiffuseandMask.rgb` times
 //! its mask, baked opaque (black where the mask is 0, as the shader's albedo is); the roughness the frame glass
 //! roughness texture's red (the map's blue is 1, so that the constant `Metalness` is the metallic factor); the normal
-//! `FrameGlassNormalTexture`. Left out, named per material and triangle: the room and its emission, the fittings (`uv1`),
-//! the glass roughness texture tiled on `uv0`, the fittings' tint, and wetness and lighting.
+//! `FrameGlassNormalTexture`. The room is drawn as one colour, the mean of its back wall (over the cells the material
+//! uses: a randomised room over all its cells), composited into the baked frame where the mask leaves the pane empty
+//! (`room * (1 - mask) + colour * mask`), one baked texture per distinct (frame, room colour as sRGB bytes); a
+//! material without a frame is that colour alone. Left out, named per material and triangle: the room's parallax,
+//! furniture and per-placement extents, its emission, the fittings (`uv1`), the glass roughness texture tiled on
+//! `uv0`, the fittings' tint, and wetness and lighting.
 use super::{Binding, Derived, Lowering, Params, approximate, left_out, seen};
 use crate::components::{ForzaMaterial, MaterialTextures};
 use primase_core::pass::PassLog;
 use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform, Wrap};
 use primase_core::{ColorSpace, Entity, Name, TexRole, Texture, World};
+use primase_foundations::color::srgb_to_linear;
 use primase_image::{TextureMetadata, map_rgba8_levels};
 
 /// The coordinate set of the window frame.
 const FRAME_SET: u8 = 2;
 
+/// The back wall's tile in a room cell: a cell holds four columns of tiles in two rows, the walls in the first two
+/// columns and the floor and ceiling in the next two; the back wall is the lower tile of the second column. The upper
+/// tile of that column is the front, which no view shows. `[u0, u1, v0, v1]`, `v` down the image.
+const BACK_WALL: [f64; 4] = [0.25, 0.5, 0.5, 1.0];
+
+/// The mip the room means are read from: a room cell is averaged, so the small mip says the same.
+const ROOM_LEVEL: usize = 2;
+
+/// A linear colour as sRGB bytes.
+fn bytes(c: [f64; 3]) -> [u8; 3] {
+    c.map(|x| (primase_foundations::color::linear_to_srgb(x.clamp(0.0, 1.0)) * 255.0).round() as u8)
+}
+
 impl Lowering {
-    /// `frame` as the shader's albedo sees it: `rgb * a`, opaque, sRGB. Made once per source.
+    /// The mean linear colour of the back wall of each cell of `room`, an atlas of `grid` columns and rows of cells
+    /// (row by row); `None` when it has no pixels. Made once per texture and grid.
+    fn room_cells(
+        &mut self,
+        w: &World,
+        room: Entity,
+        grid: [u32; 2],
+    ) -> Result<Option<&Vec<[f64; 3]>>, String> {
+        if !self.rooms.contains_key(&(room, grid)) {
+            let cells = match w.get::<Texture>(room) {
+                Some(t) if !t.levels.is_empty() => {
+                    let space = t.color_space;
+                    let count = (grid[0] * grid[1]) as usize;
+                    let mut sums = vec![([0.0f64; 3], 0u64); count];
+                    let level = ROOM_LEVEL.min(t.levels.len() - 1);
+                    map_rgba8_levels(
+                        t,
+                        level..level + 1,
+                        TextureMetadata {
+                            color_space: space,
+                            role: t.role,
+                            normal: None,
+                        },
+                        |texel| {
+                            let cu = (f64::from(texel.x) + 0.5) / f64::from(texel.width) * f64::from(grid[0]);
+                            let cv =
+                                (f64::from(texel.y) + 0.5) / f64::from(texel.height) * f64::from(grid[1]);
+                            let (column, row) = (cu.floor(), cv.floor());
+                            let (tu, tv) = (cu - column, cv - row);
+                            if (BACK_WALL[0]..BACK_WALL[1]).contains(&tu)
+                                && (BACK_WALL[2]..BACK_WALL[3]).contains(&tv)
+                                && let Some((sum, n)) =
+                                    sums.get_mut(row as usize * grid[0] as usize + column as usize)
+                            {
+                                for (s, c) in sum.iter_mut().zip(&texel.rgba[..3]) {
+                                    *s += seen(space, *c);
+                                }
+                                *n += 1;
+                            }
+                            Ok(texel.rgba)
+                        },
+                    )
+                    .map_err(|e| format!("reading a room texture: {e}"))?;
+                    Some(
+                        sums.into_iter()
+                            .map(|(sum, n)| sum.map(|s| s / n.max(1) as f64))
+                            .collect(),
+                    )
+                }
+                _ => None,
+            };
+            self.rooms.insert((room, grid), cells);
+        }
+        Ok(self.rooms.get(&(room, grid)).and_then(Option::as_ref))
+    }
+
+    /// The colour the room shows: the mean of the back wall over the cells the material's placements use (the cell
+    /// of `RoomAtlasIndex` in an atlas of `RoomAtlasCount` cells, every cell where the room is randomised, the whole
+    /// texture when it is no atlas); `None` when the material has no room texture or it has no pixels.
+    fn room_colour(&mut self, w: &World, p: &Params<'_>, name: &str) -> Result<Option<[f64; 3]>, String> {
+        let Binding::Texture(room) = p.texture(name) else {
+            return Ok(None);
+        };
+        let grid = match (p.on("BoxUseAtlas"), p.vec2("RoomAtlasCount")) {
+            (true, Some(n)) if n.iter().all(|x| x.is_finite() && x.trunc() >= 1.0) => {
+                [n[0].trunc() as u32, n[1].trunc() as u32]
+            }
+            _ => [1, 1],
+        };
+        let randomised = p.on("RoomRandomisationOnOff");
+        let index = p
+            .vec2("RoomAtlasIndex")
+            .filter(|i| i.iter().all(|x| x.is_finite()))
+            .unwrap_or([0.0; 2]);
+        let Some(cells) = self.room_cells(w, room, grid)? else {
+            return Ok(None);
+        };
+        let chosen: Vec<[f64; 3]> = if randomised || grid == [1, 1] {
+            cells.clone()
+        } else {
+            let column = index[0].max(0.0).trunc() as u32 % grid[0];
+            let row = index[1].max(0.0).trunc() as u32 % grid[1];
+            vec![cells[(row * grid[0] + column) as usize]]
+        };
+        let n = chosen.len().max(1) as f64;
+        let sum = chosen
+            .iter()
+            .fold([0.0; 3], |a, c| [a[0] + c[0], a[1] + c[1], a[2] + c[2]]);
+        Ok(Some(sum.map(|x| x / n)))
+    }
+
+    /// `frame` as the shader's albedo sees it, `rgb * a`, with `room` (sRGB bytes) where the mask leaves the pane
+    /// empty (black without one): opaque, sRGB. With `emission`, the frame emits nothing: the room's colour where
+    /// the mask leaves the pane empty and black where it covers it. Made once per source, room colour and kind.
     fn window_frame_colour(
         &mut self,
         w: &mut World,
         frame: Entity,
+        room: Option<[u8; 3]>,
+        emission: bool,
         log: &mut PassLog,
     ) -> Result<Option<Entity>, String> {
-        if let Some(&e) = self.baked.get(&(frame, vec![0], None)) {
+        let key = room.map_or_else(
+            || vec![u32::from(emission)],
+            |r| vec![u32::from_le_bytes([r[0], r[1], r[2], 1]), u32::from(emission)],
+        );
+        if let Some(&e) = self.baked.get(&(frame, key.clone(), None)) {
             return Ok(Some(e));
         }
         let Some(t) = w.get::<Texture>(frame) else {
@@ -45,6 +167,7 @@ impl Lowering {
             return Ok(None);
         };
         let space = t.color_space;
+        let behind = room.map_or([0.0; 3], |r| r.map(|x| srgb_to_linear(f64::from(x) / 255.0)));
         let texture = map_rgba8_levels(
             t,
             0..t.levels.len(),
@@ -56,20 +179,34 @@ impl Lowering {
             |texel| {
                 let [r, g, b, a] = texel.rgba;
                 let mask = f64::from(a) / 255.0;
-                let weighted = |x: u8| {
-                    let linear = seen(space, x) * mask;
+                let mixed = |x: u8, room: f64| {
+                    let covered = if emission { 0.0 } else { seen(space, x) };
+                    let linear = covered * mask + room * (1.0 - mask);
                     (primase_foundations::color::linear_to_srgb(linear) * 255.0).round() as u8
                 };
-                Ok([weighted(r), weighted(g), weighted(b), 255])
+                Ok([mixed(r, behind[0]), mixed(g, behind[1]), mixed(b, behind[2]), 255])
             },
         )
         .map_err(|e| format!("masking a window frame: {e}"))?;
         let name = w.get::<Name>(frame).map(|n| n.0.clone()).unwrap_or_default();
         let e = w.spawn();
-        w.insert(e, Name(format!("{name} (frame colour)")));
+        w.insert(
+            e,
+            Name(format!(
+                "{name} ({})",
+                if emission { "room emission" } else { "frame colour" }
+            )),
+        );
         w.insert(e, texture);
-        log.count("window frame textures baked as colour maps", 1);
-        self.baked.insert((frame, vec![0], None), e);
+        log.count(
+            if emission {
+                "window frame textures baked as emission maps"
+            } else {
+                "window frame textures baked as colour maps"
+            },
+            1,
+        );
+        self.baked.insert((frame, key, None), e);
         Ok(Some(e))
     }
 
@@ -84,8 +221,18 @@ impl Lowering {
         let bound = w.get::<MaterialTextures>(e).cloned();
         let p = Params::new(m, bound.as_ref());
         let triangles = self.triangles.get(&e).copied().unwrap_or(0);
+        // the room behind the pane, as the colour the pane shows where no frame covers it
+        let room = self.room_colour(w, &p, "BoxDiffRoughTex")?.map(bytes);
+        let glow = self
+            .room_colour(w, &p, "BoxEmissiveTex")?
+            .map(bytes)
+            .filter(|c| *c != [0; 3]);
+        let mut lit = false;
         let mut pbr = PbrMaterial {
-            base_color: [0.0, 0.0, 0.0, 1.0],
+            base_color: room.map_or([0.0, 0.0, 0.0, 1.0], |r| {
+                let c = r.map(|x| srgb_to_linear(f64::from(x) / 255.0) as f32);
+                [c[0], c[1], c[2], 1.0]
+            }),
             metallic: p.float("Metalness").unwrap_or(0.0).clamp(0.0, 1.0),
             roughness: 1.0,
             ..PbrMaterial::default()
@@ -123,17 +270,34 @@ impl Lowering {
             approximate(
                 log,
                 e,
-                "a primitive without the frame's coordinates (TEXCOORD2): no frame textures",
+                "a primitive without the frame's coordinates (TEXCOORD2): no frame textures, the room colour alone",
                 triangles,
             );
         } else if p.on("FrameTex") {
             match p.texture("FrameDiffuseandMask") {
                 Binding::Texture(t) => {
-                    if let Some(colour) = self.window_frame_colour(w, t, log)? {
+                    if let Some(colour) = self.window_frame_colour(w, t, room, false, log)? {
+                        // the baked frame holds the whole colour, the room where the frame leaves the pane empty
+                        pbr.base_color = [1.0; 4];
                         pbr.base_color_texture = Some(slot(colour));
                     }
                 }
-                Binding::Absent | Binding::None => approximate(log, e, "no frame texture: black", triangles),
+                Binding::Absent | Binding::None => approximate(
+                    log,
+                    e,
+                    "no frame texture: the pane is the room colour alone",
+                    triangles,
+                ),
+            }
+            if p.on("Emissive")
+                && let Some(glow) = glow
+                && let Binding::Texture(t) = p.texture("FrameDiffuseandMask")
+                && let Some(map) = self.window_frame_colour(w, t, Some(glow), true, log)?
+            {
+                // the room's glow where the frame leaves the pane empty; the factor stays 1: the map holds it
+                pbr.emissive = [1.0; 3];
+                pbr.emissive_texture = Some(slot(map));
+                lit = true;
             }
             if let Binding::Texture(t) = p.texture("FrameGlassRoughnessTexture")
                 && let Some(rough) = self.derive(w, t, Derived::RedRoughnessMetal, log)?
@@ -150,15 +314,27 @@ impl Lowering {
                 }
             }
         } else {
-            approximate(log, e, "no frame (FrameTex off): a black pane", triangles);
+            approximate(
+                log,
+                e,
+                "no frame (FrameTex off): the pane is the room colour alone",
+                triangles,
+            );
         }
 
         approximate(
             log,
             e,
-            "room behind the pane (interior mapping, furniture, emission) left out: black",
+            if room.is_some() {
+                "room drawn as its back wall's mean colour (no parallax, furniture and per-placement room extents left out)"
+            } else {
+                "room behind the pane (no room texture) left out: black"
+            },
             triangles,
         );
+        if !lit {
+            approximate(log, e, "room emission left out", triangles);
+        }
         left_out(
             log,
             &p,

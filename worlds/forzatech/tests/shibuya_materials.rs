@@ -107,6 +107,19 @@ fn shibuya_materials() {
         );
         assert_eq!(unlowered["uber_foliage"], (1, 2));
     }
+    // every window pane shows its room as a colour, and says so by name
+    let room = "room drawn as its back wall's mean colour (no parallax, furniture and per-placement room extents left out)";
+    assert!(
+        log.approximations.get(room).copied().unwrap_or(0)
+            + log
+                .approximations
+                .get("room behind the pane (no room texture) left out: black")
+                .copied()
+                .unwrap_or(0)
+            >= lowered["window_linecastroom"].0,
+        "{:?}",
+        log.approximations
+    );
     for (family, (n, _)) in &lowered {
         assert_eq!(log.counts[&format!("{family} materials lowered")], *n);
     }

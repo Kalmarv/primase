@@ -489,7 +489,8 @@ fn anim_flag_offsets_its_diffuse_and_leaves_the_occlusion_out() {
     );
 }
 
-/// A window is its frame on TEXCOORD2: the colour times its mask, the glass roughness' red, the room left out by name.
+/// A window is its frame on TEXCOORD2: the colour over the room's back wall mean where its mask is empty, the glass
+/// roughness' red, the room's emission left out by name.
 #[test]
 fn window_is_its_frame_on_the_second_set() {
     let mut world = World::new();
@@ -502,6 +503,12 @@ fn window_is_its_frame_on_the_second_set() {
         &[[200, 100, 50, 0], [200, 100, 50, 255]],
     );
     let rough = texture(&mut world, "rough", ColorSpace::Linear, 1, &[[51, 9, 9, 255]]);
+    // a room of one cell, 8 x 4 texels: the back wall is the lower tile of the second of four columns
+    let mut cell = [[10u8, 10, 10, 255]; 32];
+    for (x, y) in [(2, 2), (3, 2), (2, 3), (3, 3)] {
+        cell[y * 8 + x] = [128, 64, 0, 255];
+    }
+    let room = texture(&mut world, "room", ColorSpace::Srgb, 8, &cell);
     let e = world.spawn();
     world.insert(
         e,
@@ -511,21 +518,26 @@ fn window_is_its_frame_on_the_second_set() {
             vec![
                 tex("FrameDiffuseandMask", 1),
                 tex("FrameGlassRoughnessTexture", 2),
+                tex("BoxDiffRoughTex", 6),
                 parameter("FrameTex", 3, Value::Int(1)),
                 parameter("Fittings", 4, Value::Int(1)),
                 parameter("Metalness", 5, Value::Float(0.0)),
             ],
         ),
     );
-    world.insert(e, MaterialTextures(vec![bound(1, frame), bound(2, rough)]));
+    world.insert(
+        e,
+        MaterialTextures(vec![bound(1, frame), bound(2, rough), bound(6, room)]),
+    );
     triangle(&mut world, e, &[0, 1, 2]);
     let log = run(&mut world);
     let pbr = world.get::<PbrMaterial>(e).unwrap();
+    assert_eq!(pbr.base_color, [1.0; 4]);
     let base = pbr.base_color_texture.unwrap();
     assert_eq!(base.texcoord, 2);
     let baked = world.get::<Texture>(base.texture).unwrap();
-    // the covered texel keeps its colour, the pane is black, both opaque
-    assert_eq!(&baked.levels[0][..4], &[0, 0, 0, 255]);
+    // the covered texel keeps its colour, the pane is the back wall's colour, both opaque
+    assert_eq!(&baked.levels[0][..4], &[128, 64, 0, 255]);
     assert_eq!(&baked.levels[0][4..8], &[200, 100, 50, 255]);
     let mr = pbr.metallic_roughness_texture.unwrap();
     assert_eq!(mr.texcoord, 2);
@@ -535,9 +547,10 @@ fn window_is_its_frame_on_the_second_set() {
         vec![255, 51, 255, 255]
     );
     assert_eq!(
-        log.approximations["room behind the pane (interior mapping, furniture, emission) left out: black"],
+        log.approximations["room drawn as its back wall's mean colour (no parallax, furniture and per-placement room extents left out)"],
         1
     );
+    assert_eq!(log.approximations["room emission left out"], 1);
     assert_eq!(
         log.approximations["fittings (TEXCOORD1) and their tint left out"],
         1

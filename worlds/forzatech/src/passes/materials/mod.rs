@@ -59,6 +59,11 @@
 //! view-selected atlas of directions has no static material form). The normal maps are made in `NormalZ::Rebuild`:
 //! `normalize-normals` converts them to glTF's before a writer.
 //!
+//! The windows' room is drawn as one colour: the mean of the back wall of the atlas cells a material's placements use,
+//! composited into its frame texture where the frame's mask leaves the pane empty (one baked texture per frame and room
+//! colour), and the room's emission, where it is not black, as an emission map with the same mask; each is counted per
+//! material and triangle (`window_linecastroom` holds the rest).
+//!
 //! A base colour factor above 1 (the flipbook panel's brightness of 10 in the whole box: 8 materials, 16 triangles) is
 //! stored as 1 and counted: no shader of the surface families saturates the albedo it writes, and the albedo target's
 //! format is pipeline state in no shipped file, so that the target holds 0 to 1 is inferred. What was brighter is the
@@ -231,6 +236,9 @@ struct Lowering {
     coord_sets: BTreeMap<Entity, u8>,
     /// The glass opacity maps in which the reflection floor raised a texel above the transmission.
     reflected: BTreeSet<Entity>,
+    /// The mean linear colour of the back wall of each cell of a room atlas (cell by cell, row by row), by texture and
+    /// the atlas's cell grid; `None` where the texture has no pixels.
+    rooms: BTreeMap<(Entity, [u32; 2]), Option<Vec<[f64; 3]>>>,
 }
 
 impl Lowering {
@@ -545,6 +553,7 @@ impl Pass for LowerForzaMaterials {
             baked: BTreeMap::new(),
             coord_sets,
             reflected: BTreeSet::new(),
+            rooms: BTreeMap::new(),
         };
         let mut left: BTreeMap<String, (u64, u64)> = BTreeMap::new();
         for (e, m) in &materials {
