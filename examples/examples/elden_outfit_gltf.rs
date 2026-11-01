@@ -60,10 +60,13 @@ fn preparation(parts: usize) -> CharacterPreparation {
     }
 }
 
-/// What the glTF writer needs of the world, in order: unit normals, a texture coordinate set on every primitive
-/// (zeros where one lacks it), a base colour of light grey, a metallic factor of 0 and a roughness of 0.85 for a
+/// What the glTF writer needs of the world, in order: one form of every part (the one the source names, else the
+/// finest; the writer chooses none and leaves a part with several out), skin weights that sum to 1 per vertex, unit
+/// normals, a texture coordinate set on every primitive (zeros where one lacks it), a base colour of light grey, a metallic factor of 0 and a roughness of 0.85 for a
 /// material that states none, collision as triangles, and every mirrored or sheared placement baked into geometry.
 const WRITER: &[&str] = &[
+    "select-lod{form=default}",
+    "normalize-skin-weights",
     "normalize-normals",
     "fill-missing-texcoords",
     "prepare-gltf-materials{base-color=0.8/0.8/0.8/1,metallic=0,roughness=0.85}",
