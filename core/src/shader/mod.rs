@@ -45,4 +45,4 @@ pub use shadow_choice::{ChosenShadows, LocalShadowChoice, ShadowOrder, ShadowVie
 pub use surface::Surface;
 
 mod specialise;
-pub use specialise::{ShaderSpecialisations, StageSpecialisation};
+pub use specialise::{ShaderSpecialisations, SpecialisationCache, StageSpecialisation};

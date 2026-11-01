@@ -20,6 +20,8 @@ serde_json.workspace = true
 [dev-dependencies]
 # naga's WGSL front end, to read the surface's WGSL back and validate it (tests/surface_wgsl.rs)
 naga = { workspace = true, features = ["wgsl-in"] }
+# a GLSL fixture lifted to a program, for the shader specialisation tests
+iridia-mojo.workspace = true
 
 [lints]
 workspace = true
