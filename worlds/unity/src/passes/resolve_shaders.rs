@@ -69,10 +69,12 @@ use iridia_interface::{
     TargetState,
 };
 use primase_core::pass::{Choice, Given, OptionSpec, PassSpec};
-use primase_core::shader::state_lines;
 use primase_core::shader::{
     ConstantBinding, ConstantRole, FrameParameter, FrameTexture, InputBinding, InputRole, ObjectParameter,
     OutputBinding, OutputRole, ViewParameter,
+};
+use primase_core::shader::{
+    FallbackCoordinates, bind_fallback_uv_copies, bind_surface_input_fallbacks, state_lines,
 };
 use primase_core::{Component, Entity, Name, Semantic, Texture, World};
 use primase_core::{
@@ -923,6 +925,8 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
         let mut shaders: BTreeMap<std::sync::Arc<[u8]>, Result<Entity, String>> = BTreeMap::new();
         // each program's value graph and the constants it reads, taken when it is lifted, or why the graph could not be
         let mut graph_of: BTreeMap<Entity, Result<ProgramGraph, String>> = BTreeMap::new();
+        // The source describes bare vertex UV copies for a consumer that cannot execute that stage.
+        let mut vertex_programs = BTreeMap::new();
         let scene = self.scene.then(|| SceneKeywords::read(world));
         if scene.as_ref().is_some_and(|s| !s.known()) {
             log.approximate(
@@ -1006,9 +1010,12 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
                                 Shader {
                                     format: ShaderFormat::Dxbc,
                                     bytecode: variant.code.to_vec(),
-                                    interface: program.interface,
+                                    interface: program.interface.clone(),
                                 },
                             );
+                            if stage == Stage::Vertex {
+                                vertex_programs.insert(e, program);
+                            }
                             Ok(e)
                         }
                     };
@@ -1056,6 +1063,13 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
             if bound.iter().all(|s: &StageBinding| s.stage != Stage::Pixel) {
                 continue;
             }
+            let pixel_interface = bound
+                .iter()
+                .find(|s| s.stage == Stage::Pixel)
+                .and_then(|s| world.get::<Shader>(s.shader))
+                .map(|s| &s.interface)
+                .ok_or("a resolved pixel stage without its shader")?;
+            replacement_inputs(&mut bound, pixel_interface, &vertex_programs, &mut counts);
             // textures: bound per stage binding by name, entities checked against the world
             for stage in &mut bound {
                 let interface = world.get::<Shader>(stage.shader).map(|s| &s.interface);
@@ -1089,6 +1103,40 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
             shaders.values().filter(|r| r.is_ok()).count() as u64,
         );
         Ok(())
+    }
+}
+
+/// Describe the former display stand-ins at the source boundary. `PreviousOr` still uses the executable
+/// vertex output first; these approximations apply only when the consumer cannot execute it. The standard
+/// semantic values match the removed lab `vertex::four_lanes`; only proved bare UV lanes override them.
+fn replacement_inputs(
+    stages: &mut [StageBinding],
+    pixel_interface: &Interface,
+    vertex_programs: &BTreeMap<Entity, iridia::Program>,
+    counts: &mut BTreeMap<String, u64>,
+) {
+    let vertex = stages.iter().find(|s| s.stage == Stage::Vertex).cloned();
+    let Some(pixel) = stages.iter_mut().find(|s| s.stage == Stage::Pixel) else {
+        return;
+    };
+    *counts
+        .entry("pixel inputs with shared surface replacement descriptions (used only without an executable vertex stage)".into())
+        .or_default() += bind_surface_input_fallbacks(pixel, pixel_interface) as u64;
+    if let Some(vertex) = vertex
+        && let Some(program) = vertex_programs.get(&vertex.shader)
+    {
+        *counts
+            .entry("pixel replacement inputs retaining proved vertex UV-copy lanes".into())
+            .or_default() += bind_fallback_uv_copies(
+            pixel,
+            program,
+            &vertex,
+            FallbackCoordinates {
+                slot: primase_core::pbr::TextureSlot::BaseColor,
+                absent_texture_set: 0,
+                absent_stream: [0; 2],
+            },
+        ) as u64;
     }
 }
 
@@ -1441,6 +1489,76 @@ mod tests {
     use iridia_interface::ResourceId;
     use unity_formats::player::ObjRef;
     use unity_formats::program::{ConstantBuffer, Field, StructField, TextureParam};
+
+    #[test]
+    fn replacement_inputs_state_surface_values_without_changing_vertex_streams() {
+        use iridia_interface::{Label, ScalarType, Value, Varying, VaryingProvenance};
+        use primase_core::shader::{Attribute, InputFallback, InputFallbackValue};
+
+        let inputs: Vec<_> = ["NORMAL", "COLOR", "TEXCOORD", "TANGENT", "CUSTOM"]
+            .into_iter()
+            .map(|name| Varying {
+                label: Label {
+                    name: name.into(),
+                    index: 0,
+                },
+                system: None,
+                value: Value {
+                    scalar: ScalarType::Float,
+                    width: 4,
+                },
+                interp: None,
+                used: true,
+                provenance: VaryingProvenance::default(),
+            })
+            .collect();
+        let interface = Interface {
+            stage: Stage::Pixel,
+            inputs,
+            outputs: vec![],
+            resources: vec![],
+            facts: Default::default(),
+        };
+        let shader = World::new().spawn();
+        let mut pixel = StageBinding::new(Stage::Pixel, shader);
+        pixel.inputs = interface
+            .inputs
+            .iter()
+            .map(|v| InputBinding {
+                label: v.label.clone(),
+                role: InputRole::Previous,
+            })
+            .collect();
+        let mut vertex = StageBinding::new(Stage::Vertex, shader);
+        vertex.inputs = vec![InputBinding {
+            label: interface.inputs[2].label.clone(),
+            role: InputRole::Stream(Attribute::TexCoord(0)),
+        }];
+        let mut stages = vec![vertex.clone(), pixel];
+        let mut counts = BTreeMap::new();
+        replacement_inputs(&mut stages, &interface, &BTreeMap::new(), &mut counts);
+        assert_eq!(stages[0], vertex);
+        let expected = [
+            InputFallbackValue::Normal,
+            InputFallbackValue::MaterialVertexColour {
+                absent: [1.0f32.to_bits(); 4],
+            },
+            InputFallbackValue::MaterialCoordinates(FallbackCoordinates {
+                slot: primase_core::pbr::TextureSlot::BaseColor,
+                absent_texture_set: 0,
+                absent_stream: [0; 2],
+            }),
+            InputFallbackValue::Literal([1.0f32.to_bits(), 0, 0, 1.0f32.to_bits()]),
+        ];
+        for (input, value) in stages[1].inputs.iter().zip(expected) {
+            let InputRole::PreviousOr { fallback, .. } = &input.role else {
+                panic!("{input:?}")
+            };
+            assert_eq!(*fallback, InputFallback::new(value));
+        }
+        assert_eq!(stages[1].inputs[4].role, InputRole::Previous);
+        assert_eq!(counts.values().sum::<u64>(), 4);
+    }
 
     fn material() -> UnityMaterial {
         UnityMaterial {
