@@ -28,8 +28,7 @@
 //! The `environment` rule packs 85 distinct RoughMetAoPor maps and makes normal maps of 83 distinct textures (7 more,
 //! 838 triangles, are BC5 SNORM, which the shader's `2 r - 1` does not read: left out, counted). The packed maps'
 //! metallic channel holds an extreme (below 16 or above 239) in 97.97% of its texels over the lowered materials' maps,
-//! the binary mask a metalness is. Left out by name (materials, triangles; a material may carry several): swatch tint
-//! 568, 15,984; modulate 594, 8,747; deposits 554, 7,159; triplanar 568, 7,642; wetness 594, 11,139; relaxed cone-step
+//! the binary mask a metalness is. Left out by name (materials, triangles; a material may carry several): modulate 594, 8,747; deposits 554, 7,159; triplanar 568, 7,642; wetness 594, 11,139; relaxed cone-step
 //! mapping 556, 5,596; mega-skirt 20, 13,188; emission 15, 1,636; retro-reflection 8, 1,032; per-instance random UV
 //! offset 77, 1,086; the second UV set of a dual-UV material 95, 166; and the alpha-test reference (a per-draw
 //! constant, not in the material: the middle of the range) 29, 1,357.
@@ -65,6 +64,17 @@
 //! terrain snow and wetness 286, 91,811, macro occlusion 286, 91,811, lightmap 12, 126; `terr_*` the world-space normal
 //! taken as a tangent-space one over the planar coordinates 25, 24,943; `uber_road` the tint overlay 140, 66,426, frost
 //! and snow 140, 66,426, the modulate maps 94, 18,340, the blend's smoothstep taken as a linear ramp 52, 9,157.
+//!
+//! The `environment` swatch tint is not a material's but a placement's: the lowering records the palette
+//! ([`crate::components::SwatchTint`]) and `bake-forzatech-swatch-tint` applies it
+//! (`tests/shibuya_swatch.rs`, the whole box after `select-lod` at level 1, `lower-forzatech-materials` and a texture
+//! cap of 256): 568 prototypes of 474,356 triangles, their 3,036 primitives split into 3,351 by the vertex colour, 4,144
+//! (model variant, tint byte) material variants, 7,251 material copies and 549 baked base colour textures. Left out, by
+//! name: the palette read at one texel, not filtered (179,810 triangles); 26 hand-placed instances, untinted (their tint
+//! byte is not traced); 183 triangles whose corners disagree on the tint mask and 291 tinted ones on the palette column;
+//! 2 primitives with no vertex colour; and one material with no base colour texture, tinted as its colour factor.
+//! `specialize-material-variants` then makes 2,060 more prototype copies than without the tint, 383,854 triangles more:
+//! the placed prototypes go from 2,685 to 4,745 and their triangles from 1,419,192 to 1,803,046.
 mod branch;
 mod environment;
 mod environment_plot;
@@ -75,7 +85,7 @@ mod terrain;
 mod uber_road;
 mod uber_roaddecal;
 
-use crate::components::{ForzaMaterial, MaterialTextures, PlanarUv, Value};
+use crate::components::{ForzaMaterial, MaterialTextures, PlanarUv, SwatchTint, Value};
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
@@ -444,6 +454,7 @@ impl Pass for LowerForzaMaterials {
             PbrMaterial::NAME,
             LayeredMaterial::NAME,
             PlanarUv::NAME,
+            SwatchTint::NAME,
             Texture::NAME,
             Name::NAME,
             DrawOrder::NAME,
@@ -453,7 +464,7 @@ impl Pass for LowerForzaMaterials {
         &[Texture::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "environment materials by their texture maps alone: the swatch tint, modulate, deposits, triplanar, \
+        "environment materials by their texture maps alone: the modulate, deposits, triplanar, \
          parallax and emission of a permutation are left out, wetness and lighting are run-time state; decals as \
          alpha-tested or blended materials in the decal layer: the dither is a plain test at one half and the \
          vertex colour, the far fade and the decal buffer's blend are left out"

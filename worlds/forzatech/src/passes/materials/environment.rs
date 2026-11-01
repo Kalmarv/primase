@@ -34,14 +34,13 @@
 //! per-instance random UV offset are left out, because each needs a vertex colour, the instance variation, the world
 //! position or a run-time constant that no material holds.
 use super::{ALPHA_REFERENCE, Binding, Derived, Lowering, Params, approximate, left_out};
-use crate::components::{ForzaMaterial, MaterialTextures};
+use crate::components::{ForzaMaterial, MaterialTextures, SwatchTint};
 use primase_core::pass::PassLog;
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::{ColorSpace, Entity, TexRole, Texture, World};
 
 /// The `environment` rule's simplifications, by the switch that asks for what is left out.
 const LEFT_OUT: &[(&str, &str)] = &[
-    ("SwatchTint", "swatch tint left out"),
     ("Modulate", "modulate texture left out"),
     ("Deposits", "deposits left out"),
     ("TriPlanarMapping", "triplanar mapping left out"),
@@ -63,7 +62,27 @@ impl Lowering {
         m: &ForzaMaterial,
         log: &mut PassLog,
     ) -> Result<PbrMaterial, String> {
-        self.environment_maps(w, e, m, log, LEFT_OUT)
+        let pbr = self.environment_maps(w, e, m, log, LEFT_OUT)?;
+        let bound = w.get::<MaterialTextures>(e).cloned();
+        let p = Params::new(m, bound.as_ref());
+        if p.on("SwatchTint") {
+            match p.texture("SwatchTintTexture") {
+                Binding::Texture(palette) => {
+                    w.insert(e, SwatchTint { palette });
+                    log.count(
+                        "swatch-tinted materials recorded for bake-forzatech-swatch-tint",
+                        1,
+                    );
+                }
+                Binding::Absent | Binding::None => approximate(
+                    log,
+                    e,
+                    "swatch tint palette not found: untinted",
+                    self.triangles.get(&e).copied().unwrap_or(0),
+                ),
+            }
+        }
+        Ok(pbr)
     }
 
     /// The three-map material the `environment` and `environment_plot` families share, whose `left_out` switches

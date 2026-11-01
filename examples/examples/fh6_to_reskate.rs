@@ -9,7 +9,8 @@ use primase_core::pass::{PassManager, PassRegistry, Pipeline};
 use primase_core::pbr::TextureSlot;
 use primase_core::{LodChoice, SelectLod};
 use primase_forzatech::passes::{
-    CollideForzaDrawn, Ground, LowerForzaMaterials, LowerForzaPlanarUv, SeeThrough, SelectForzaDrawn,
+    BakeForzaSwatchTint, CollideForzaDrawn, Ground, LowerForzaMaterials, LowerForzaPlanarUv, SeeThrough,
+    SelectForzaDrawn,
     SelectForzaMainView,
 };
 use primase_forzatech::read::convert::ForzaReader;
@@ -66,13 +67,17 @@ fn main() -> Result<()> {
     let prepare = Pipeline {
         passes: vec![
             Box::new(SelectLod { choice: LodChoice::AtMost(1) }),
+            Box::new(LowerForzaMaterials),
+            // the terrain and the roads' planar layers read the position of a surface point: its coordinates, per placement
+            Box::new(LowerForzaPlanarUv),
+            // the textures are kept no larger than 256, before the swatch tint copies the ones it bakes
+            Box::new(CapTextures::new(256, CapMode { beyond: Beyond::Filter, normals: NormalDownscale::Box })?),
+            // the swatch tint is a material variant of each (model variant, tint byte) a prototype's placements use, its base colour baked
+            Box::new(BakeForzaSwatchTint),
             // a placement drawing another material variant gets a prototype of its own, so each tiles one way; the
             // variants nobody places are dropped, counted
             Box::new(SpecializeMaterialVariants::new(UnusedVariants::Discard)),
             Box::new(SelectForzaMainView),
-            Box::new(LowerForzaMaterials),
-            // the terrain and the roads' planar layers read the position of a surface point: its coordinates, per placement
-            Box::new(LowerForzaPlanarUv),
             Box::new(CollideForzaDrawn { see_through: SeeThrough::LeaveOut, ground: Ground::World }),
             // what draws nothing the writer can take is left out, counted: a slot with no material instance, and the
             // shader families with no lowering rule yet; after the collision, so their ground stays solid
@@ -100,7 +105,6 @@ fn main() -> Result<()> {
             Box::new(PrepareReskateGrinds::studio()),
             Box::new(PlaceReskateSpawn::centre()),
             Box::new(SnapReskateMarkers::for_encoding(&e)?),
-            Box::new(CapTextures::new(256, CapMode { beyond: Beyond::Filter, normals: NormalDownscale::Box })?),
             Box::new(PrepareReskateTextures),
             Box::new(PrepareReskateCollision::new(CollisionSurfaces::Coalesce, CollisionWeld::Millimetre, &e)?),
             Box::new(SummarizeReskateMap::for_encoding(&e)?),

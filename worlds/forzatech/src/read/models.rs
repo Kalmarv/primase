@@ -259,6 +259,11 @@ fn primitive(data: &forzatech_formats::modelbin::MeshData<'_>) -> std::result::R
             streams.insert(Semantic::TexCoord(set), Stream::F32x2(uv));
         }
     }
+    // the vertex colour is shader data, not a colour: the swatch-tinted materials read it as a tint mask (red) and a
+    // palette column (green)
+    if let Some(c) = data.colors() {
+        streams.insert(Semantic::ShaderInput(0), Stream::F32x4(c));
+    }
     let mut indices = data.local_indices();
     if !indices.len().is_multiple_of(3) {
         return Err(format!("{} indices, not whole triangles", indices.len()));

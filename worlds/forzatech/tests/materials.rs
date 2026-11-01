@@ -176,7 +176,9 @@ fn environment_maps_tilings_and_packing() {
     );
     assert_eq!(world.get::<Texture>(diffuse).unwrap().role, TexRole::Color);
 
-    assert_eq!(log.approximations["swatch tint left out"], 1);
+    // the switch is on and no palette is bound: untinted, counted, with nothing for the baking pass
+    assert_eq!(log.approximations["swatch tint palette not found: untinted"], 1);
+    assert!(!world.has::<primase_forzatech::components::SwatchTint>(e));
     assert_eq!(log.counts["environment materials lowered"], 1);
 }
 

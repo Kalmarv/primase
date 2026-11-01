@@ -226,6 +226,14 @@ pub struct PlanarUv {
     pub texcoord: u8,
 }
 
+/// A material whose albedo the swatch tint multiplies (`environment`'s `SwatchTint` switch): `palette` is its
+/// `SwatchTintTexture`, read at `u` = the vertex colour's green and `v` = the placement's tint byte
+/// (`bake-forzatech-swatch-tint` applies it and removes this).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct SwatchTint {
+    pub palette: primase_core::Entity,
+}
+
 plain!(Placement, "forzatech.placement");
 plain!(PlanarUv, "forzatech.planar_uv");
 plain!(Template, "forzatech.template");
@@ -416,6 +424,20 @@ pub struct MaterialTexture {
 }
 
 plain!(ForzaMaterial, "forzatech.material");
+
+impl Component for SwatchTint {
+    const NAME: &'static str = "forzatech.swatch_tint";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn references(&self, out: &mut Vec<primase_core::Entity>) {
+        out.push(self.palette);
+    }
+    fn apply_linear(&self, _: &Linear) -> Linearity<Self> {
+        Linearity::Invariant
+    }
+    fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::json::JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
 
 impl Component for MaterialTextures {
     const NAME: &'static str = "forzatech.material_textures";
