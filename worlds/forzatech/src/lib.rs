@@ -17,6 +17,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.add(&passes::LOWER_FORZATECH_MATERIALS);
     reg.add(&passes::LOWER_FORZATECH_PLANAR_UV);
     reg.add(&passes::APPLY_FORZATECH_EMISSION_VARIATION);
+    reg.add(&passes::BAKE_FORZATECH_EMISSION_PRODUCT);
     reg.add(&passes::BAKE_FORZATECH_SWATCH_TINT);
     reg.add(&passes::SELECT_FORZATECH_DRAWN);
     reg.add(&passes::SELECT_FORZATECH_MAIN_VIEW);

@@ -13,8 +13,8 @@ use primase_core::{
     TexRole, Texture, Topology, World,
 };
 use primase_forzatech::components::{
-    ForzaMaterial, InstanceLevel, MaterialLevel, MaterialTexture, MaterialTextures, Parameter, ShaderLevel,
-    Value,
+    EmissionByBaseColour, ForzaMaterial, InstanceLevel, MaterialLevel, MaterialTexture, MaterialTextures,
+    Parameter, ShaderLevel, Value,
 };
 use primase_forzatech::passes::LowerForzaMaterials;
 
@@ -643,8 +643,8 @@ fn uberlod_is_its_diffuse_and_emission_maps() {
 }
 
 /// The `environment` emission: the base colour map times the emission map baked into one map, the tint times
-/// `GIEmissiveScale` the factor; left out when the base colour map is tiled, when the map is on another coordinate set, and
-/// as a count when it is black.
+/// `GIEmissiveScale` the factor; left out when the base colour map is tiled, kept on its own coordinate set (`EmissiveAltUV`)
+/// for the rebasing pass, and as a count when it is black.
 #[test]
 fn environment_emission_is_the_base_colour_times_the_emission_map() {
     let mut world = World::new();
@@ -708,9 +708,20 @@ fn environment_emission_is_the_base_colour_times_the_emission_map() {
     for (got, want) in baked.levels[0].iter().zip([255u8, 128, 0, 255]) {
         assert!(got.abs_diff(want) <= 1, "{:?}", baked.levels[0]);
     }
-    for e in [tiled, alt, dark] {
+    for e in [tiled, dark] {
         assert!(world.get::<PbrMaterial>(e).unwrap().emissive_texture.is_none());
     }
+    // the emission map on TEXCOORD4 is kept on it, marked for rebase-texcoord-set and the product of the two maps
+    let kept = world.get::<PbrMaterial>(alt).unwrap();
+    let slot = kept.emissive_texture.unwrap();
+    assert_eq!((slot.texcoord, slot.texture), (4, lit));
+    assert_eq!((kept.emissive_strength, kept.emissive), (3.0, [0.5, 0.25, 1.0]));
+    assert_eq!(kept.base_color_texture.unwrap().texcoord, 0);
+    assert!(world.has::<EmissionByBaseColour>(alt));
+    assert_eq!(
+        log.counts["EmissiveAltUV emission maps kept on TEXCOORD4 for rebase-texcoord-set"],
+        1
+    );
     assert_eq!(
         log.approximations["emission left out: the base colour map is tiled, so it and the emission map are on different coordinates"],
         1

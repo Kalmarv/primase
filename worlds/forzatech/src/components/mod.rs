@@ -243,8 +243,16 @@ pub struct EmissionVariation {
     pub max: f32,
 }
 
+/// A lowered material whose emission is its base colour map times the emission map, the two sampled through different
+/// coordinate sets (`EmissiveAltUV`: the emission map is on `TEXCOORD4`, the base colour map on the material's own set).
+/// The lowering leaves the emission map on its set; `rebase-texcoord-set` draws both maps through `TEXCOORD4`, and
+/// `bake-forzatech-emission-product` multiplies them and removes this.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct EmissionByBaseColour;
+
 plain!(Placement, "forzatech.placement");
 plain!(EmissionVariation, "forzatech.emission_variation");
+plain!(EmissionByBaseColour, "forzatech.emission_by_base_colour");
 plain!(PlanarUv, "forzatech.planar_uv");
 plain!(Template, "forzatech.template");
 plain!(MaterialRef, "forzatech.material_ref");

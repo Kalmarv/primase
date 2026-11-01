@@ -9,8 +9,8 @@ use primase_core::pass::{PassManager, PassRegistry, Pipeline};
 use primase_core::pbr::TextureSlot;
 use primase_core::{LodChoice, SelectLod};
 use primase_forzatech::passes::{
-    ApplyForzaEmissionVariation, BakeForzaSwatchTint, CollideForzaDrawn, Ground, LowerForzaMaterials,
-    LowerForzaPlanarUv, SeeThrough, SelectForzaDrawn, SelectForzaMainView,
+    ApplyForzaEmissionVariation, BakeForzaEmissionProduct, BakeForzaSwatchTint, CollideForzaDrawn, Ground,
+    LowerForzaMaterials, LowerForzaPlanarUv, SeeThrough, SelectForzaDrawn, SelectForzaMainView,
 };
 use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
@@ -18,7 +18,8 @@ use primase_forzatech::read::placements::Scope;
 use primase_forzatech::read::textures::TextureScope;
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_image::{
-    BakeLayerChannels, Beyond, CapMode, CapTextures, MissingLevels, NormalDownscale, NormalizeNormals, OrmSize, PackOrm,
+    BakeLayerChannels, Beyond, CapMode, CapTextures, MissingLevels, NormalDownscale, NormalizeNormals, OrmSize,
+    PackOrm, RebaseTexcoordSet,
 };
 use primase_meshops::{
     BakeNonrigid, DropDuplicateTriangles, FirstTexcoordSet, Mirrors, OmitUnshadedPrimitives,
@@ -89,6 +90,10 @@ fn main() -> Result<()> {
             Box::new(LowerForzaPlanarUv),
             // the textures are kept no larger than 256, before the swatch tint copies the ones it bakes
             Box::new(CapTextures::new(256, CapMode { beyond: Beyond::Filter, normals: NormalDownscale::Box })?),
+            // a material that samples two coordinate sets (the emission map of EmissiveAltUV is on TEXCOORD4) is drawn through
+            // the one set: its maps re-rasterised in that set's space, then the emission map times the base colour map
+            Box::new(RebaseTexcoordSet::new(4, 256)?),
+            Box::new(BakeForzaEmissionProduct),
             // the swatch tint is a material variant of each (model variant, tint byte) a prototype's placements use, its base colour baked
             Box::new(BakeForzaSwatchTint),
             // the emission of a rule-placed instance scaled by its instance variation, as material variants beside the tint's

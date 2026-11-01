@@ -116,8 +116,9 @@
 //! after `select-lod` at level 1 and `select-forzatech-main-view` (`tests/shibuya_swatch.rs`), 880 materials of 210,791
 //! triangles carry an emission map and a factor (the three families together; the run did not split them), 334
 //! materials of those families bind a texture with no light and emit nothing (counted), 3 name an emission
-//! texture no archive holds, and 784 `environment` materials (2,152 triangles) read it on `TEXCOORD4` and are left out
-//! by name. The emission's unit and the sky preset's scale are not in the files (see
+//! texture no archive holds, and the 30 materials drawn that read it on `TEXCOORD4` (`EmissiveAltUV`: 12 `environment`,
+//! 1,572 triangles, and 18 `environment_signage`, 580) keep it there for `rebase-texcoord-set` and
+//! `bake-forzatech-emission-product` (`tests/shibuya_altuv.rs` counts what they make of it). The emission's unit and the sky preset's scale are not in the files (see
 //! [`crate::passes::ApplyForzaEmissionVariation`] for the instance variation, which is applied per placement).
 mod anim_flag;
 mod anim_ledflipbookpanel;
@@ -127,6 +128,7 @@ mod emissiveonly;
 mod environment;
 mod environment_plot;
 mod environment_signage;
+pub(crate) use environment_signage::{decode, painted};
 mod environmentdeferreddecal;
 mod foliage;
 mod glass;

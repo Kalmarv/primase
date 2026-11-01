@@ -40,12 +40,17 @@
 //! What this costs, per material and per triangle. The normal, roughness and metalness maps (`TEXCOORD0`) and the
 //! ambient-occlusion map (`TEXCOORD1`) are left out: they sample other coordinate sets than the sign face, and could
 //! only come back by re-baking them into the sign face's texture space, a texture bake and not a lowering. Also left
-//! out, named: emission of an `EmissiveAltUV` material (its texture is on `TEXCOORD4`), `GIEmissiveScale` and the
-//! distance encoding, the instance-variation factor, modulate, the lightmap, the LED screen effect, retro-reflection,
+//! out, named: `GIEmissiveScale` and the distance encoding, the instance-variation factor, modulate, the lightmap, the LED screen effect, retro-reflection,
 //! the bicubic filter (the renderer's own filter is used), wetness and lighting (run-time), and the mural blend. A
 //! material one of whose primitives lacks `TEXCOORD3` takes its background colour and no texture.
+//!
+//! The emission of an `EmissiveAltUV` material is on `TEXCOORD4`, not on the sign face: the lowering keeps the emission
+//! map there ([`super::environment::ALT_UV`]) and marks the material ([`crate::components::EmissionByBaseColour`]);
+//! `rebase-texcoord-set` draws the sign and emission maps through `TEXCOORD4` and `bake-forzatech-emission-product`
+//! multiplies them, as this rule bakes the two on the sign face when the emission is on it.
+use super::environment::ALT_UV;
 use super::{Binding, Lowering, Params, approximate, left_out, seen};
-use crate::components::{ForzaMaterial, MaterialTextures};
+use crate::components::{EmissionByBaseColour, ForzaMaterial, MaterialTextures};
 use primase_core::pass::PassLog;
 use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform, Wrap};
 use primase_core::{ColorSpace, Entity, Name, TexRole, Texture, World};
@@ -57,7 +62,7 @@ const SIGN_FACE: u8 = 3;
 
 /// The colours a colour-masked sign is painted with (linear: background, R, G, B, A) and how its mask is read.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct Paint {
+pub(crate) struct Paint {
     colours: [[f32; 3]; 5],
     five: bool,
     stepped: bool,
@@ -115,7 +120,7 @@ fn sample(image: &Image, u: f64, v: f64) -> [f64; 4] {
 }
 
 /// Level 0 of `t` as RGBA8, as stored. `None` when it has no pixels.
-fn decode(t: &Texture) -> Result<Option<Image>, String> {
+pub(crate) fn decode(t: &Texture) -> Result<Option<Image>, String> {
     let mut data = Vec::new();
     let mut size = None;
     if t.levels.is_empty() {
@@ -141,6 +146,48 @@ fn decode(t: &Texture) -> Result<Option<Image>, String> {
         height,
         samples: Samples::U8(data),
     }))
+}
+
+/// `source`'s levels as an sRGB colour map: its texels painted with `paint` (as they are, when `None`), times the
+/// texel of `emission` (its colour space and pixels) at the same normalised position when given.
+pub(crate) fn painted(
+    source: &Texture,
+    paint: Option<&Paint>,
+    emission: Option<(ColorSpace, &Image)>,
+) -> Result<Texture, String> {
+    let space = source.color_space;
+    map_rgba8_levels(
+        source,
+        0..source.levels.len(),
+        TextureMetadata {
+            color_space: ColorSpace::Srgb,
+            role: TexRole::Color,
+            normal: None,
+        },
+        |texel| {
+            let [r, g, b, a] = texel.rgba;
+            let m = [r, g, b, a].map(|x| seen(space, x));
+            let mut colour = match paint {
+                Some(paint) => paint.colour(m),
+                None => [m[0], m[1], m[2]],
+            };
+            if let Some((em_space, image)) = emission {
+                let u = (f64::from(texel.x) + 0.5) / f64::from(texel.width);
+                let v = (f64::from(texel.y) + 0.5) / f64::from(texel.height);
+                let em = sample(image, u, v);
+                for (c, e) in colour.iter_mut().zip(em) {
+                    *c *= seen(em_space, e.round().clamp(0.0, 255.0) as u8);
+                }
+            }
+            Ok([
+                srgb_byte(colour[0]),
+                srgb_byte(colour[1]),
+                srgb_byte(colour[2]),
+                255,
+            ])
+        },
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn srgb_byte(linear: f64) -> u8 {
@@ -188,37 +235,10 @@ impl Lowering {
                 }
             },
         };
-        let space = source.color_space;
-        let texture = map_rgba8_levels(
+        let texture = painted(
             source,
-            0..source.levels.len(),
-            TextureMetadata {
-                color_space: ColorSpace::Srgb,
-                role: TexRole::Color,
-                normal: None,
-            },
-            |texel| {
-                let [r, g, b, a] = texel.rgba;
-                let m = [r, g, b, a].map(|x| seen(space, x));
-                let mut colour = match paint {
-                    Some(paint) => paint.colour(m),
-                    None => [m[0], m[1], m[2]],
-                };
-                if let Some((em_space, image)) = &emission {
-                    let u = (f64::from(texel.x) + 0.5) / f64::from(texel.width);
-                    let v = (f64::from(texel.y) + 0.5) / f64::from(texel.height);
-                    let em = sample(image, u, v);
-                    for (c, e) in colour.iter_mut().zip(em) {
-                        *c *= seen(*em_space, e.round().clamp(0.0, 255.0) as u8);
-                    }
-                }
-                Ok([
-                    srgb_byte(colour[0]),
-                    srgb_byte(colour[1]),
-                    srgb_byte(colour[2]),
-                    255,
-                ])
-            },
+            paint,
+            emission.as_ref().map(|(space, image)| (*space, image)),
         )
         .map_err(|e| format!("painting a {what} atlas: {e}"))?;
         let name = w.get::<Name>(atlas).map(|n| n.0.clone()).unwrap_or_default();
@@ -360,30 +380,46 @@ impl Lowering {
 
         // emission: the sign's colour through EmissiveTexture, where that is on the sign face too
         if p.on("Emissive") {
-            if p.on("EmissiveAltUV") {
-                approximate(
-                    log,
-                    e,
-                    "emission texture on TEXCOORD4 (EmissiveAltUV) left out: a material is sampled through one coordinate set",
-                    triangles,
-                );
-            } else if let (Binding::Texture(em), Some(atlas), Some(tint)) =
+            if let (Binding::Texture(em), Some(atlas), Some(tint)) =
                 (p.texture("EmissiveTexture"), atlas_baked, p.vec4("EmissiveTint"))
             {
+                let alt = p.on("EmissiveAltUV");
                 let tint = [tint[0].max(0.0), tint[1].max(0.0), tint[2].max(0.0)];
                 let strength = tint.iter().copied().fold(0.0f32, f32::max);
-                if strength > 0.0
-                    && let Some(baked) = self.bake_sign(w, atlas, paint.as_ref(), Some(em), "sign", log)?
-                {
-                    pbr.emissive_texture = Some(slot(baked));
-                    pbr.emissive = tint.map(|c| c / strength.max(1.0));
-                    pbr.emissive_strength = strength.max(1.0);
-                    approximate(
-                        log,
-                        e,
-                        "emission without GIEmissiveScale, the instance-variation factor and the distance encoding",
-                        triangles,
+                if alt && !self.emits_light(w, em) {
+                    log.count(
+                        "signage emissive materials whose emission texture is black: no emission",
+                        1,
                     );
+                } else if strength > 0.0 {
+                    let drawn = if alt {
+                        // the emission map is on TEXCOORD4, the sign on its own face set: `rebase-texcoord-set` draws
+                        // both through TEXCOORD4 and `bake-forzatech-emission-product` multiplies them
+                        w.insert(e, EmissionByBaseColour);
+                        log.count(
+                            "EmissiveAltUV emission maps kept on TEXCOORD4 for rebase-texcoord-set",
+                            1,
+                        );
+                        Some(TextureRef {
+                            texcoord: ALT_UV,
+                            wrap: [Wrap::Clamp; 2],
+                            ..TextureRef::new(em)
+                        })
+                    } else {
+                        self.bake_sign(w, atlas, paint.as_ref(), Some(em), "sign", log)?
+                            .map(slot)
+                    };
+                    if let Some(drawn) = drawn {
+                        pbr.emissive_texture = Some(drawn);
+                        pbr.emissive = tint.map(|c| c / strength.max(1.0));
+                        pbr.emissive_strength = strength.max(1.0);
+                        approximate(
+                            log,
+                            e,
+                            "emission without GIEmissiveScale, the instance-variation factor and the distance encoding",
+                            triangles,
+                        );
+                    }
                 }
             } else {
                 approximate(

@@ -274,6 +274,8 @@ enum Plan {
         material: Entity,
         window: ([f32; 2], [f32; 2]),
         size: (u32, u32),
+        /// Whether the limit made an atlas smaller than the density asks.
+        clamped: bool,
         groups: Vec<GroupPlan>,
     },
 }
@@ -417,11 +419,14 @@ impl RebaseTexcoordSet {
             .fold(0.0, f64::max);
         let d_n = on_slots.iter().map(per_unit).fold(0.0, f64::max);
         let rho = (d_s * area_s / area_n).max(d_n).sqrt();
-        let side = |x: f32| {
-            let want = (f64::from(x) * rho).ceil().clamp(1.0, f64::from(self.limit)) as u32;
-            want.next_power_of_two().min(self.limit)
+        let wanted = extent.map(|x| (f64::from(x) * rho).ceil().max(1.0));
+        let clamped = wanted.iter().any(|x| *x > f64::from(self.limit));
+        let side = |x: f64| {
+            (x.min(f64::from(self.limit)) as u32)
+                .next_power_of_two()
+                .min(self.limit)
         };
-        let size = (side(extent[0]), side(extent[1]));
+        let size = (side(wanted[0]), side(wanted[1]));
         let window = (lo, extent);
         let to = |c: [f32; 2]| [(c[0] - lo[0]) / extent[0], (c[1] - lo[1]) / extent[1]];
         // the groups of triangles that overlap no other of their group
@@ -551,6 +556,7 @@ impl RebaseTexcoordSet {
             material: m,
             window,
             size,
+            clamped,
             groups: plans,
         })
     }
@@ -598,6 +604,10 @@ impl Pass for RebaseTexcoordSet {
             ("limit".to_owned(), self.limit.to_string()),
         ])
     }
+    /// A part with no material (a light alone) has nothing to rebase.
+    fn may_lack_inputs(&self) -> bool {
+        true
+    }
     fn requires(&self) -> &[&'static str] {
         &[PbrMaterial::NAME]
     }
@@ -643,6 +653,7 @@ impl Pass for RebaseTexcoordSet {
             let mut spawned: Vec<Entity> = Vec::new();
             let mut made_folds: Vec<(Entity, [u8; 3])> = Vec::new();
             let mut counts: Vec<(&str, u64)> = Vec::new();
+            let mut approximations: Vec<(&str, u64)> = Vec::new();
             // the last primitive first, so a split does not move the ones still to come
             for (i, plan) in edits.into_iter().rev() {
                 match plan {
@@ -677,6 +688,7 @@ impl Pass for RebaseTexcoordSet {
                         material,
                         window: (origin, extent),
                         size,
+                        clamped,
                         groups,
                     } => {
                         let whole = primitives[i].clone();
@@ -695,6 +707,7 @@ impl Pass for RebaseTexcoordSet {
                                 made.push((*slot, t, *filters));
                                 counts.push(("atlas textures made", 1));
                                 counts.push(("atlas texels", u64::from(size.0) * u64::from(size.1)));
+                                approximations.push(("atlas textures re-sampled bilinearly", 1));
                             }
                             let suffix = if g == 0 {
                                 format!(" (rebased onto texcoord {})", self.set)
@@ -722,6 +735,16 @@ impl Pass for RebaseTexcoordSet {
                             pieces.push(piece);
                         }
                         counts.push(("primitives rebased", 1));
+                        approximations.push((
+                            "primitives whose first coordinate set is replaced by the rebased set's window coordinates",
+                            1,
+                        ));
+                        if clamped {
+                            approximations.push((
+                                "primitives whose atlases are smaller than their textures' density asks: clamped to the limit",
+                                1,
+                            ));
+                        }
                         let n = pieces.len();
                         if n > 1 {
                             counts.push(("primitives split into groups of triangles that do not overlap", 1));
@@ -752,6 +775,9 @@ impl Pass for RebaseTexcoordSet {
                     w.remove::<MeshFile>(e);
                     for (what, n) in counts {
                         log.count(what, n);
+                    }
+                    for (what, n) in approximations {
+                        log.approximate(what, n);
                     }
                 }
                 Err(why) => {
