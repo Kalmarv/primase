@@ -16,7 +16,8 @@
 //! model in the install.
 use super::open::Track;
 use crate::components::{
-    DrawRange, LodProfile, LodProfiles, ModelFile, ModelFiles, Placement, PlacementOrigin, Template,
+    DrawRange, ForzaLevels, LodProfile, LodProfiles, ModelFile, ModelFiles, Placement, PlacementOrigin,
+    Template,
 };
 use crate::{Error, FRAME, Result};
 use forzatech_formats::bundle::Bundle;
@@ -26,7 +27,7 @@ use forzatech_formats::plib::{Library, ModelTemplate};
 use forzatech_formats::pvs::{CATALOGUE, NO_ROW, Pvs};
 use forzatech_formats::track::Location;
 use forzatech_formats::world::{Area, Cell, Season, SeasonMask, half};
-use primase_core::{Entity, Instance, LodForm, Lods, Name, Transform, World};
+use primase_core::{Entity, Instance, LodForm, Name, Transform, World};
 use std::collections::{BTreeMap, HashMap};
 
 /// What a read covers: the box the placements' origins are in (the game's x and z, metres) and the season.
@@ -362,7 +363,8 @@ fn draw_ranges(library: &Library, template: &ModelTemplate) -> Result<Vec<DrawRa
     Ok(ranges)
 }
 
-/// A prototype entity with its levels: the first is its own mesh, the rest its forms. `default` indexes them.
+/// A prototype entity with its levels: the first is its own mesh, the rest its forms (`forzatech.levels`, made
+/// `core.lods` when loaded). `default` indexes them.
 fn prototype(world: &mut World, name: &str, forms: Vec<(u8, ModelFiles)>, default: Option<usize>) -> Entity {
     let e = world.spawn();
     world.insert(e, Name(name.to_owned()));
@@ -378,7 +380,7 @@ fn prototype(world: &mut World, name: &str, forms: Vec<(u8, ModelFiles)>, defaul
     if !others.is_empty() || default.is_some() {
         world.insert(
             e,
-            Lods {
+            ForzaLevels {
                 detail,
                 forms: others,
                 default,

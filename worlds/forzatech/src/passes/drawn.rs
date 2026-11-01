@@ -8,9 +8,9 @@
 //! placement whose group has no such record is not drawn in the main view, and one with no group is drawn when its
 //! nearest band has a row. So at a short distance the impostors, far billboards and HLOD proxies, drawn only further
 //! out, are dropped, without reading their names.
-use crate::components::{LodProfiles, Placement, PlacementOrigin, Template};
+use crate::components::{ForzaLevels, LodProfiles, Placement, PlacementOrigin, Template};
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::{Component, Entity, Instance, Lods, World};
+use primase_core::{Component, Entity, Instance, World};
 use std::collections::BTreeSet;
 
 /// The `.pvs` pass number of the main view's LOD profile records.
@@ -141,7 +141,7 @@ impl Pass for SelectForzaDrawn {
         let after: BTreeSet<Entity> = world.iter::<Instance>().map(|(_, i)| i.prototype).collect();
         for p in before.difference(&after) {
             let forms: Vec<Entity> = world
-                .get::<Lods>(*p)
+                .get::<ForzaLevels>(*p)
                 .map(|l| l.forms.iter().map(|f| f.form).collect())
                 .unwrap_or_default();
             primase_core::ledger::despawn(world, *p, log, "prototypes of no placement left");

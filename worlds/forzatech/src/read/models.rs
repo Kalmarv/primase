@@ -12,12 +12,14 @@
 //! and morph buffers.
 use super::materials::{Library, MaterialReport};
 use super::open::Track;
-use crate::components::{MaterialRef, MeshRecord, MeshRecords, ModelFile, ModelFiles};
+use crate::components::{ForzaLevels, MaterialRef, MeshRecord, MeshRecords, ModelFile, ModelFiles};
 use crate::{Error, FRAME, Result};
 use forzatech_formats::modelbin::Model;
 use forzatech_formats::track::Location;
 use forzatech_formats::world::Season;
-use primase_core::{Entity, MaterialVariants, Mesh, Name, Primitive, Semantic, Stream, Topology, World};
+use primase_core::{
+    Entity, LodForm, Lods, MaterialVariants, Mesh, Name, Primitive, Semantic, Stream, Topology, World,
+};
 use std::collections::{BTreeMap, HashMap};
 
 /// Material entities already made in one world, by file and `MatI` id, and the texture entities they name, by path
@@ -49,6 +51,12 @@ pub struct ModelReport {
     pub triangles: u64,
     /// Meshes of a file not of the form's level.
     pub other_level: usize,
+    /// Forms whose files hold no mesh of their level, left out of `core.lods` ([`make_lods`]).
+    pub empty_forms: usize,
+    /// Prototypes whose own level's files hold no mesh of it, given their finest form that does.
+    pub promoted: usize,
+    /// Prototypes whose default level holds no mesh, left with no default.
+    pub default_lost: usize,
 }
 
 impl ModelReport {
@@ -56,8 +64,14 @@ impl ModelReport {
         vec![(
             "forzatech models".into(),
             format!(
-                "{} files, {} meshes, {} triangles ({} meshes of other levels left in their files)",
-                self.files, self.meshes, self.triangles, self.other_level
+                "{} files, {} meshes, {} triangles ({} meshes of other levels left in their files); levels with no                  mesh: {} forms left out, {} prototypes given their finest form, {} defaults dropped",
+                self.files,
+                self.meshes,
+                self.triangles,
+                self.other_level,
+                self.empty_forms,
+                self.promoted,
+                self.default_lost
             ),
         )]
     }
@@ -242,4 +256,169 @@ fn primitive(data: &forzatech_formats::modelbin::MeshData<'_>) -> std::result::R
         indices: Some(indices),
         material: None,
     })
+}
+
+/// `core.lods` of every `forzatech.levels` of `world` once its levels are loaded, which it removes: core's LOD forms
+/// are of an entity with a mesh. The levels whose files hold a mesh of their level are kept, finest first. When the
+/// prototype's own holds none, the finest form that does becomes its own (its mesh, records, material variants and
+/// files moved onto it, the form despawned), counted; forms with no mesh are despawned, counted; a default whose level
+/// holds no mesh is dropped, counted. A prototype none of whose levels holds a mesh keeps no `core.lods`.
+pub fn make_lods(world: &mut World, report: &mut ModelReport) {
+    let prototypes: Vec<Entity> = world.iter::<ForzaLevels>().map(|(e, _)| e).collect();
+    for p in prototypes {
+        let Some(levels) = world.remove::<ForzaLevels>(p) else {
+            continue;
+        };
+        let all: Vec<(u8, Entity)> = std::iter::once((levels.detail, p))
+            .chain(levels.forms.iter().map(|f| (f.detail, f.form)))
+            .collect();
+        let default = levels.default.and_then(|d| all.get(d)).map(|(_, e)| *e);
+        let meshed: Vec<(u8, Entity)> = all
+            .iter()
+            .copied()
+            .filter(|(_, e)| world.has::<Mesh>(*e))
+            .collect();
+        for &(_, e) in &all[1..] {
+            if !world.has::<Mesh>(e) {
+                report.empty_forms += 1;
+                world.despawn(e);
+            }
+        }
+        let Some(&(detail, finest)) = meshed.first() else {
+            continue;
+        };
+        if finest != p {
+            report.promoted += 1;
+            move_level(world, finest, p);
+            world.despawn(finest);
+        }
+        let own = |e: Entity| if e == finest { p } else { e };
+        let default = match default.map(own) {
+            Some(d) => {
+                let at = std::iter::once(p)
+                    .chain(meshed[1..].iter().map(|(_, e)| *e))
+                    .position(|e| e == d);
+                if at.is_none() {
+                    report.default_lost += 1;
+                }
+                at
+            }
+            None => None,
+        };
+        let forms: Vec<LodForm> = meshed[1..]
+            .iter()
+            .map(|&(detail, form)| LodForm { detail, form })
+            .collect();
+        if !forms.is_empty() || default.is_some() {
+            world.insert(
+                p,
+                Lods {
+                    detail,
+                    forms,
+                    default,
+                },
+            );
+        }
+    }
+}
+
+/// A loaded level's mesh, records, material variants and files moved from `from` onto `to`.
+fn move_level(world: &mut World, from: Entity, to: Entity) {
+    world.remove::<ModelFiles>(to);
+    if let Some(m) = world.remove::<Mesh>(from) {
+        world.insert(to, m);
+    }
+    if let Some(r) = world.remove::<MeshRecords>(from) {
+        world.insert(to, r);
+    }
+    if let Some(v) = world.remove::<MaterialVariants>(from) {
+        world.insert(to, v);
+    }
+    if let Some(f) = world.remove::<ModelFiles>(from) {
+        world.insert(to, f);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A prototype with levels 0, 1, 2 and 3 as read: `meshed` says which levels' files held a mesh of their level.
+    fn prototype(world: &mut World, meshed: [bool; 4], default: Option<usize>) -> (Entity, Vec<Entity>) {
+        let level = |world: &mut World, e: Entity, k: u8, has: bool| {
+            world.insert(
+                e,
+                ModelFiles {
+                    level: Some(k),
+                    files: Vec::new(),
+                },
+            );
+            if has {
+                world.insert(e, Mesh::new(Vec::new()));
+            }
+        };
+        let p = world.spawn();
+        level(world, p, 0, meshed[0]);
+        let mut forms = Vec::new();
+        for k in 1..4u8 {
+            let f = world.spawn();
+            level(world, f, k, meshed[usize::from(k)]);
+            forms.push(f);
+        }
+        let levels = ForzaLevels {
+            detail: 0,
+            forms: (1..4u8)
+                .zip(&forms)
+                .map(|(detail, &form)| LodForm { detail, form })
+                .collect(),
+            default,
+        };
+        world.insert(p, levels);
+        (p, forms)
+    }
+
+    #[test]
+    fn loaded_levels_become_core_lods() {
+        let mut world = World::new();
+        let (p, forms) = prototype(&mut world, [true; 4], Some(2));
+        let mut report = ModelReport::default();
+        make_lods(&mut world, &mut report);
+        let lods = world.get::<Lods>(p).unwrap();
+        assert_eq!((lods.detail, lods.default), (0, Some(2)));
+        assert_eq!(lods.forms.iter().map(|f| f.form).collect::<Vec<_>>(), forms);
+        assert!(!world.has::<ForzaLevels>(p));
+        assert_eq!(report, ModelReport::default());
+    }
+
+    #[test]
+    fn levels_with_no_mesh_are_left_out_and_the_finest_loaded_one_is_the_prototype_s_own() {
+        let mut world = World::new();
+        // level 0 and level 2 hold no mesh; the default was level 2
+        let (p, forms) = prototype(&mut world, [false, true, false, true], Some(2));
+        let mut report = ModelReport::default();
+        make_lods(&mut world, &mut report);
+        let lods = world.get::<Lods>(p).unwrap();
+        assert_eq!((lods.detail, lods.default), (1, None));
+        assert_eq!(
+            lods.forms.iter().map(|f| (f.detail, f.form)).collect::<Vec<_>>(),
+            [(3, forms[2])]
+        );
+        assert!(world.has::<Mesh>(p));
+        assert_eq!(world.get::<ModelFiles>(p).unwrap().level, Some(1));
+        assert!(!world.is_alive(forms[0]) && !world.is_alive(forms[1]));
+        assert_eq!(
+            (report.empty_forms, report.promoted, report.default_lost),
+            (1, 1, 1)
+        );
+    }
+
+    #[test]
+    fn a_prototype_with_no_loaded_level_keeps_no_lods() {
+        let mut world = World::new();
+        let (p, _) = prototype(&mut world, [false; 4], None);
+        let mut report = ModelReport::default();
+        make_lods(&mut world, &mut report);
+        assert!(!world.has::<Lods>(p) && !world.has::<Mesh>(p));
+        assert_eq!(report.empty_forms, 3);
+    }
 }

@@ -48,20 +48,17 @@ fn main() -> Result<()> {
         ..EncodingOptions::default()
     };
 
-    // Run once on the box as read: what the game draws near the camera, at its second level of detail, its materials
-    // lowered to `pbr.material` (the families with a rule; the others are left out, counted).
-    let select = Pipeline {
-        passes: vec![
-            Box::new(SelectForzaDrawn::new(5.0, 0)?),
-            Box::new(SelectLod { choice: LodChoice::AtMost(1) }),
-            Box::new(LowerForzaMaterials),
-        ],
-    };
+    // Run once on the box as read: what the game draws near the camera.
+    let select = Pipeline { passes: vec![Box::new(SelectForzaDrawn::new(5.0, 0)?)] };
 
-    // Run on each part before it is written: the core world prepared as the ReSkate writer encodes it.
+    // Run on each part, loaded, before it is written: its second level of detail, its materials lowered to
+    // `pbr.material` (the families with a rule; the others are left out, counted), then the core world prepared as the
+    // ReSkate writer encodes it. Levels and materials exist once a part is loaded.
     let prepare = Pipeline {
         passes: vec![
+            Box::new(SelectLod { choice: LodChoice::AtMost(1) }),
             Box::new(SelectForzaMainView),
+            Box::new(LowerForzaMaterials),
             Box::new(CollideForzaDrawn { see_through: SeeThrough::LeaveOut }),
             Box::new(NormalizeNormals),
             Box::new(PrepareReskateLaidLayers::default()),

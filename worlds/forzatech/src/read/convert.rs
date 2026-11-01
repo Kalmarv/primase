@@ -1,7 +1,8 @@
 //! The `convert::Reader` over a track: `read` makes the placements and prototypes of the caller's box and season
-//! ([`super::placements`]); `load` gives the forms a part reaches their meshes ([`super::models`]) and their
-//! materials their chains and textures ([`super::materials`]). Both scope choices
-//! are the caller's, with no default.
+//! ([`super::placements`]), each prototype's levels kept as `forzatech.levels`; `load` gives the forms a part reaches
+//! their meshes ([`super::models`]), makes `core.lods` of the levels once they have meshes ([`models::make_lods`]),
+//! and gives the materials their chains and textures ([`super::materials`]). So a level of detail is selected after
+//! loading. Both scope choices are the caller's, with no default.
 use super::materials::{Library, MaterialReport};
 use super::models::{self, Materials, ModelReport};
 use super::open::Track;
@@ -128,6 +129,7 @@ impl ForzaReader {
                 &mut report,
             )?;
         }
+        models::make_lods(world, &mut report);
         let mut lines = report.lines();
         lines.extend(materials.report.lines());
         self.materials.add(&materials.report);
@@ -135,6 +137,9 @@ impl ForzaReader {
         self.models.meshes += report.meshes;
         self.models.triangles += report.triangles;
         self.models.other_level += report.other_level;
+        self.models.empty_forms += report.empty_forms;
+        self.models.promoted += report.promoted;
+        self.models.default_lost += report.default_lost;
         Ok(lines)
     }
 }

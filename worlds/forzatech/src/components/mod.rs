@@ -1,9 +1,10 @@
 //! Forza Horizon 6's own data, as stored, on the entities the reader makes: where a placement comes from
-//! (`forzatech.placement`), which `.modelbin` files a prototype or one of its forms is made of (`forzatech.model_files`),
+//! (`forzatech.placement`), which `.modelbin` files a prototype or one of its forms is made of (`forzatech.model_files`)
+//! and its levels before they are loaded (`forzatech.levels`),
 //! the template a rule-placed prototype is (`forzatech.template`), and a material's chain from its model's instance
 //! to its shader family (`forzatech.material`, with the textures it names in `forzatech.material_textures`). Nothing
 //! here is lowered; passes read it.
-use primase_core::{Component, Geometry, Linear, world::Linearity};
+use primase_core::{Component, Entity, Geometry, Linear, LodForm, world::Linearity};
 use serde::Serialize;
 
 /// One placement's source record: the parts of it its `core.transform` and `core.instance` do not hold.
@@ -67,6 +68,32 @@ pub enum PlacementOrigin {
 pub struct ModelFiles {
     pub level: Option<u8>,
     pub files: Vec<ModelFile>,
+}
+
+/// A prototype's levels of detail as read, before their meshes are loaded (`forzatech.levels`): its own
+/// [`ModelFiles`] are level `detail`, each form an unplaced entity holding the [`ModelFiles`] of its level, and
+/// `default` indexes `[own, forms...]` as `core.lods` does. Core's LOD forms are of an entity with a mesh, so loading
+/// makes `core.lods` of these once the meshes exist and removes this ([`crate::read::convert`]).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ForzaLevels {
+    pub detail: u8,
+    pub forms: Vec<LodForm>,
+    pub default: Option<usize>,
+}
+
+impl Component for ForzaLevels {
+    const NAME: &'static str = "forzatech.levels";
+    const GEOMETRY: Geometry = Geometry::None;
+    /// The forms are entities of their own.
+    fn apply_linear(&self, _: &Linear) -> Linearity<Self> {
+        Linearity::Invariant
+    }
+    fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::json::JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.forms.iter().map(|f| f.form));
+    }
 }
 
 /// One `.modelbin` GeoChunk entry and what its `Modl` header says.

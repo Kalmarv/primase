@@ -17,6 +17,7 @@ mod inputs;
 use forzatech_formats::world::{Area, Season};
 use inputs::{Game, install_file};
 use primase_core::convert::Reader;
+use primase_core::pass::{PassManager, PassRegistry};
 use primase_core::{Entity, Instance, Lods, Mesh, Semantic, Stream, Texture, World};
 use primase_forzatech::components::{
     ForzaMaterial, MaterialTextures, ModelFiles, Placement, PlacementOrigin,
@@ -45,6 +46,11 @@ fn shibuya_scramble() {
     let t1 = std::time::Instant::now();
     let (world, lines) = reader.read().unwrap();
     println!("read in {:.1} s", t1.elapsed().as_secs_f64());
+    // what convert checks before anything uses the read world, and each loaded part
+    let mut registry = PassRegistry::new();
+    primase_forzatech::register(&mut registry);
+    let manager = PassManager::new(registry);
+    manager.verify(&world, "read").unwrap();
     for (k, v) in &lines {
         println!("{k}: {v}");
     }
@@ -76,6 +82,7 @@ fn shibuya_scramble() {
     let sample: BTreeSet<Entity> = prototypes.iter().copied().step_by(20).collect();
     let t2 = std::time::Instant::now();
     let (part, lines) = reader.load(&world, &sample).unwrap();
+    manager.verify(&part, "load").unwrap();
     println!(
         "loaded {} prototypes in {:.1} s",
         sample.len(),
