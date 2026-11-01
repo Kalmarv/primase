@@ -173,15 +173,28 @@ impl BoundTexture {
     }
 }
 
+/// The stages of a material a bake runs: its pixel stage, the pixel program as the material's stated words specialise
+/// it (`core.shader_specialisations`) where it has one, and its vertex stage where it has one.
+#[derive(Clone, Copy)]
+pub(super) struct Stages<'a> {
+    pub pixel: &'a StageBinding,
+    pub specialised: Option<&'a iridia::Program>,
+    pub vertex: Option<&'a StageBinding>,
+}
+
 pub(super) fn prepare<'a>(
     world: &'a World,
-    stage: &'a StageBinding,
-    vertex: Option<&StageBinding>,
+    stages: Stages<'a>,
     previous: &PbrMaterial,
     cap: u32,
     time: f32,
     form: Form,
 ) -> Result<Prepared<'a>, String> {
+    let Stages {
+        pixel: stage,
+        specialised,
+        vertex,
+    } = stages;
     let core = world
         .get::<Shader>(stage.shader)
         .ok_or("bound program is absent")?;
@@ -285,8 +298,15 @@ pub(super) fn prepare<'a>(
     let vertex_shader = world
         .get::<Shader>(vertex.shader)
         .ok_or("bound vertex program is absent")?;
-    let vertex = layer_bake::VertexStage::new(vertex_shader, vertex, shader.program(), false, &frame)
-        .map_err(|e| e.to_string())?;
+    // the vertex inputs the pixel program reads, as the material's stated words specialise it where they do
+    let vertex = layer_bake::VertexStage::new(
+        vertex_shader,
+        vertex,
+        specialised.unwrap_or(shader.program()),
+        false,
+        &frame,
+    )
+    .map_err(|e| e.to_string())?;
     let mut inputs = vertex
         .pixel_inputs(shader.interface(), &layer_bake::Inputs::default())
         .map_err(|e| e.to_string())?;

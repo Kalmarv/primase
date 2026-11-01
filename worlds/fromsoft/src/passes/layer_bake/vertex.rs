@@ -110,8 +110,10 @@ fn label_of(v: &Varying) -> (String, u32) {
 
 impl VertexStage {
     /// Lift the vertex program `vertex` (a `core.shader` the binding `stage` was resolved against), bind its constants as
-    /// the roles say and `frame` freezes them, and plan what feeds each of its inputs. `ground`: the material is of the
-    /// ground family, whose second layer weight is read from another lane.
+    /// the roles say and `frame` freezes them, and plan what feeds each of the inputs `pixel` reads through it: `pixel`
+    /// is the material's pixel program as its stated words specialise it (`core.shader_specialisations`), where it has
+    /// one, so a lane read only on a branch those words turn off is not fed. `ground`: the material is of the ground
+    /// family, whose second layer weight is read from another lane.
     pub fn new(
         vertex: &CoreShader,
         stage: &StageBinding,
@@ -226,7 +228,7 @@ impl VertexStage {
                         return Err(invalid(
                             "vertex binding",
                             0,
-                            "the program reads COLOR1 lanes beyond x",
+                            "the program reads COLOR1 lanes beyond x (with the words the material states)",
                         ));
                     }
                     policies.insert(COLOUR1_POLICY.into(), 1);
@@ -577,6 +579,52 @@ mod tests {
                 .to_string()
                 .contains("POSITION0")
         );
+    }
+
+    const COLOUR1_VS: &[u8] = include_bytes!("../../../tests/fixtures/vertex_colour1_vs.dxbc");
+    const COLOUR1_PS: &[u8] = include_bytes!("../../../tests/fixtures/vertex_colour1_ps.dxbc");
+
+    /// A pixel program that reads COLOR1.w only under a material word is refused as its source reads it; as the
+    /// material's word specialises it, the bake feeds COLOR1.x alone where the word is off and still refuses where it is
+    /// on.
+    #[test]
+    fn a_colour1_lane_read_only_under_a_stated_word_is_not_needed_when_the_word_is_off() {
+        let shader = CoreShader {
+            format: ShaderFormat::Dxbc,
+            bytecode: COLOUR1_VS.to_vec(),
+            interface: iridia_dxbc::reflection(COLOUR1_VS).unwrap(),
+        };
+        let binding = resolve_vertex(&shader, World::default().spawn()).unwrap().stage;
+        let pixel = iridia_dxbc::lift(COLOUR1_PS).unwrap();
+        let frame = FrozenFrame::static_bake(0.);
+        let refused =
+            VertexStage::new(&shader, &binding, &pixel, false, &frame).expect_err("the source reads w");
+        assert!(refused.to_string().contains("COLOR1 lanes beyond x"), "{refused}");
+        let buffer = pixel
+            .interface
+            .resources
+            .iter()
+            .find(|r| matches!(r.kind, iridia::ResourceKind::ConstantBuffer { .. }))
+            .unwrap()
+            .id;
+        let stated = |weighted: u32| {
+            let words = iridia::specialise::Words::from([((buffer, 0), weighted)]);
+            let specialised = iridia::specialise::specialise(&pixel, &words)
+                .unwrap_or_else(|why| panic!("weighted={weighted}: specialisation refused: {why}"));
+            assert_eq!(
+                specialised.words, words,
+                "weighted={weighted}: the word decides the select"
+            );
+            assert!(
+                specialised.folded > 0,
+                "weighted={weighted}: the word was not folded"
+            );
+            specialised.program
+        };
+        let planned = VertexStage::new(&shader, &binding, &stated(0), false, &frame)
+            .unwrap_or_else(|why| panic!("with the word off, COLOR1.x alone is fed: {why}"));
+        assert!(planned.policies.contains_key(COLOUR1_POLICY));
+        assert!(VertexStage::new(&shader, &binding, &stated(1), false, &frame).is_err());
     }
 
     fn stage(frame: &FrozenFrame) -> Result<VertexStage> {

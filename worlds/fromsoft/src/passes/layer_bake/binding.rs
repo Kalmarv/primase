@@ -44,6 +44,9 @@ pub struct Programs<'a> {
     pub bytecode: &'a [u8],
     pub stage: &'a StageBinding,
     pub vertex: Option<(&'a primase_core::shader::Shader, &'a StageBinding)>,
+    /// The pixel program as the material's stated words specialise it (`core.shader_specialisations`), where it has
+    /// one: what it reads decides which vertex inputs the bake feeds.
+    pub specialised: Option<&'a iridia::Program>,
 }
 
 /// Evaluated by the toolkit ([`evaluate_raw_with`], one pixel at a time) on the program executor: the lifted program,
@@ -651,6 +654,7 @@ impl Prepared {
                 bytecode: bytes,
                 stage: &resolution.stage,
                 vertex: None,
+                specialised: None,
             },
             material,
             &FrozenFrame::static_bake(sample_time),
@@ -684,6 +688,7 @@ impl Prepared {
             bytecode,
             stage,
             vertex,
+            specialised,
         } = programs;
         let interface = PixelShader::interface(shader);
         let leaf = material
@@ -726,7 +731,7 @@ impl Prepared {
                 VertexStage::new(
                     core,
                     vertex_binding,
-                    shader.program(),
+                    specialised.unwrap_or(shader.program()),
                     family == "M[MultipleGround]",
                     frame,
                 )

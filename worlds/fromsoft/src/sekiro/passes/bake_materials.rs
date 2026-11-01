@@ -157,16 +157,24 @@ impl Pass for BakeFromSoftMaterials {
                 log.count("materials without a resolved pixel program", 1);
                 continue;
             };
+            let specialised = world
+                .get::<primase_core::shader::ShaderSpecialisations>(entity)
+                .and_then(|s| s.program(stage.shader))
+                .map(|p| p.as_ref());
             if world
                 .get::<super::UvTiling>(entity)
                 .is_some_and(|s| s.0 != [1.; 2])
             {
                 return Err("bake-fromsoft-materials requires geometry uv-tiling=keep".into());
             }
+            let stages = pixels::Stages {
+                pixel: stage,
+                specialised,
+                vertex: binding.stage(Stage::Vertex),
+            };
             let baked = match pixels::prepare(
                 world,
-                stage,
-                binding.stage(Stage::Vertex),
+                stages,
                 &material,
                 self.max_size.get(),
                 self.sample_time.get(),
@@ -191,8 +199,7 @@ impl Pass for BakeFromSoftMaterials {
             let low = if pixels::binds_forms(world, stage, &material) {
                 match pixels::prepare(
                     world,
-                    stage,
-                    binding.stage(Stage::Vertex),
+                    stages,
                     &material,
                     self.max_size.get(),
                     self.sample_time.get(),

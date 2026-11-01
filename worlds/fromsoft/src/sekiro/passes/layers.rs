@@ -127,6 +127,10 @@ impl<'a> AreaBake<'a> {
                 bytecode,
                 stage: &stage,
                 vertex: vertex.as_ref().map(|(program, binding)| (*program, binding)),
+                specialised: world
+                    .get::<primase_core::shader::ShaderSpecialisations>(g.entity)
+                    .and_then(|s| s.program(stage.shader))
+                    .map(|p| p.as_ref()),
             },
             material,
             // the scene's hour of the day, which a program that reads it is baked at (refused where none is stated)

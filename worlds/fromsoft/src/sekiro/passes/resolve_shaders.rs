@@ -18,8 +18,8 @@ use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::render_graph::{DrawBucket, RenderGraph, SceneMembers};
 use primase_core::shader::bind_output_uses;
 use primase_core::shader::{
-    FallbackCoordinates, InputFallback, InputFallbackValue, InputRole, StageBinding, bind_fallback_uv_copies,
-    bind_surface_input_fallbacks,
+    FallbackCoordinates, InputFallback, InputFallbackValue, InputRole, LiftedShader, ShaderSpecialisations,
+    SpecialisationCache, StageBinding, bind_fallback_uv_copies, bind_surface_input_fallbacks,
 };
 use primase_core::{
     ColorSpace, Component, DrawLayer, DrawOrder, Entity, Instance, MaterialVariants, Mesh, Name, Semantic,
@@ -30,6 +30,7 @@ use primase_core::{
     shader::ShaderBinding,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 /// Why a draw draws a material with no binding: its pixel program is not bound (its `core.material_programs` says why).
 const UNBOUND_STEP: &str = "the material's pixel program is not bound (its core.material_programs says why)";
@@ -225,6 +226,8 @@ impl Pass for ResolveFromSoftShaders {
             StepBindings::NAME,
             MaterialPrograms::NAME,
             ProgramFacts::NAME,
+            LiftedShader::NAME,
+            ShaderSpecialisations::NAME,
             Texture::NAME,
             primase_core::TextureForms::NAME,
             Name::NAME,
@@ -332,6 +335,11 @@ fn run(
     let mut program_names = BTreeMap::new();
     // each candidate and whether its pass is the forward one, for the draws that draw it
     let mut forward: Vec<(Entity, bool)> = Vec::new();
+    // each material's programs specialised on the words it states that decide a branch or select, shared between the
+    // materials of one program and the same words; the stages specialised and why the others were not
+    let mut specialisations = SpecialisationCache::default();
+    let mut specialised = 0;
+    let mut unspecialised: BTreeMap<String, u64> = BTreeMap::new();
     for (name, code) in programs {
         program_names
             .entry(fromsoft_formats::names::fold(name))
@@ -461,6 +469,8 @@ fn run(
                     interface: PixelShader::interface(&parsed).clone(),
                 },
             );
+            // the exact lift, which a material's specialisation folds
+            world.insert(entity, LiftedShader(Arc::new(parsed.program().clone())));
             let graph = parsed.program().graph();
             shaders.insert(name.clone(), (entity, parsed, graph));
         }
@@ -545,6 +555,13 @@ fn run(
                         ShaderFormat::Dxbc => iridia_dxbc::lift(&code).map_err(|e| e.to_string()),
                         _ => iridia_dxil::lift(&code).map_err(|e| e.to_string()),
                     };
+                    // the exact lift, where its interface is the one the shader states (a DXBC program's is its
+                    // reflection's)
+                    if let Ok(lifted) = &program
+                        && lifted.interface == shader.interface
+                    {
+                        world.insert(entity, LiftedShader(Arc::new(lifted.clone())));
+                    }
                     let layout = program
                         .clone()
                         .and_then(|lifted| ProgramShader::new(lifted).map_err(|e| e.to_string()))
@@ -673,7 +690,16 @@ fn run(
                     .outputs,
             );
         world.insert(material_entity, MaterialPrograms(vec![facts]));
-        world.insert(material_entity, ShaderBinding { stages, state });
+        let binding = ShaderBinding { stages, state };
+        let specialisation = ShaderSpecialisations::shared(world, &binding, &mut specialisations);
+        for stage in &specialisation.0 {
+            match &stage.refusal {
+                None => specialised += 1,
+                Some(why) => *unspecialised.entry(why.clone()).or_default() += 1,
+            }
+        }
+        world.insert(material_entity, specialisation);
+        world.insert(material_entity, binding);
         t.bound += 1;
     }
     for kind in Kind::ALL {
@@ -768,6 +794,17 @@ fn run(
         );
     }
     log.count("shader programs", (shaders.len() + vertex_shaders.len()) as u64);
+    log.count(
+        "material stages specialised on the words they state that decide a branch or select",
+        specialised,
+    );
+    log.count(
+        "specialised programs, shared by the materials of one program and the same deciding words",
+        specialisations.programs() as u64,
+    );
+    for (why, stages) in unspecialised {
+        log.count(&format!("material stages not specialised: {why}"), stages);
+    }
     log.count("pixel inputs with shared surface replacement descriptions (used only without an executable vertex stage)", fallback_inputs);
     log.count(
         "pixel inputs with source tint/detail replacement descriptions",

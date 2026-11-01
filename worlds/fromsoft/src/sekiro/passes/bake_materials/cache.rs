@@ -566,11 +566,17 @@ mod tests {
                 texture,
             }
         }
+        fn stages(&self) -> pixels::Stages<'_> {
+            pixels::Stages {
+                pixel: &self.pixel,
+                specialised: None,
+                vertex: Some(&self.vertex),
+            }
+        }
         fn prepare(&self, size: u32) -> Prepared<'_> {
             pixels::prepare(
                 &self.world,
-                &self.pixel,
-                Some(&self.vertex),
+                self.stages(),
                 &self.material,
                 size,
                 0.,
@@ -599,17 +605,9 @@ mod tests {
         use primase_core::{TextureForm, TextureForms};
         let mut f = Fixture::new();
         assert!(!pixels::binds_forms(&f.world, &f.pixel, &f.material));
-        let refused = pixels::prepare(
-            &f.world,
-            &f.pixel,
-            Some(&f.vertex),
-            &f.material,
-            4,
-            0.,
-            pixels::Form::Low,
-        )
-        .err()
-        .unwrap();
+        let refused = pixels::prepare(&f.world, f.stages(), &f.material, 4, 0., pixels::Form::Low)
+            .err()
+            .unwrap();
         assert_eq!(refused, pixels::NO_LOW_FORM);
         let twin = f.world.spawn();
         f.world.insert(
@@ -637,16 +635,7 @@ mod tests {
         assert!(pixels::binds_forms(&f.world, &f.pixel, &f.material));
         let own = f.prepare(4);
         assert_eq!((own.source_size, own.size), ([2, 2], 2));
-        let low = pixels::prepare(
-            &f.world,
-            &f.pixel,
-            Some(&f.vertex),
-            &f.material,
-            4,
-            0.,
-            pixels::Form::Low,
-        )
-        .unwrap();
+        let low = pixels::prepare(&f.world, f.stages(), &f.material, 4, 0., pixels::Form::Low).unwrap();
         assert_eq!((low.source_size, low.size), ([1, 1], 1));
         let mut log = PassLog::default();
         let full = bake(f.prepare(4), &f.world, None, &mut log).unwrap();
