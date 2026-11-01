@@ -121,7 +121,8 @@ impl Pass for MaterializeFromSoftCatalog {
                 refusal: None,
                 name: id.to_string(),
                 path: format!("EquipParamWeapon {id} {part}"),
-                open: json!({"reader":"parts","weapons_right":[id.to_string()]}),
+                // the row asks for what it reads: the weapon inventory and the row's models
+                open: json!({"reader":"parts","weapons_right":[id.to_string()],"weapons":true}),
                 details: json!({"part":part,"label":format!("{part} (EquipParamWeapon {id})")}),
             });
         }
