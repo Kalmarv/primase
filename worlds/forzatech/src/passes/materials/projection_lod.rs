@@ -14,7 +14,16 @@
 //! The rule: the cell is each slot's transform; `DiffuseATexture` the base colour, masked at the middle reference
 //! where the permutation tests alpha; the roughness-metalness map re-encoded as glTF's (G roughness, B metallic, the
 //! signed half-range read back); `NormalATexture` the normal map. The baked occlusion factor (two textures), swatch
-//! tint, emission (its distance encoding and instance variation are run-time), lightmap and wetness are left out, named.
+//! tint, lightmap and wetness are left out, named.
+//!
+//! The emission (target 1 XYZ, on with `Emissive`) is `EmissiveTexture.rgb * EmissiveTextureScale * v * g(d)`, read at
+//! the same cell, `v = sat((y - EmissiveVariationMin) / (EmissiveVariationMax - EmissiveVariationMin))` of the
+//! instance variation's second value `y` and `g(d)` the distance encoding (see `emissiveonly`). The rule: the texture at
+//! the cell as the emissive map, the scale as the emissive factor (what is above 1 in `emissive_strength`), when the
+//! texture holds any light: most materials bind the black `ubershader_default_emissive`, and those emit nothing. `v` is
+//! the placement's: the material carries its ramp ([`crate::components::EmissionVariation`]) and
+//! `apply-forzatech-emission-variation` applies it. Left out, named: `g(d)` and the sky preset's emissive scale
+//! (run-time).
 use super::{ALPHA_REFERENCE, Binding, Derived, Lowering, Params, alpha_tested, approximate, left_out};
 use crate::components::{ForzaMaterial, MaterialTextures};
 use primase_core::pass::PassLog;
@@ -117,9 +126,17 @@ impl Lowering {
             "baked occlusion (BakedVCTexture masked by the diffuse alpha) left out",
             triangles,
         );
+        if p.on("Emissive") {
+            let scale = p.float("EmissiveTextureScale").unwrap_or(0.0).max(0.0);
+            let bound = p.texture("EmissiveTexture");
+            self.emission_map(w, e, &mut pbr, bound, scale, log);
+            if let Some(texture) = pbr.emissive_texture.as_mut() {
+                *texture = slot(texture.texture);
+            }
+            Self::vary_emission(w, e, &p, &pbr);
+        }
         for (switch, what) in [
             ("Tint", "swatch tint left out"),
-            ("Emissive", "emission left out"),
             ("Lightmap", "lightmap left out"),
         ] {
             left_out(log, &p, e, switch, what, triangles);

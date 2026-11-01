@@ -496,6 +496,7 @@ fn projection_lod_reads_its_atlas_cell_and_signed_roughness_metalness() {
     let diffuse = texture(&mut world, "diffuse", ColorSpace::Srgb, [200, 200, 200, 255]);
     let normal = texture(&mut world, "normal", ColorSpace::Linear, [128, 128, 0, 255]);
     // a signed texel with roughness 64/127 (about 0.5) and metalness 1 (127/127)
+    let lit = texture(&mut world, "lit", ColorSpace::Srgb, [255, 200, 0, 255]);
     let rm = texture(&mut world, "rm", ColorSpace::Linear, [0, 0, 0, 0]);
     world.get_mut::<Texture>(rm).unwrap().levels = vec![vec![64, 127, 0, 127]];
     world.get_mut::<Texture>(rm).unwrap().format = TexFormat::Rgba8Snorm;
@@ -509,9 +510,11 @@ fn projection_lod_reads_its_atlas_cell_and_signed_roughness_metalness() {
                 tex("DiffuseATexture", 1),
                 tex("RoughnessMetalnessATexture", 2),
                 tex("NormalATexture", 3),
+                tex("EmissiveTexture", 4),
                 parameter("UVOutMinMax", 10, Value::Vector([0.25, 0.5, 0.5, 1.0])),
                 parameter("RoughnessMetal", 11, Value::Int(1)),
                 parameter("Emissive", 12, Value::Int(1)),
+                float("EmissiveTextureScale", 13, 2.5),
             ],
         ),
     );
@@ -528,6 +531,7 @@ fn projection_lod_reads_its_atlas_cell_and_signed_roughness_metalness() {
             bound(1, Some(diffuse)),
             bound(2, Some(rm)),
             bound(3, Some(normal)),
+            bound(4, Some(lit)),
         ]),
     );
     let mut log = PassLog::default();
@@ -548,8 +552,174 @@ fn projection_lod_reads_its_atlas_cell_and_signed_roughness_metalness() {
     let packed = world.get::<Texture>(mr.texture).unwrap();
     assert_eq!(packed.levels[0], vec![255, 129, 255, 255]);
     assert_eq!(pbr.alpha_mode, AlphaMode::Mask { cutoff: 0.5 });
-    assert_eq!(log.approximations["emission left out"], 1);
+    // the emission map at the same cell, the scale 2.5 as the factor (the part above 1 in the strength)
+    assert_eq!(pbr.emissive_texture.unwrap().transform, Some(cell));
+    assert_eq!(pbr.emissive, [1.0; 3]);
+    assert_eq!(pbr.emissive_strength, 2.5);
+    assert_eq!(world.get::<Texture>(lit).unwrap().role, TexRole::Color);
+    assert_eq!(
+        log.approximations["projection_lod emission without the distance encoding and the sky preset's scale (run-time); the instance variation is applied per placement"],
+        1
+    );
     assert_eq!(log.counts["projection_lod materials lowered"], 1);
+}
+
+/// A material whose emission map is black emits nothing, and says so as a count rather than an approximation.
+#[test]
+fn projection_lod_with_a_black_emission_map_emits_nothing() {
+    let mut world = World::new();
+    let black = texture(&mut world, "black", ColorSpace::Srgb, [0, 0, 0, 255]);
+    let e = world.spawn();
+    world.insert(
+        e,
+        material(
+            "projection_lod",
+            "Standard",
+            vec![
+                tex("EmissiveTexture", 4),
+                parameter("Emissive", 12, Value::Int(1)),
+                float("EmissiveTextureScale", 13, 1.0),
+            ],
+        ),
+    );
+    world.insert(e, MaterialTextures(vec![bound(4, Some(black))]));
+    let mut log = PassLog::default();
+    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    let pbr = world.get::<PbrMaterial>(e).unwrap();
+    assert!(pbr.emissive_texture.is_none());
+    assert_eq!(pbr.emissive_strength, PbrMaterial::default().emissive_strength);
+    assert_eq!(
+        log.counts["projection_lod emissive materials whose emission texture is black: no emission"],
+        1
+    );
+    assert!(!log.approximations.keys().any(|k| k.contains("emission")));
+}
+
+/// `uberlod`: the diffuse map as the base colour, the emission map times `EmissiveScale` as the emission, and a material
+/// with a normal map left unlowered by name.
+#[test]
+fn uberlod_is_its_diffuse_and_emission_maps() {
+    let mut world = World::new();
+    let diffuse = texture(&mut world, "diffuse", ColorSpace::Srgb, [200, 200, 200, 255]);
+    let lit = texture(&mut world, "lit", ColorSpace::Srgb, [255, 200, 0, 255]);
+    let make = |world: &mut World, normal_map: i32| {
+        let e = world.spawn();
+        world.insert(
+            e,
+            material(
+                "uberlod",
+                "Default",
+                vec![
+                    tex("DiffuseATexture", 1),
+                    tex("EmissiveTexture", 4),
+                    parameter("Emissive", 12, Value::Int(1)),
+                    parameter("NormalMap", 14, Value::Int(normal_map)),
+                    float("EmissiveScale", 13, 3.0),
+                    float("Roughness", 15, 0.8),
+                ],
+            ),
+        );
+        world.insert(
+            e,
+            MaterialTextures(vec![bound(1, Some(diffuse)), bound(4, Some(lit))]),
+        );
+        e
+    };
+    let plain = make(&mut world, 0);
+    let normal = make(&mut world, 1);
+    let mut log = PassLog::default();
+    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    let pbr = world.get::<PbrMaterial>(plain).unwrap();
+    assert_eq!(pbr.base_color_texture.unwrap().texture, diffuse);
+    assert_eq!(pbr.emissive_texture.unwrap().texture, lit);
+    assert_eq!((pbr.emissive, pbr.emissive_strength), ([1.0; 3], 3.0));
+    assert_eq!(pbr.roughness, 0.8);
+    assert!(!world.has::<PbrMaterial>(normal));
+    assert_eq!(log.counts["uberlod materials lowered"], 1);
+    assert_eq!(
+        log.omitted["materials of shader family uberlod with a normal map left unlowered"],
+        1
+    );
+}
+
+/// The `environment` emission: the base colour map times the emission map baked into one map, the tint times
+/// `GIEmissiveScale` the factor; left out when the base colour map is tiled, when the map is on another coordinate set, and
+/// as a count when it is black.
+#[test]
+fn environment_emission_is_the_base_colour_times_the_emission_map() {
+    let mut world = World::new();
+    let diffuse = texture(&mut world, "diffuse", ColorSpace::Srgb, [255, 255, 255, 255]);
+    let lit = texture(&mut world, "lit", ColorSpace::Srgb, [255, 128, 0, 255]);
+    let black = texture(&mut world, "black", ColorSpace::Srgb, [0, 0, 0, 255]);
+    let make = |world: &mut World, extra: Vec<Parameter>, emission: Entity| {
+        let e = world.spawn();
+        let mut parameters = vec![
+            tex("DiffAlphaTex_A", 1),
+            tex("EmissiveTexture", 4),
+            parameter("Emissive", 20, Value::Int(1)),
+            parameter("EmissiveTint", 21, Value::Colour([1.0, 0.5, 2.0, 1.0])),
+            float("GIEmissiveScale", 22, 1.5),
+            parameter("Uv0Offset", 13, Value::Vector2([0.5, 0.25])),
+        ];
+        parameters.extend(extra);
+        world.insert(e, material("environment", "Standard", parameters));
+        world.insert(
+            e,
+            MaterialTextures(vec![bound(1, Some(diffuse)), bound(4, Some(emission))]),
+        );
+        e
+    };
+    // an untiled base colour map is read at the offset like the emission map (the tiling parameter is 1)
+    let plain = make(
+        &mut world,
+        vec![parameter(
+            "BaseColorAlpha_A_UVTiling",
+            10,
+            Value::Vector2([1.0, 1.0]),
+        )],
+        lit,
+    );
+    let tiled = make(
+        &mut world,
+        vec![parameter(
+            "BaseColorAlpha_A_UVTiling",
+            10,
+            Value::Vector2([2.0, 2.0]),
+        )],
+        lit,
+    );
+    let alt = make(
+        &mut world,
+        vec![parameter("EmissiveAltUV", 23, Value::Int(1))],
+        lit,
+    );
+    let dark = make(&mut world, Vec::new(), black);
+    let mut log = PassLog::default();
+    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+
+    let pbr = world.get::<PbrMaterial>(plain).unwrap();
+    // the tint times 1.5: (1.5, 0.75, 3): the strength is the largest channel, the factor the rest
+    assert_eq!(pbr.emissive_strength, 3.0);
+    assert_eq!(pbr.emissive, [0.5, 0.25, 1.0]);
+    let slot = pbr.emissive_texture.unwrap();
+    assert_eq!(slot.transform, pbr.base_color_texture.unwrap().transform);
+    let baked = world.get::<Texture>(slot.texture).unwrap();
+    assert_eq!(baked.color_space, ColorSpace::Srgb);
+    for (got, want) in baked.levels[0].iter().zip([255u8, 128, 0, 255]) {
+        assert!(got.abs_diff(want) <= 1, "{:?}", baked.levels[0]);
+    }
+    for e in [tiled, alt, dark] {
+        assert!(world.get::<PbrMaterial>(e).unwrap().emissive_texture.is_none());
+    }
+    assert_eq!(
+        log.approximations["emission left out: the base colour map is tiled, so it and the emission map are on different coordinates"],
+        1
+    );
+    assert_eq!(
+        log.counts["environment emissive materials whose emission texture is black: no emission"],
+        1
+    );
+    assert_eq!(log.counts["environment atlases baked as emission maps"], 1);
 }
 
 /// The road decal built of a diffuse (roughness in its alpha), a mask, a metalness map and a normal map.

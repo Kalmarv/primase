@@ -57,7 +57,7 @@ const SIGN_FACE: u8 = 3;
 
 /// The colours a colour-masked sign is painted with (linear: background, R, G, B, A) and how its mask is read.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Paint {
+pub(super) struct Paint {
     colours: [[f32; 3]; 5],
     five: bool,
     stepped: bool,
@@ -152,12 +152,14 @@ fn srgb_byte(linear: f64) -> u8 {
 impl Lowering {
     /// An sRGB colour atlas made of `atlas`: its texels painted with `paint` (or as they are, when `None`), times
     /// `emissive`'s texel at the same normalised position when given. Made once per source, paint and emission map.
-    fn bake_sign(
+    /// `what` names the atlas in the texture's name and the counts (`sign`, `environment`).
+    pub(super) fn bake_sign(
         &mut self,
         w: &mut World,
         atlas: Entity,
         paint: Option<&Paint>,
         emissive: Option<Entity>,
+        what: &str,
         log: &mut PassLog,
     ) -> Result<Option<Entity>, String> {
         let mut key = paint.map(Paint::key).unwrap_or_default();
@@ -169,19 +171,19 @@ impl Lowering {
             w.get::<Texture>(atlas),
             emissive.map(|e| w.get::<Texture>(e).map(|t| (t.color_space, decode(t)))),
         ) else {
-            log.count("sign atlases left out: no pixels", 1);
+            log.count(&format!("{what} atlases left out: no pixels"), 1);
             return Ok(None);
         };
         let emission = match emission {
             None => None,
             Some(None) => {
-                log.count("sign emission maps left out: no pixels", 1);
+                log.count(&format!("{what} emission maps left out: no pixels"), 1);
                 return Ok(None);
             }
             Some(Some((space, image))) => match image? {
                 Some(image) => Some((space, image)),
                 None => {
-                    log.count("sign emission maps left out: no pixels", 1);
+                    log.count(&format!("{what} emission maps left out: no pixels"), 1);
                     return Ok(None);
                 }
             },
@@ -218,27 +220,22 @@ impl Lowering {
                 ])
             },
         )
-        .map_err(|e| format!("painting a sign atlas: {e}"))?;
+        .map_err(|e| format!("painting a {what} atlas: {e}"))?;
         let name = w.get::<Name>(atlas).map(|n| n.0.clone()).unwrap_or_default();
         let e = w.spawn();
         w.insert(
             e,
             Name(format!(
-                "{name} ({})",
-                if emission.is_some() {
-                    "sign emission"
-                } else {
-                    "sign colour"
-                }
+                "{name} ({what} {})",
+                if emission.is_some() { "emission" } else { "colour" }
             )),
         );
         w.insert(e, texture);
         log.count(
-            if emissive.is_some() {
-                "sign atlases baked as emission maps"
-            } else {
-                "sign atlases baked as colour maps"
-            },
+            &format!(
+                "{what} atlases baked as {} maps",
+                if emissive.is_some() { "emission" } else { "colour" }
+            ),
             1,
         );
         self.baked.insert((atlas, key, emissive), e);
@@ -341,7 +338,7 @@ impl Lowering {
                     }
                     pbr.base_color_texture = Some(slot(t));
                     atlas_baked = Some(t);
-                } else if let Some(baked) = self.bake_sign(w, t, paint.as_ref(), None, log)? {
+                } else if let Some(baked) = self.bake_sign(w, t, paint.as_ref(), None, "sign", log)? {
                     pbr.base_color_texture = Some(slot(baked));
                     atlas_baked = Some(t);
                 }
@@ -376,7 +373,7 @@ impl Lowering {
                 let tint = [tint[0].max(0.0), tint[1].max(0.0), tint[2].max(0.0)];
                 let strength = tint.iter().copied().fold(0.0f32, f32::max);
                 if strength > 0.0
-                    && let Some(baked) = self.bake_sign(w, atlas, paint.as_ref(), Some(em), log)?
+                    && let Some(baked) = self.bake_sign(w, atlas, paint.as_ref(), Some(em), "sign", log)?
                 {
                     pbr.emissive_texture = Some(slot(baked));
                     pbr.emissive = tint.map(|c| c / strength.max(1.0));

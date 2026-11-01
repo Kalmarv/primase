@@ -234,7 +234,17 @@ pub struct SwatchTint {
     pub palette: primase_core::Entity,
 }
 
+/// A lowered material whose emission the placement's instance variation scales: the factor is
+/// `saturate((y - min) / (max - min))` of the variation's second value `y` (`EmissiveVariationMin` and `Max`).
+/// `apply-forzatech-emission-variation` applies it per placement and removes this.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct EmissionVariation {
+    pub min: f32,
+    pub max: f32,
+}
+
 plain!(Placement, "forzatech.placement");
+plain!(EmissionVariation, "forzatech.emission_variation");
 plain!(PlanarUv, "forzatech.planar_uv");
 plain!(Template, "forzatech.template");
 plain!(MaterialRef, "forzatech.material_ref");

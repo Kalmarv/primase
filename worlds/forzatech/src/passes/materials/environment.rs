@@ -30,9 +30,20 @@
 //!
 //! The simplifications: the surface the permutation makes dry and unlit (wetness, the lightmap and light probes are
 //! run-time state); the albedo's occlusion product is carried by the occlusion slot instead; and, named per material,
-//! swatch tint, modulate, deposits, triplanar, relaxed cone-step mapping, mega-skirt, emission, retro-reflection and
+//! swatch tint, modulate, deposits, triplanar, relaxed cone-step mapping, mega-skirt, retro-reflection and
 //! per-instance random UV offset are left out, because each needs a vertex colour, the instance variation, the world
 //! position or a run-time constant that no material holds.
+//!
+//! The emission (target 1 XYZ, `Emissive`, the `_Emissive` permutations) is `DiffAlphaTex_A.rgb * EmissiveTexture.rgb *
+//! EmissiveTint.rgb * GIEmissiveScale * v * g(d)`, the emission map read at `Uv0Offset + uv0` (no tiling), `v` the
+//! instance variation's factor when `LightEmisVariationOnOff` is on (see `projection_lod`), and `g(d)` the distance
+//! encoding. The rule, for a material whose base colour map is not tiled: the two maps baked into one emission map at the
+//! base colour map's texels, the tint times `GIEmissiveScale` the emissive factor (what is above 1 in
+//! `emissive_strength`), when the emission map holds any light. Left out, named: a material whose base colour map is
+//! tiled (the maps are on different coordinates), `EmissiveAltUV` (the map is on `TEXCOORD4`), the hue
+//! variation (`EmissiveTempVariationOnOff`, from the world position), the flash (`EmissiveFlash`, time-driven, the
+//! steady state is the emission), `g(d)` and the sky preset's scale (run-time). `v` is the placement's: the material
+//! carries its ramp ([`crate::components::EmissionVariation`]) and `apply-forzatech-emission-variation` applies it.
 use super::{ALPHA_REFERENCE, Binding, Derived, Lowering, Params, approximate, left_out};
 use crate::components::{ForzaMaterial, MaterialTextures, SwatchTint};
 use primase_core::pass::PassLog;
@@ -46,7 +57,6 @@ const LEFT_OUT: &[(&str, &str)] = &[
     ("TriPlanarMapping", "triplanar mapping left out"),
     ("RCSM", "relaxed cone-step mapping left out"),
     ("MegaSkirt", "mega-skirt terrain blend left out"),
-    ("Emissive", "emission left out"),
     ("RetroReflective", "retro-reflection left out"),
     ("RandomOffsetOnOff", "per-instance random UV offset left out"),
     ("DualUv", "second UV set of a dual-UV material left out"),
@@ -62,9 +72,24 @@ impl Lowering {
         m: &ForzaMaterial,
         log: &mut PassLog,
     ) -> Result<PbrMaterial, String> {
-        let pbr = self.environment_maps(w, e, m, log, LEFT_OUT)?;
+        let mut pbr = self.environment_maps(w, e, m, log, LEFT_OUT)?;
         let bound = w.get::<MaterialTextures>(e).cloned();
         let p = Params::new(m, bound.as_ref());
+        if p.on("Emissive") {
+            // the signage family's murals take this rule for their maps, not for their emission
+            if m.shader.as_ref().is_some_and(|s| s.family == "environment") {
+                self.environment_emission(w, e, &p, &mut pbr, log)?;
+            } else {
+                left_out(
+                    log,
+                    &p,
+                    e,
+                    "Emissive",
+                    "emission left out",
+                    self.triangles.get(&e).copied().unwrap_or(0),
+                );
+            }
+        }
         if p.on("SwatchTint") {
             match p.texture("SwatchTintTexture") {
                 Binding::Texture(palette) => {
@@ -83,6 +108,86 @@ impl Lowering {
             }
         }
         Ok(pbr)
+    }
+
+    /// The emission of an `environment` material with `Emissive` on.
+    fn environment_emission(
+        &mut self,
+        w: &mut World,
+        e: Entity,
+        p: &Params,
+        pbr: &mut PbrMaterial,
+        log: &mut PassLog,
+    ) -> Result<(), String> {
+        let triangles = self.triangles.get(&e).copied().unwrap_or(0);
+        if p.on("EmissiveAltUV") {
+            approximate(
+                log,
+                e,
+                "emission texture on TEXCOORD4 (EmissiveAltUV) left out: a material is sampled through one coordinate set",
+                triangles,
+            );
+            return Ok(());
+        }
+        let tint = p.vec4("EmissiveTint").unwrap_or([1.0; 4]);
+        let scale = p.float("GIEmissiveScale").unwrap_or(1.0).max(0.0);
+        let radiance = [tint[0], tint[1], tint[2]].map(|c| c.max(0.0) * scale);
+        let strength = radiance.iter().copied().fold(0.0f32, f32::max);
+        let tiling = p.vec2("BaseColorAlpha_A_UVTiling").unwrap_or([1.0; 2]);
+        let (Binding::Texture(emission), Binding::Texture(base)) =
+            (p.texture("EmissiveTexture"), p.texture("DiffAlphaTex_A"))
+        else {
+            approximate(
+                log,
+                e,
+                "emission left out: no emission map or no base colour map",
+                triangles,
+            );
+            return Ok(());
+        };
+        if strength <= 0.0 || !self.emits_light(w, emission) {
+            log.count(
+                "environment emissive materials whose emission texture is black: no emission",
+                1,
+            );
+            return Ok(());
+        }
+        if tiling != [1.0; 2] {
+            approximate(
+                log,
+                e,
+                "emission left out: the base colour map is tiled, so it and the emission map are on different coordinates",
+                triangles,
+            );
+            return Ok(());
+        }
+        let Some(baked) = self.bake_sign(w, base, None, Some(emission), "environment", log)? else {
+            approximate(log, e, "emission left out: a map has no pixels", triangles);
+            return Ok(());
+        };
+        let offset = p.vec2("Uv0Offset").unwrap_or([0.0; 2]);
+        pbr.emissive_texture = Some(Self::slot(baked, Some([1.0; 2]), offset));
+        pbr.emissive = radiance.map(|c| c / strength.max(1.0));
+        pbr.emissive_strength = strength.max(1.0);
+        if p.on("LightEmisVariationOnOff") {
+            Self::vary_emission(w, e, p, pbr);
+        }
+        for (switch, what) in [
+            (
+                "EmissiveTempVariationOnOff",
+                "emission hue variation (from the world position) left out",
+            ),
+            ("EmissiveFlash", "emission flash left out: the steady state"),
+        ] {
+            left_out(log, p, e, switch, what, triangles);
+        }
+        approximate(
+            log,
+            e,
+            "environment emission without the distance encoding and the sky preset's scale (run-time); the instance variation is applied per placement",
+            triangles,
+        );
+        Ok(())
     }
 
     /// The three-map material the `environment` and `environment_plot` families share, whose `left_out` switches

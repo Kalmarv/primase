@@ -96,6 +96,14 @@
 //! The lowering reports a material of no shader family as unlowered only when a primitive or a model variant uses it:
 //! after `select-forzatech-main-view` the `Default.materialbin` materials of the undrawn `Bush_Flatten` and occluder
 //! primitives are used by none and are counted apart.
+//!
+//! Emission (`projection_lod`, `environment`, `uberlod`; their module docs have the shader evidence): over the whole box
+//! after `select-lod` at level 1 and `select-forzatech-main-view` (`tests/shibuya_swatch.rs`), 880 materials of 210,791
+//! triangles carry an emission map and a factor (the three families together; the run did not split them), 334
+//! materials of those families bind a texture with no light and emit nothing (counted), 3 name an emission
+//! texture no archive holds, and 784 `environment` materials (2,152 triangles) read it on `TEXCOORD4` and are left out
+//! by name. The emission's unit and the sky preset's scale are not in the files (see
+//! [`crate::passes::ApplyForzaEmissionVariation`] for the instance variation, which is applied per placement).
 mod anim_flag;
 mod anim_ledflipbookpanel;
 mod branch;
@@ -112,9 +120,10 @@ mod pylon_cables;
 mod terrain;
 mod uber_road;
 mod uber_roaddecal;
+mod uberlod;
 mod window_linecastroom;
 
-use crate::components::{ForzaMaterial, MaterialTextures, PlanarUv, SwatchTint, Value};
+use crate::components::{EmissionVariation, ForzaMaterial, MaterialTextures, PlanarUv, SwatchTint, Value};
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
@@ -249,6 +258,8 @@ struct Lowering {
     /// The mean linear colour of the back wall of each cell of a room atlas (cell by cell, row by row), by texture and
     /// the atlas's cell grid; `None` where the texture has no pixels.
     rooms: BTreeMap<(Entity, [u32; 2]), RoomMeans>,
+    /// Whether an emission texture holds any light (a texel with a colour other than black), by texture.
+    lit: BTreeMap<Entity, bool>,
 }
 
 impl Lowering {
@@ -331,6 +342,110 @@ impl Lowering {
         TextureRef {
             transform,
             ..TextureRef::new(texture)
+        }
+    }
+
+    /// Whether the emission texture `texture` holds any light: a texel of level 0 whose colour is not black. Read once per
+    /// texture; a texture with no pixels counts as dark.
+    fn emits_light(&mut self, w: &World, texture: Entity) -> bool {
+        if let Some(&lit) = self.lit.get(&texture) {
+            return lit;
+        }
+        let mut lit = false;
+        if let Some(t) = w.get::<Texture>(texture) {
+            let found = primase_image::map_rgba8_levels(
+                t,
+                0..1,
+                primase_image::TextureMetadata {
+                    color_space: t.color_space,
+                    role: TexRole::Mask,
+                    normal: None,
+                },
+                |texel| {
+                    lit |= texel.rgba[..3].iter().any(|c| *c != 0);
+                    Ok(texel.rgba)
+                },
+            );
+            if found.is_err() {
+                lit = false;
+            }
+        }
+        self.lit.insert(texture, lit);
+        lit
+    }
+
+    /// A material's emission read from the texture `bound` times `scale`, when the texture holds any light: the texture
+    /// as the emissive map (through the identity; the caller sets the transform), the scale as the emissive factor (what
+    /// is above 1 in `emissive_strength`, so the product is the authored radiance). Counts what emits nothing.
+    fn emission_map(
+        &mut self,
+        w: &mut World,
+        e: Entity,
+        pbr: &mut PbrMaterial,
+        bound: Binding,
+        scale: f32,
+        log: &mut PassLog,
+    ) {
+        let triangles = self.triangles.get(&e).copied().unwrap_or(0);
+        let family = w
+            .get::<ForzaMaterial>(e)
+            .and_then(|m| m.shader.as_ref())
+            .map_or("no shader family", |s| s.family.as_str())
+            .to_owned();
+        match bound {
+            Binding::Texture(t) if scale > 0.0 => {
+                if self.emits_light(w, t) {
+                    if let Some(tex) = w.get_mut::<Texture>(t)
+                        && tex.role == TexRole::Other
+                        && tex.color_space == ColorSpace::Srgb
+                    {
+                        tex.role = TexRole::Color;
+                    }
+                    let strength = scale.max(1.0);
+                    pbr.emissive_texture = Some(TextureRef::new(t));
+                    pbr.emissive = [scale / strength; 3];
+                    pbr.emissive_strength = strength;
+                    approximate(
+                        log,
+                        e,
+                        &format!(
+                            "{family} emission without the distance encoding and the sky preset's scale (run-time); the instance variation is applied per placement"
+                        ),
+                        triangles,
+                    );
+                } else {
+                    log.count(
+                        &format!("{family} emissive materials whose emission texture is black: no emission"),
+                        1,
+                    );
+                }
+            }
+            Binding::Texture(_) => log.count(
+                &format!("{family} emissive materials with an emission scale of 0: no emission"),
+                1,
+            ),
+            Binding::Absent => approximate(
+                log,
+                e,
+                &format!("{family} emission texture in no archive: no emission"),
+                triangles,
+            ),
+            Binding::None => approximate(
+                log,
+                e,
+                &format!("{family} no emission texture: no emission"),
+                triangles,
+            ),
+        }
+    }
+
+    /// Marks the emission of the lowered material `e` as scaled by the instance variation, from the ramp `min` to `max`
+    /// of its parameters, when it emits.
+    fn vary_emission(w: &mut World, e: Entity, p: &Params, pbr: &PbrMaterial) {
+        if pbr.emissive_texture.is_some()
+            && let (Some(min), Some(max)) = (p.float("EmissiveVariationMin"), p.float("EmissiveVariationMax"))
+        {
+            w.insert(e, EmissionVariation { min, max });
         }
     }
 
@@ -517,6 +632,7 @@ impl Pass for LowerForzaMaterials {
             LayeredMaterial::NAME,
             PlanarUv::NAME,
             SwatchTint::NAME,
+            EmissionVariation::NAME,
             Texture::NAME,
             Name::NAME,
             DrawOrder::NAME,
@@ -570,6 +686,7 @@ impl Pass for LowerForzaMaterials {
             coord_sets,
             reflected: BTreeSet::new(),
             rooms: BTreeMap::new(),
+            lit: BTreeMap::new(),
         };
         let mut left: BTreeMap<String, (u64, u64)> = BTreeMap::new();
         for (e, m) in &materials {
@@ -596,6 +713,7 @@ impl Pass for LowerForzaMaterials {
                 Some("uber_foliage") => Some(lowering.uber_foliage(world, *e, m, log)?),
                 Some("uber_branch") => lowering.uber_branch(world, *e, m, log)?,
                 Some("projection_lod") => lowering.projection_lod(world, *e, m, log)?,
+                Some("uberlod") => lowering.uberlod(world, *e, m, log)?,
                 Some("uber_roaddecal") => lowering.uber_roaddecal(world, *e, m, log)?,
                 Some("uber_roaddecalretro") => lowering.uber_roaddecalretro(world, *e, m, log)?,
                 Some("environmentdeferreddecal") => lowering.environmentdeferreddecal(world, *e, m, log)?,
@@ -608,6 +726,7 @@ impl Pass for LowerForzaMaterials {
                 }
                 let name = match family {
                     Some("uber_branch") => "uber_branch with a second set of maps",
+                    Some("uberlod") => "uberlod with a normal map",
                     Some("environmentdeferreddecal") => "environmentdeferreddecal projected",
                     other => other.unwrap_or("no shader family"),
                 };

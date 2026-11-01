@@ -17,8 +17,10 @@ use primase_core::convert::Reader;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Component, Entity, Instance, LodChoice, Mesh, SelectLod, Semantic};
-use primase_forzatech::components::SwatchTint;
-use primase_forzatech::passes::{BakeForzaSwatchTint, LowerForzaMaterials, SelectForzaMainView};
+use primase_forzatech::components::{EmissionVariation, SwatchTint};
+use primase_forzatech::passes::{
+    ApplyForzaEmissionVariation, BakeForzaSwatchTint, LowerForzaMaterials, SelectForzaMainView,
+};
 use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
 use primase_forzatech::read::placements::Scope;
@@ -55,6 +57,17 @@ fn run(folder: &std::path::Path, bake: bool) -> Prepared {
     // what the main view does not draw is gone before materials are made of it
     SelectForzaMainView.run(&mut part, &mut log).unwrap();
     LowerForzaMaterials.run(&mut part, &mut log).unwrap();
+    if bake {
+        for (what, n) in log
+            .counts
+            .iter()
+            .chain(&log.approximations)
+            .chain(&log.omitted)
+            .filter(|(w, _)| w.contains("emi") || w.contains("uberlod"))
+        {
+            println!("lowering: {what}: {n}");
+        }
+    }
     // every material a primitive draws names its shader family (the undrawn Default.materialbin ones went with their
     // primitives)
     assert!(
@@ -81,6 +94,12 @@ fn run(folder: &std::path::Path, bake: bool) -> Prepared {
         println!("bake approximations: {:#?}", log.approximations);
         println!("bake omissions: {:#?}", log.omitted);
         assert_eq!(part.iter::<SwatchTint>().count(), 0);
+        // the emission's instance variation, as material variants beside the tint's
+        let mut log = PassLog::default();
+        ApplyForzaEmissionVariation.run(&mut part, &mut log).unwrap();
+        println!("emission variation counts: {:#?}", log.counts);
+        println!("emission variation omissions: {:#?}", log.omitted);
+        assert_eq!(part.iter::<EmissionVariation>().count(), 0);
     }
     for (_, mesh) in part.iter::<Mesh>() {
         assert!(

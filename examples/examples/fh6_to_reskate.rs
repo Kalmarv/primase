@@ -9,8 +9,8 @@ use primase_core::pass::{PassManager, PassRegistry, Pipeline};
 use primase_core::pbr::TextureSlot;
 use primase_core::{LodChoice, SelectLod};
 use primase_forzatech::passes::{
-    BakeForzaSwatchTint, CollideForzaDrawn, Ground, LowerForzaMaterials, LowerForzaPlanarUv, SeeThrough,
-    SelectForzaDrawn, SelectForzaMainView,
+    ApplyForzaEmissionVariation, BakeForzaSwatchTint, CollideForzaDrawn, Ground, LowerForzaMaterials,
+    LowerForzaPlanarUv, SeeThrough, SelectForzaDrawn, SelectForzaMainView,
 };
 use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
@@ -79,6 +79,8 @@ fn main() -> Result<()> {
             Box::new(CapTextures::new(256, CapMode { beyond: Beyond::Filter, normals: NormalDownscale::Box })?),
             // the swatch tint is a material variant of each (model variant, tint byte) a prototype's placements use, its base colour baked
             Box::new(BakeForzaSwatchTint),
+            // the emission of a rule-placed instance scaled by its instance variation, as material variants beside the tint's
+            Box::new(ApplyForzaEmissionVariation),
             // a placement drawing another material variant gets a prototype of its own, so each tiles one way; the
             // variants nobody places are dropped, counted
             Box::new(SpecializeMaterialVariants::new(UnusedVariants::Discard)),
