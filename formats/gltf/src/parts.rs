@@ -12,9 +12,9 @@ use primase_core::convert::{Finished, Notice, NoticeKind, Writer};
 use primase_core::pass::Target;
 use primase_core::state::{Condition, PrimitiveCondition, StateAxis, StateOverride};
 use primase_core::{
-    Asset, Clip, ClipBinding, Component, Entity, Instance, LayeredMaterial, Light, Lods, MaterialVariants,
-    Mesh, MeshFile, MorphWeights, Morphs, Name, RigInstance, RigPose, Shadows, Skeleton, Skin, SkinInstance,
-    Source, Texture, TextureFile, Tile, Transform, TransformKind, World, pbr::PbrMaterial,
+    Asset, Attachment, Clip, ClipBinding, Component, Entity, Instance, Light, Lods, MaterialVariants, Mesh,
+    MeshFile, MorphWeights, Morphs, Name, RigInstance, RigPose, Skeleton, Skin, SkinInstance, Sockets, Source,
+    Texture, TextureFile, Tile, Transform, TransformKind, World, pbr::PbrMaterial,
 };
 
 use crate::{WriteOptions, WriteReport, write_file};
@@ -22,15 +22,18 @@ use crate::{WriteOptions, WriteReport, write_file};
 /// What the glTF writer writes, as a conversion checks each part against it ([`Target::check_prepared`]). Every
 /// placement must have a transform glTF can hold (not sheared: `bake-nonrigid` first); a mesh or texture still only
 /// in a file must be loaded; a conditional placement or a state override is refused (the glTF is one world state:
-/// `resolve-state` chooses one). Levels of detail are counted, not chosen (`select-lod` chooses). Every other name is
-/// carried: into the extras where it has a JSON form, counted where it has none (see [`crate::write`]).
+/// `resolve-state` chooses one). Levels of detail are counted, not chosen (`select-lod` chooses). Every name it does not
+/// list is left out, glTF having no form for it (a dialect's components, `core.source`, `core.shadows`, `core.layered`,
+/// Havok cloth): a conversion reports it as not written, and the writer counts it (see [`crate::write`]). A layered
+/// material is drawn only as the `pbr.material` a pass before the writer states for it.
 pub fn target() -> Target {
     target_for(false)
 }
 
 /// What the preview writer writes ([`crate::preview::PreviewParts`]): [`target`]'s rules, except that the state a
-/// preview leaves unresolved is legal, since the manifest carries it: axes, conditions on placements and on an
-/// asset's parts, per-primitive conditions and overrides.
+/// preview leaves unresolved is legal, since the manifest carries it (axes, conditions on placements and on an
+/// asset's parts, per-primitive conditions and overrides), and so is what the manifest states beside the glTF: the
+/// assets (an asset root's source its id), attachments and sockets.
 pub fn preview_target() -> Target {
     target_for(true)
 }
@@ -46,10 +49,8 @@ fn target_for(preview: bool) -> Target {
         .legal(Mesh::NAME)
         .dynamic(MeshFile::NAME, |w, e| w.has::<Mesh>(e))
         .legal(MaterialVariants::NAME)
-        .legal(Shadows::NAME)
         .legal(Light::NAME)
         .legal(PbrMaterial::NAME)
-        .legal(LayeredMaterial::NAME)
         .legal(Texture::NAME)
         .dynamic(TextureFile::NAME, |w, e| w.has::<Texture>(e))
         .legal(Tile::NAME)
@@ -62,19 +63,30 @@ fn target_for(preview: bool) -> Target {
         .legal(Morphs::NAME)
         .legal(MorphWeights::NAME)
         .legal(Clip::NAME)
-        .legal(ClipBinding::NAME)
-        // a model's Havok cloth and the vertices it sets: carried, the cloth's summary into the extras
-        .carry("havok.cloth")
-        .carry("havok.cloth_vertices")
-        .carry_unknown();
+        .legal(ClipBinding::NAME);
     let t = state(t, Condition::NAME);
     let t = state(t, PrimitiveCondition::NAME);
     let t = state(t, StateOverride::NAME);
-    if preview { t.legal(StateAxis::NAME) } else { t }
+    if preview {
+        t.legal(StateAxis::NAME)
+            .legal(Asset::NAME)
+            .legal(Attachment::NAME)
+            .legal(Sockets::NAME)
+            .covered(Source::NAME, "an asset root's id in the manifest", |w, e| {
+                w.has::<Asset>(e)
+            })
+    } else {
+        t
+    }
 }
 
-/// Counts, by component name, of what a part's consumer carries beyond the glTF.
-pub(crate) type Carried = fn(&World) -> BTreeMap<&'static str, u64>;
+/// What a part's consumer carries beyond the glTF (the preview manifest), by component name and count: on entities the
+/// glTF does not write (`unwritten`) and on those it writes (`beside`), neither told as left out.
+#[derive(Debug, Default)]
+pub(crate) struct Carried {
+    pub(crate) unwritten: BTreeMap<&'static str, u64>,
+    pub(crate) beside: BTreeMap<&'static str, u64>,
+}
 
 /// One GLB per part, into a folder (see the module documentation), each written as [`crate::write_file`] writes a
 /// world with the given options. What the writer leaves out is told once per reason over every part, the files as
@@ -87,9 +99,8 @@ pub struct GlbParts {
     files: Vec<(String, u64)>,
     /// What every part left out: (kind, reason) -> (count, files).
     omitted: BTreeMap<(NoticeKind, String), (u64, Vec<String>)>,
-    /// What a consumer of the files carries elsewhere (the preview manifest), per part: components on entities the
-    /// glTF does not write, by name and count, not told as left out.
-    carried: Option<Carried>,
+    /// What a consumer of the files carries elsewhere (the preview manifest), per part, not told as left out.
+    carried: Option<fn(&World) -> Carried>,
 }
 
 impl GlbParts {
@@ -121,8 +132,8 @@ impl GlbParts {
     }
 
     /// Components carried elsewhere than in the glTF (`carried` counts them per part, by name), so not told as left
-    /// out on entities the glTF does not write.
-    pub(crate) fn carrying(mut self, carried: Carried) -> GlbParts {
+    /// out.
+    pub(crate) fn carrying(mut self, carried: fn(&World) -> Carried) -> GlbParts {
         self.carried = Some(carried);
         self
     }
@@ -141,11 +152,17 @@ impl GlbParts {
             .into());
         }
         let mut report = write_file(part, &self.options, &self.folder.join(&name))?;
-        for (name, n) in self.carried.map(|c| c(part)).unwrap_or_default() {
-            if let Some(left) = report.components_unwritten.get_mut(name) {
-                *left = left.saturating_sub(n);
-                if *left == 0 {
-                    report.components_unwritten.remove(name);
+        let carried = self.carried.map(|c| c(part)).unwrap_or_default();
+        for (told, carried) in [
+            (&mut report.components_unwritten, &carried.unwritten),
+            (&mut report.components_without_form, &carried.beside),
+        ] {
+            for (&name, &n) in carried {
+                if let Some(left) = told.get_mut(name) {
+                    *left = left.saturating_sub(n);
+                    if *left == 0 {
+                        told.remove(name);
+                    }
                 }
             }
         }
@@ -226,15 +243,18 @@ fn omissions(report: &WriteReport, include_unplaced: bool) -> Vec<(NoticeKind, S
         ),
         (
             Unsupported,
-            "materials without pbr.material or core.layered, not written: their primitives drawn with no material \
+            "materials without pbr.material, not written: their primitives drawn with no material \
              (prepare-gltf-materials states one)"
                 .into(),
             report.materials_without_pbr,
         ),
         (
             Unsupported,
-            "layer slots whose material has no pbr.material, written empty".into(),
-            report.layers_without_pbr,
+            "layered materials (core.layered) without pbr.material, not written: their primitives drawn with no \
+             material (glTF draws one material per primitive: a pass before the writer states it, a layer as the \
+             material or the blend baked into one)"
+                .into(),
+            report.layered_materials_unwritten,
         ),
         (
             Unsupported,
@@ -243,9 +263,18 @@ fn omissions(report: &WriteReport, include_unplaced: bool) -> Vec<(NoticeKind, S
         ),
         (
             Approximation,
-            "primitives drawn with a layered material but lacking its weight attribute: they render as its host"
-                .into(),
-            report.primitives_layered_without_weights,
+            "primitives lacking the vertex attribute their material reads: they render as its host".into(),
+            report.primitives_without_material_attribute,
+        ),
+        (
+            Unsupported,
+            "lights' shadows, not written (KHR_lights_punctual states none)".into(),
+            report.lights_shadows_unwritten,
+        ),
+        (
+            Unsupported,
+            "clips' looping, not written (written once through: a glTF animation states no looping)".into(),
+            report.clips_looping,
         ),
         (
             Selection,
@@ -296,7 +325,7 @@ fn omissions(report: &WriteReport, include_unplaced: bool) -> Vec<(NoticeKind, S
         ),
         (
             Unsupported,
-            "the environment's ambient light: glTF has none, carried in the scene's extras lighting nothing".into(),
+            "the environment's ambient light: glTF has none, nothing is lit by it".into(),
             report.ambient_unlit,
         ),
     ];
@@ -319,8 +348,11 @@ fn omissions(report: &WriteReport, include_unplaced: bool) -> Vec<(NoticeKind, S
     by(&mut out, &report.streams_skipped, &|k| {
         format!("{k} vertex streams not written: skin attributes of a mesh drawn without its skin")
     });
-    by(&mut out, &report.extras_unencoded, &|k| {
-        format!("{k} (a component or resource) without a JSON form, not in the extras")
+    by(&mut out, &report.components_without_form, &|k| {
+        format!("{k} components without a glTF form, not written")
+    });
+    by(&mut out, &report.resources_without_form, &|k| {
+        format!("{k} (a resource) without a glTF form, not written")
     });
     by(&mut out, &report.components_unwritten, &|k| {
         format!("{k} components on entities the glTF does not write")

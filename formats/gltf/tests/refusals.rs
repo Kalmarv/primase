@@ -159,6 +159,7 @@ fn extras_are_counted_or_refused() {
     };
     assert_eq!(counted(&doc), named(&[("a", 1), ("b", 1), ("c", 1), ("d", 1)]));
     doc["meshes"][0]["extras"] = json!({"targetNames": [], "other": true});
+    // any producer's key, by its name: one of primase's no different
     doc["nodes"][1]["extras"] = json!({"b": 0, "primase": {"core.source": {"version": 1, "value": "x"}}});
     assert_eq!(
         counted(&doc),
@@ -168,7 +169,7 @@ fn extras_are_counted_or_refused() {
             ("c", 1),
             ("d", 1),
             ("other", 1),
-            ("primase/core.source", 1)
+            ("primase", 1)
         ])
     );
     doc["accessors"][0]["extras"] = json!({"e": 5});

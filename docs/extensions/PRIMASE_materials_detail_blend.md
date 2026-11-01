@@ -98,10 +98,11 @@ draws the equation draws the surface under these. Its entries are a closed set:
 - `engineConstant`: `{"name", "value"}`, a constant the source's engine sets per draw, held at `value` (its words).
 - `engineTexture`: `{"name", "value"}`, a texture the source's engine binds per draw, read as the colour `value`.
 
-## Reading it strictly
+## Writing and reading it
 
-primase's reader (`formats/gltf/src/detail.rs`, run by `lower-gltf-materials`) takes the extension as this document
-states it and refuses, with an error naming the material, anything else: a key not listed above (`extras` apart), a
+primase writes it in the web format's tiles (`formats/web/src/gltf_extension.rs`, the web format's writer extension
+of primase-gltf's writer); primase's glTF output carries no vendor extension, and primase reads none back. A reader
+takes the extension as this document states it and refuses, with an error naming the material, anything else: a key not listed above (`extras` apart), a
 value outside a closed set (`equation`, `lowering`, a `glossScale`, `reflectance`, `source` or `frozen` form, a step), one
 to three `details` and exactly one fewer `weights`, a `power` outside 1 to 512, a `revision` newer than 4 or older than 3,
 a `baseSaturation`, a `max`, `affine` or `saturate` step or the `metallic_gloss` lowering in a file of revision 3, a
@@ -109,7 +110,7 @@ a `baseSaturation`, a `max`, `affine` or `saturate` step or the `metallic_gloss`
 1 to 255, a `vertex` attribute that is not `COLOR_n` or `TEXCOORD_n` (channel 0 to 3), an `alphaDetail` that is not a
 detail, a texture info without `colorSpace` or with one other than `srgb` or `linear`, and a number that is not a finite
 32-bit float. A material whose extension is sound but one of whose images the reader could not decode is read without
-its detail (its `pbr.material` alone), counted; nothing is guessed. A conforming writer lists the extension in
+its detail (the material's own `pbrMetallicRoughness` alone), counted; nothing is guessed. A conforming writer lists the extension in
 `extensionsUsed` only.
 
 ## Numbers

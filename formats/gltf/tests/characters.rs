@@ -239,7 +239,7 @@ fn accessor_bytes(doc: &primase_glb::Document, a: usize) -> &[u8] {
 /// 0, 1), the second's spelled out as joint 1 (slot 0 of [2,3] is the second joint of the list) with weight 1; the
 /// skinned node without a transform, at the scene's root, its weights [0.25]; the morph as a target with the sparse
 /// delta made dense; the clip as one animation with a rotation channel on joint 3's node and a weights channel on the
-/// skinned node, marked as looping; the control channel and root motion counted.
+/// skinned node, its looping counted (glTF states none); the control channel and root motion counted.
 #[test]
 fn a_rig_skin_morphs_and_clip_as_gltf() {
     let w = world([128, 127, 0, 0]);
@@ -309,7 +309,8 @@ fn a_rig_skin_morphs_and_clip_as_gltf() {
     // the animation
     let anim = &j["animations"][0];
     assert_eq!(anim["name"], "wave");
-    assert_eq!(anim["extras"]["primase.loop"], true);
+    assert!(anim.get("extras").is_none());
+    assert_eq!(report.clips_looping, 1);
     let channels = anim["channels"].as_array().unwrap();
     assert_eq!(channels.len(), 2);
     assert_eq!(

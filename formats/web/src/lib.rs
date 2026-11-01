@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 mod collision;
 mod compression;
 pub mod convert;
+pub mod gltf_extension;
 mod images;
 mod instancing;
 mod meshes;
@@ -1586,7 +1587,8 @@ impl TilePlan {
         content: &Content,
     ) -> Result<Option<(WrittenTile, Vec<Omitted>)>> {
         let w = cw.world;
-        let mut selection = primase_gltf::Selection {
+        let mut selection = primase_gltf::Selection::default();
+        let mut extension = gltf_extension::TileExtension {
             // the environment is the index's, scene-wide: a tile does not carry it
             omit_resources: [<primase_core::Environment as primase_core::Resource>::NAME.to_owned()].into(),
             ..Default::default()
@@ -1653,9 +1655,11 @@ impl TilePlan {
                 p.entity,
                 primase_gltf::Selected {
                     piece: piece.map(|(mesh, from)| primase_gltf::Piece { mesh, name, from }),
-                    extras: vec![("web.placement_key".into(), 1, serde_json::json!(p.entity.index()))],
                 },
             );
+            extension
+                .placement_keys
+                .insert(p.entity, u64::from(p.entity.index()));
         }
         // a document when anything is drawn: triangles, line segments or points
         let render = if primitives == 0 {
@@ -1666,6 +1670,7 @@ impl TilePlan {
                     return Err(Error::Invalid("tile has no finite geometry".into()));
                 }
                 // one document through every stage, assembled once (attach_items)
+                let extension = std::sync::Arc::new(extension);
                 let (doc, report) = primase_gltf::write_document(
                     w,
                     &primase_gltf::WriteOptions {
@@ -1674,9 +1679,11 @@ impl TilePlan {
                         images: Some(self.images_memo.clone()),
                         // the cell's world was verified when the cell was written
                         verified: true,
+                        extensions: primase_gltf::extend::Extensions(vec![extension.clone()]),
                         ..Default::default()
                     },
                 )?;
+                let counts = extension.counts();
                 if !report.textures_skipped.is_empty() {
                     return Err(Error::Invalid(format!(
                         "load textures before web export: {:?}",
@@ -1718,7 +1725,7 @@ impl TilePlan {
                     instanced_placements,
                     viewer_items: 0,
                     lights: 0,
-                    layered_materials: report.layered_materials,
+                    layered_materials: counts.layered_materials,
                     // set when the GLB is assembled
                     bytes: 0,
                     images: files.iter().map(|(n, _)| n.clone()).collect(),
@@ -1729,7 +1736,7 @@ impl TilePlan {
                     doc,
                     files,
                     mesh_files,
-                    omitted: omitted(&report)
+                    omitted: omitted(&report, &counts)
                         .into_iter()
                         .chain(approximated(instanced_placements, quantized))
                         .collect(),
@@ -1982,7 +1989,7 @@ struct Rendered {
 /// What the glTF writer's `report` of a tile's document says it left out, chose or drew approximately. Its textures
 /// skipped are an error before this (the writer is given loaded textures); placements it skips for a degenerate
 /// transform or a missing mesh are the tile writer's own (it never selects them).
-fn omitted(report: &primase_gltf::WriteReport) -> Vec<Omitted> {
+fn omitted(report: &primase_gltf::WriteReport, counts: &gltf_extension::Counts) -> Vec<Omitted> {
     let mut out: Vec<Omitted> = vec![
         (NoticeKind::Unsupported, WITH_FORMS.into(), report.placements_with_lods),
         (
@@ -1996,14 +2003,14 @@ fn omitted(report: &primase_gltf::WriteReport) -> Vec<Omitted> {
             NoticeKind::Unsupported,
             "layers of layered materials whose material has no pbr.material, written as empty slots (counted per tile)"
                 .into(),
-            report.layers_without_pbr,
+            counts.layers_without_pbr,
         ),
         (
             NoticeKind::Approximation,
             "primitives drawn with a layered material but lacking its weight attribute: they render as its host \
              material"
                 .into(),
-            report.primitives_layered_without_weights,
+            report.primitives_without_material_attribute,
         ),
         (
             NoticeKind::Selection,
@@ -2041,7 +2048,7 @@ fn omitted(report: &primase_gltf::WriteReport) -> Vec<Omitted> {
             n,
         ));
     }
-    for (name, &n) in &report.extras_unencoded {
+    for (name, &n) in &counts.extras_unencoded {
         out.push((
             NoticeKind::Unsupported,
             format!("{name} components without a JSON form, not in the glTF extras (counted per tile)"),

@@ -1,6 +1,5 @@
 //! A [`Selection`] writes part of the world without changing it: only the selected placements, each with its
-//! prototype's mesh or a piece of its own and extra node extras, only the selected lights, and the scene's extras
-//! without the omitted resources.
+//! prototype's mesh or a piece of its own, and only the selected lights.
 
 #![allow(clippy::unwrap_used)]
 
@@ -122,9 +121,9 @@ fn a_selection_writes_its_placements_pieces_and_lights() {
         names(&all, "nodes"),
         ["placed_0", "placed_1", "placed_2", "light_0", "light_1"]
     );
-    assert!(all["scenes"][0]["extras"]["primase"][Environment::NAME].is_object());
+    assert!(all["scenes"][0].get("extras").is_none());
 
-    // placement 0 whole, placement 1 as a one-triangle piece with an extra, placement 2 and the sun left out
+    // placement 0 whole, placement 1 as a one-triangle piece, placement 2 and the sun left out
     let selection = Selection {
         placements: BTreeMap::from([
             (placed[0], Selected::default()),
@@ -136,12 +135,10 @@ fn a_selection_writes_its_placements_pieces_and_lights() {
                         name: "crate.piece".into(),
                         from: vec![0],
                     }),
-                    extras: vec![("test.key".into(), 1, json!(7))],
                 },
             ),
         ]),
         lights: [lights[0]].into(),
-        omit_resources: [Environment::NAME.to_owned()].into(),
     };
     let before = format!("{:?}", w.components_json(placed[1]).unwrap());
     let doc = document(&w, Some(selection.clone()));
@@ -152,12 +149,9 @@ fn a_selection_writes_its_placements_pieces_and_lights() {
     );
     assert_eq!(names(&doc, "nodes"), ["placed_0", "placed_1", "light_0"]);
     assert_eq!(names(&doc, "meshes"), ["crate", "crate.piece"]);
-    // the prototype's mesh and the piece cut from it both carry the prototype's components
+    // the prototype's components glTF has no form for are on neither the prototype's mesh nor the piece cut from it
     for mesh in [0, 1] {
-        assert_eq!(
-            doc["meshes"][mesh]["extras"]["primase"]["test.prototype_note"]["value"],
-            "prototype"
-        );
+        assert!(doc["meshes"][mesh].get("extras").is_none());
     }
     let piece = &doc["meshes"][1]["primitives"][0];
     assert_eq!(
@@ -165,11 +159,9 @@ fn a_selection_writes_its_placements_pieces_and_lights() {
         3
     );
     assert_eq!(piece["material"], doc["meshes"][0]["primitives"][0]["material"]);
-    // the extra among the placement's own components, in name order
-    let extras = doc["nodes"][1]["extras"]["primase"].as_object().unwrap();
-    assert_eq!(extras.keys().collect::<Vec<_>>(), ["test.key", "test.z_after"]);
-    assert_eq!(extras["test.key"], json!({"version": 1, "value": 7}));
-    assert!(doc["nodes"][0].get("extras").is_none());
+    for node in doc["nodes"].as_array().unwrap() {
+        assert!(node.get("extras").is_none());
+    }
     assert!(doc["scenes"][0].get("extras").is_none());
 
     // a selected entity that is not a placement is refused
@@ -186,43 +178,14 @@ fn a_selection_writes_its_placements_pieces_and_lights() {
     assert!(err.to_string().contains("not a placement"), "{err}");
 }
 
-/// A dialect's per-primitive data, as a reader would type it.
-#[derive(Clone, Debug, PartialEq)]
-struct Parts(Vec<String>);
-impl primase_core::Component for Parts {
-    const NAME: &'static str = "test.parts";
-    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerPrimitive;
-    fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
-        Ok(Some(json!(self.0)))
-    }
-    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
-        Some(primase_core::remap_list(&self.0, from).map(Parts))
-    }
-}
-
+/// A piece states, for each of its primitives, the prototype primitive it is cut from: one that does not is refused.
 #[test]
-fn a_piece_keeps_its_prototypes_per_primitive_components_remapped() {
+fn a_piece_states_where_each_of_its_primitives_came_from() {
     let mut w = World::new();
     let m = w.spawn();
     w.insert(m, PbrMaterial::default());
     let proto = w.spawn();
-    let three = Mesh::new(
-        (0..3)
-            .map(|_| quad(Some(m), vec![0, 1, 2, 0, 2, 3]).into_primitives().remove(0))
-            .collect(),
-    );
-    w.insert(proto, three);
-    w.insert(proto, Name("slab".into()));
-    w.insert(proto, Parts(vec!["a".into(), "b".into(), "c".into()]));
-    let mut provenance = primase_core::Provenance::default();
-    for item in ["mesh 0", "mesh 1", "mesh 2"] {
-        provenance.push_part(primase_core::Origin::new(
-            Some("area.bnd"),
-            "slab.flver",
-            Some(item),
-        ));
-    }
-    w.insert(proto, provenance);
+    w.insert(proto, quad(Some(m), vec![0, 1, 2, 0, 2, 3]));
     let placed = w.spawn();
     w.insert(
         placed,
@@ -232,62 +195,39 @@ fn a_piece_keeps_its_prototypes_per_primitive_components_remapped() {
         },
     );
     w.insert(placed, Transform::IDENTITY);
-    // the piece: primitive 2's triangles, then primitive 0's
-    let piece = Mesh::new(vec![
-        quad(Some(m), vec![0, 1, 2]).into_primitives().remove(0),
-        quad(Some(m), vec![0, 2, 3]).into_primitives().remove(0),
-    ]);
-    let selection = Selection {
+    let selected = |from: Vec<usize>| Selection {
         placements: BTreeMap::from([(
             placed,
             Selected {
                 piece: Some(Piece {
-                    mesh: piece,
+                    mesh: quad(Some(m), vec![0, 2, 3]),
                     name: "slab.piece".into(),
-                    from: vec![2, 0],
+                    from,
                 }),
-                extras: Vec::new(),
             },
         )]),
         ..Selection::default()
     };
-    let before = format!("{:?}", w.components_json(proto).unwrap());
-    let doc = document(&w, Some(selection.clone()));
-    assert_eq!(
-        before,
-        format!("{:?}", w.components_json(proto).unwrap()),
-        "the world is unchanged"
-    );
-    assert_eq!(names(&doc, "meshes"), ["slab.piece"]);
-    let extras = &doc["meshes"][0]["extras"]["primase"];
-    assert_eq!(extras["test.parts"]["value"], json!(["c", "a"]));
-    assert_eq!(extras["core.provenance"]["value"]["parts"], json!([2, 0]));
-    assert_eq!(extras["core.provenance"]["value"]["origins"][2]["item"], "mesh 2");
-
-    // a piece that does not say where each of its primitives came from is refused
-    let mut wrong = selection;
-    wrong
-        .placements
-        .get_mut(&placed)
-        .unwrap()
-        .piece
-        .as_mut()
-        .unwrap()
-        .from = vec![2];
-    let err = primase_gltf::write(
-        &w,
-        &WriteOptions {
-            selection: Some(wrong),
-            ..WriteOptions::default()
-        },
-    )
-    .unwrap_err();
-    assert!(err.to_string().contains("2 primitives with 1 sources"), "{err}");
+    let write = |selection| {
+        primase_gltf::write(
+            &w,
+            &WriteOptions {
+                selection: Some(selection),
+                ..WriteOptions::default()
+            },
+        )
+    };
+    assert!(write(selected(vec![0])).is_ok());
+    for (from, says) in [(vec![], "1 primitives with 0 sources"), (vec![1], "primitive 1")] {
+        let err = write(selected(from)).unwrap_err().to_string();
+        assert!(err.contains(says), "{says}: {err}");
+    }
 }
 
-/// The environment's ambient has no glTF light: it is counted as not lit, and stays in the scene's extras as data.
+/// The environment's ambient has no glTF light: it is counted as not lit, and the environment as a resource without a
+/// glTF form.
 #[test]
-fn an_ambient_is_counted_unlit_and_kept_in_the_scenes_extras() {
+fn an_ambient_is_counted_unlit_and_not_written() {
     let mut w = World::new();
     let options = WriteOptions {
         group_by: GroupBy::None,
@@ -304,9 +244,7 @@ fn an_ambient_is_counted_unlit_and_kept_in_the_scenes_extras() {
     let (bytes, report) = primase_gltf::write(&w, &options).unwrap();
     assert_eq!(report.ambient_unlit, 1);
     assert!(report.to_string().contains("ambient not lit (no glTF form) 1"));
+    assert_eq!(report.resources_without_form.get(Environment::NAME), Some(&1));
     let doc: Value = serde_json::from_slice(primase_glb::parse(&bytes).unwrap().json).unwrap();
-    assert_eq!(
-        doc["scenes"][0]["extras"]["primase"][Environment::NAME]["value"]["ambient"]["light"]["Flat"],
-        json!([0.25, 0.5, 0.75])
-    );
+    assert!(doc["scenes"][0].get("extras").is_none());
 }

@@ -88,8 +88,9 @@ a list).
 A component type carries a schema version. Unknown components are carried through serialisation untouched unless their
 kind is marked **required**, in which case a reader that doesn't know it fails (glTF's `extensionsRequired`).
 **Lower and keep:** a lowering may keep its source component next to its result (the bake keeps
-`fromsoft.layered_material` beside `pbr.material`), and a writer marks the source `LowerAndCarry`: carried (glTF:
-`extras.primase`), and lowered too, so the planner runs the lowering.
+`fromsoft.layered_material` beside `pbr.material`), and a writer marks the source `LowerAndCarry`: carried by a writer
+whose format holds it, and lowered too, so the planner runs the lowering. The glTF writer writes standard glTF alone:
+what glTF has no form for is counted, not put in extras.
 
 **On disk:** the world serialises as "core + named component tables" (v2, `docs/SPEC.md`): a small manifest plus
 little-endian binary tables, generalising the skate-scene v1 interchange format (a JSON manifest, binary tables and
@@ -224,8 +225,8 @@ are unset (CONTRIBUTING.md).
 ## 7. Roadmap
 
 **v1.** Readers: Forza Horizon 6, a Unity game, Sekiro, GTA V (from existing scene-interchange folders first). Writers:
-ReSkate (skate. maps), Blender via glTF (materials, collections, and the
-un-lowered material data kept in `extras.primase` next to the baked PBR), and three.js / react-three-fiber.
+ReSkate (skate. maps), Blender via glTF (standard glTF: the baked PBR materials and group empties; what glTF has no
+form for counted), and three.js / react-three-fiber.
 
 **After v1:** Sunset Overdrive, Sonic Adventure 2, STL/3MF, the plotter writer, and rich Blender output: the games'
 real material setups (layered materials, shading recipes, spec/normal workflows) rebuilt as Blender node trees by a

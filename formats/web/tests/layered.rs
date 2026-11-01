@@ -1,17 +1,35 @@
-//! `core.layered` written as `PRIMASE_layered_material`: layer indices, mapping, per-layer UV set and transform (with
-//! rotation), null slots, the host copy of the first non-null layer, extensionsUsed, counts and determinism.
+//! `core.layered` written as `PRIMASE_layered_material` by the web format's writer extension
+//! ([`primase_web::gltf_extension`]) through primase-gltf's writer: layer indices, mapping, per-layer UV set and
+//! transform (with rotation), null slots, the host copy of the first non-null layer, extensionsUsed, counts and
+//! determinism.
 
 #![allow(clippy::unwrap_used)]
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use primase_core::pbr::{PbrMaterial, UvTransform};
 use primase_core::{
     Instance, Layer, LayerWeights, LayeredMaterial, Mesh, Name, Primitive, Semantic, Stream, Topology,
     Transform, WeightMapping, World,
 };
+use primase_gltf::extend::Extensions;
 use primase_gltf::{WriteOptions, write};
+use primase_web::gltf_extension::TileExtension;
 use serde_json::Value;
+
+/// The writer's options with `extension`.
+fn with(extension: &Arc<TileExtension>) -> WriteOptions {
+    WriteOptions {
+        extensions: Extensions(vec![extension.clone()]),
+        ..WriteOptions::default()
+    }
+}
+
+/// The writer's options with a fresh extension.
+fn options() -> WriteOptions {
+    with(&Arc::new(TileExtension::default()))
+}
 
 fn document(bytes: &[u8]) -> Value {
     let n = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
@@ -121,7 +139,8 @@ fn material<'a>(doc: &'a Value, name: &str) -> &'a Value {
 #[test]
 fn layered_material_is_an_extension_over_ordinary_layer_materials() {
     let (w, _) = world(None, WeightMapping::RgbProduct4, 4);
-    let (bytes, report) = write(&w, &WriteOptions::default()).unwrap();
+    let extension = Arc::new(TileExtension::default());
+    let (bytes, report) = write(&w, &with(&extension)).unwrap();
     let doc = document(&bytes);
     assert_eq!(
         doc["extensionsUsed"],
@@ -130,8 +149,8 @@ fn layered_material_is_an_extension_over_ordinary_layer_materials() {
     assert!(doc.get("extensionsRequired").is_none());
     assert_eq!(
         (
-            report.layered_materials,
-            report.primitives_layered_without_weights
+            extension.counts().layered_materials,
+            report.primitives_without_material_attribute
         ),
         (1, 0)
     );
@@ -177,13 +196,13 @@ fn layered_material_is_an_extension_over_ordinary_layer_materials() {
     // TEXCOORD_1 is selected by a layer, so the primitive gets the set it lacks (zero filled)
     assert!(prim["attributes"].get("TEXCOORD_1").is_some());
     // deterministic
-    assert_eq!(bytes, write(&w, &WriteOptions::default()).unwrap().0);
+    assert_eq!(bytes, write(&w, &options()).unwrap().0);
 }
 
 #[test]
 fn identity_mapping_needs_no_fourth_slot_and_all_null_hosts_are_black() {
     let (w, _) = world(None, WeightMapping::Identity, 2);
-    let doc = document(&write(&w, &WriteOptions::default()).unwrap().0);
+    let doc = document(&write(&w, &options()).unwrap().0);
     let ext = &material(&doc, "terrain")["extensions"]["PRIMASE_layered_material"];
     assert_eq!(ext["weights"]["mapping"], "identity");
     assert_eq!(ext["layers"].as_array().unwrap().len(), 2);
@@ -196,7 +215,7 @@ fn identity_mapping_needs_no_fourth_slot_and_all_null_hosts_are_black() {
             weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
         },
     );
-    let doc = document(&write(&w, &WriteOptions::default()).unwrap().0);
+    let doc = document(&write(&w, &options()).unwrap().0);
     let m = material(&doc, "terrain");
     assert_eq!(
         m["pbrMetallicRoughness"]["baseColorFactor"],
@@ -208,11 +227,11 @@ fn identity_mapping_needs_no_fourth_slot_and_all_null_hosts_are_black() {
 #[test]
 fn missing_weights_are_counted_and_other_semantics_refused() {
     let (w, _) = world(Some(Semantic::Color(9)), WeightMapping::RgbProduct4, 4);
-    let (_, report) = write(&w, &WriteOptions::default()).unwrap();
-    assert_eq!(report.primitives_layered_without_weights, 1);
+    let (_, report) = write(&w, &options()).unwrap();
+    assert_eq!(report.primitives_without_material_attribute, 1);
 
     let (w, _) = world(Some(Semantic::Normal), WeightMapping::Identity, 2);
-    let error = write(&w, &WriteOptions::default()).unwrap_err().to_string();
+    let error = write(&w, &options()).unwrap_err().to_string();
     assert!(error.contains("COLOR_n"), "{error}");
 }
 
@@ -259,11 +278,11 @@ fn per_pixel_channels_and_over_are_version_2() {
     ]);
     l.weights.composition = Composition::Over;
     w.insert(host, l);
-    let (bytes, _) = write(&w, &WriteOptions::default()).unwrap();
+    let (bytes, _) = write(&w, &options()).unwrap();
     // the mask encoded up front on several threads: the same bytes
     let threads = WriteOptions {
         threads: primase_foundations::parallel::Threads::new(4).unwrap(),
-        ..WriteOptions::default()
+        ..options()
     };
     assert!(write(&w, &threads).unwrap().0 == bytes);
     let doc = document(&bytes);
@@ -290,7 +309,7 @@ fn per_pixel_channels_and_over_are_version_2() {
     );
     // without channels and summed: version 1 as before (no version key)
     let (w, _) = world(None, WeightMapping::Identity, 2);
-    let doc = document(&write(&w, &WriteOptions::default()).unwrap().0);
+    let doc = document(&write(&w, &options()).unwrap().0);
     let ext = &material(&doc, "terrain")["extensions"]["PRIMASE_layered_material"];
     assert!(
         ext.get("version").is_none()
@@ -327,7 +346,7 @@ fn the_height_composition_is_version_3_with_a_height_per_slot() {
     l.weights.composition = Composition::Height { contrast: 0.5 };
     l.weights.heights = vec![h.clone(), h];
     w.insert(host, l);
-    let doc = document(&write(&w, &WriteOptions::default()).unwrap().0);
+    let doc = document(&write(&w, &options()).unwrap().0);
     let ext = &material(&doc, "terrain")["extensions"]["PRIMASE_layered_material"];
     assert_eq!(ext["version"], 3);
     assert_eq!(
@@ -357,7 +376,7 @@ fn product_channels_write_every_factor_and_require_version_five() {
             sources: vec![vertex(0), vertex(1), vertex(2)],
         },
     ]);
-    let (bytes, _) = write(&w, &WriteOptions::default()).unwrap();
+    let (bytes, _) = write(&w, &options()).unwrap();
     let doc = document(&bytes);
     let ext = &material(&doc, "terrain")["extensions"]["PRIMASE_layered_material"];
     assert_eq!(ext["version"], 5);
@@ -367,6 +386,6 @@ fn product_channels_write_every_factor_and_require_version_five() {
         assert_eq!(f["vertex"]["attribute"], "COLOR_1");
         assert_eq!(f["vertex"]["channel"], i);
     }
-    let (again, _) = write(&w, &WriteOptions::default()).unwrap();
+    let (again, _) = write(&w, &options()).unwrap();
     assert_eq!(bytes, again);
 }

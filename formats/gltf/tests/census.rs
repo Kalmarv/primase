@@ -243,16 +243,6 @@ fn single_mesh_agrees(name: &str, mesh: &Mesh) -> Result<(), String> {
     if generators != want {
         return Err(format!("generators {generators:?}"));
     }
-    // the writer keeps a prototype's skin in its node's extras; the encoder takes a mesh alone and has none
-    for node in docs[1].json["nodes"].as_array_mut().into_iter().flatten() {
-        if let Some(extras) = node
-            .get_mut("extras")
-            .and_then(|e| e.get_mut("primase"))
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            extras.remove("core.skin");
-        }
-    }
     let [a, b] = &docs;
     if serde_json::to_string(&a.json).unwrap() != serde_json::to_string(&b.json).unwrap() {
         return Err("the JSON differs".into());

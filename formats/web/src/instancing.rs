@@ -114,8 +114,8 @@ fn accessor(
     accessors.push(json!({"bufferView":view,"componentType":5126,"count":count,"type":if components==3{"VEC3"}else{"VEC4"}}));
     Ok(index)
 }
-/// The glTF writer's shadow extras key.
-const SHADOWS: &str = "primase.shadows";
+/// The shadow extras key the tile's writer extension writes.
+use crate::gltf_extension::SHADOWS;
 
 /// A node's transform as the glTF writer wrote it: its `matrix`, its `translation` alone, or none (identity).
 fn node_transform(node: &Value) -> Result<Transform> {

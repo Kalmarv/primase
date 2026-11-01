@@ -2,7 +2,7 @@
 //! mesh as a GLB of its own.
 
 use primase_core::json::{JsonError, f32s_value};
-use primase_core::{Component, Mesh, Primitive, Semantic, Stream, Topology};
+use primase_core::{Mesh, Primitive, Semantic, Stream, Topology};
 use serde_json::{Map, Value, json};
 
 use crate::read::{ElementType, bounds};
@@ -285,11 +285,9 @@ impl Buffers {
 }
 
 /// One mesh as a GLB of its own, named `name`: its primitives (materials ignored, every stream written, `COLOR_0`
-/// included) as mesh 0, drawn by a node at the origin under a group node, as the glTF writer writes an unplaced
-/// prototype whose primitives have no material: the node's extras show the mesh's `core.mesh` view (its summary,
-/// materials null), as the writer shows the components of an entity placed as itself. Skin streams are left out
-/// (glTF needs a skin for them). Refuses a mesh without primitives or with a primitive glTF can't hold
-/// ([`Buffers::primitive`]), naming it.
+/// included) as mesh 0, drawn by a node at the origin under a group node named like it, as the glTF writer writes an
+/// unplaced prototype whose primitives have no material. Skin streams are left out (glTF needs a skin for them).
+/// Refuses a mesh without primitives or with a primitive glTF can't hold ([`Buffers::primitive`]), naming it.
 pub fn encode_mesh(name: &str, mesh: &Mesh) -> Result<Vec<u8>> {
     if mesh.primitives().is_empty() {
         return Err(Error::Invalid {
@@ -315,23 +313,9 @@ pub fn encode_mesh(name: &str, mesh: &Mesh) -> Result<Vec<u8>> {
         }
         primitives.push(Value::Object(p));
     }
-    let mut bare = mesh.clone();
-    for mut p in bare.primitives_mut() {
-        *p.material_mut() = None;
-    }
-    let view = bare.to_json().map_err(|e| Error::Invalid {
-        item: "meshes[0]".into(),
-        detail: e.to_string(),
-    })?;
     let mut node = Map::new();
     node.insert("name".into(), json!(name));
     node.insert("mesh".into(), json!(0));
-    if let Some(value) = view {
-        node.insert(
-            "extras".into(),
-            json!({"primase": {Mesh::NAME: {"version": Mesh::VERSION, "value": value}}}),
-        );
-    }
     let mut root = Map::new();
     root.insert(
         "asset".into(),
@@ -343,7 +327,7 @@ pub fn encode_mesh(name: &str, mesh: &Mesh) -> Result<Vec<u8>> {
         "nodes".into(),
         json!([
             Value::Object(node),
-            {"name": name, "children": [0], "extras": {"primase.collection": name, "primase.group": "prototype"}},
+            {"name": name, "children": [0]},
         ]),
     );
     root.insert("meshes".into(), json!([{"name": name, "primitives": primitives}]));

@@ -90,16 +90,6 @@ fn assert_same(name: &str, mesh: &Mesh) {
     let version = env!("CARGO_PKG_VERSION");
     assert_eq!(generator(&mut ours), format!("primase-glb {version}"));
     assert_eq!(generator(&mut theirs), format!("primase-gltf {version}"));
-    // the writer keeps a prototype's skin in its node's extras; the encoder takes a mesh alone and has none
-    for node in theirs.json["nodes"].as_array_mut().into_iter().flatten() {
-        if let Some(extras) = node
-            .get_mut("extras")
-            .and_then(|e| e.get_mut("primase"))
-            .and_then(Value::as_object_mut)
-        {
-            extras.remove("core.skin");
-        }
-    }
     // the JSON in its key order, then the buffer
     assert_eq!(
         serde_json::to_string(&ours.json).unwrap(),

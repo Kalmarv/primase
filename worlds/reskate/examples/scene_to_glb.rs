@@ -6,7 +6,7 @@
 //!
 //! Each prototype's finest level of detail is selected (`select-lod{form=finest}`), then the reader's load step reads
 //! the prototypes' GLBs and the texture files of what is left (`read::interchange::load`). The default pipeline then lowers
-//! `skate.material` to `pbr.material` (keeping the skate material, which goes to extras) and converts normal maps to
+//! `skate.material` to `pbr.material` (the skate material kept, counted: glTF has no form for it) and converts normal maps to
 //! glTF's convention: `lower-skate-pbr, normalize-normals, ...`. The world is verified after the reader and after
 //! every pass; the run report lists what each pass did and approximated.
 

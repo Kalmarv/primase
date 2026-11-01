@@ -1789,6 +1789,24 @@ impl World {
         out
     }
 
+    /// Names of the components (typed and opaque) this entity has, sorted.
+    pub fn component_names_of(&self, e: Entity) -> Vec<&str> {
+        let mut names: Vec<&str> = self
+            .columns
+            .values()
+            .filter(|c| c.contains(e))
+            .map(|c| c.name())
+            .collect();
+        names.extend(
+            self.opaque
+                .iter()
+                .filter(|(_, c)| c.contains_key(&e))
+                .map(|(n, _)| n.as_str()),
+        );
+        names.sort_unstable();
+        names
+    }
+
     /// Whether this entity has a component of this name (typed or opaque).
     pub fn entity_has_named(&self, e: Entity, name: &str) -> bool {
         self.columns.values().any(|c| c.name() == name && c.contains(e))

@@ -1,6 +1,7 @@
-//! GTA's lookup-blended terrain (Vespucci Beach, which has a `*_cm*` and a `*_2tex_blend*` one) as layered materials with per-pixel weight channels: the glTF writer
-//! writes them (`PRIMASE_layered_material` version 2, the lookup a mask at TEXCOORD_1), and after `bake-layer-channels`
-//! they are vertex-weighted (version 1, a colour attribute) for a destination that blends by vertex weights.
+//! GTA's lookup-blended terrain (Vespucci Beach, which has a `*_cm*` and a `*_2tex_blend*` one) as layered materials with per-pixel weight channels: the web
+//! format's tiles write them (`PRIMASE_layered_material` version 2, the lookup a mask at TEXCOORD_1, through the web
+//! format's writer extension), and after `bake-layer-channels` they are vertex-weighted (version 1, a colour
+//! attribute) for a destination that blends by vertex weights.
 //!
 //! Needs `installs.gta` and `keys.gta`.
 mod inputs;
@@ -32,9 +33,14 @@ fn vespucci(m: &PassManager, source: &GtaSource) -> Result<World> {
     Ok(w)
 }
 
-/// The written glTF's layered materials' `PRIMASE_layered_material` objects.
+/// The layered materials' `PRIMASE_layered_material` objects, as the web format's writer extension writes them.
 fn layered(w: &World) -> Result<Vec<Value>> {
-    let (doc, _) = primase_gltf::write_document(w, &primase_gltf::WriteOptions::default())?;
+    let extension = std::sync::Arc::new(primase_web::gltf_extension::TileExtension::default());
+    let options = primase_gltf::WriteOptions {
+        extensions: primase_gltf::extend::Extensions(vec![extension]),
+        ..primase_gltf::WriteOptions::default()
+    };
+    let (doc, _) = primase_gltf::write_document(w, &options)?;
     Ok(doc
         .json
         .get("materials")

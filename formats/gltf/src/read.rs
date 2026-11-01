@@ -19,9 +19,8 @@
 //! - **Meshes** each glTF mesh a scene node draws becomes a prototype (`core.mesh`, its name), its primitives drawing
 //!   the material entities. **Materials** are read as their glTF JSON (`gltf.material`, with `core.name`), and the
 //!   images their core texture slots sample as `core.texture`s with a `gltf.material_textures` component ([`crate::textures`]:
-//!   PNG decoded, other formats refused by name and counted), and those of `PRIMASE_materials_detail_blend`'s slots
-//!   with `gltf.detail_textures`; `lower-gltf-materials` ([`crate::lower`]) turns them into `pbr.material` and
-//!   `pbr.detail` ([`crate::detail`]). A mesh drawn with a skin gets `core.skin`: per primitive with joint
+//!   PNG decoded, other formats refused by name and counted); `lower-gltf-materials` ([`crate::lower`]) turns them
+//!   into `pbr.material`. A mesh drawn with a skin gets `core.skin`: per primitive with joint
 //!   streams, `Streams` influences of its `JOINTS_n`/`WEIGHTS_n` sets as stored; one binding per glTF skin it is
 //!   drawn with (`BindingId` the skin's index), its palette the skin's joints in order with their inverse bind
 //!   matrices as stored (identity where the skin gives none), deformation linear (glTF's). The weight rule is
@@ -46,20 +45,17 @@
 //! - **Lights** (`KHR_lights_punctual`): each scene node naming one of the document's lights is a `core.light` entity
 //!   (the node's name, `core.transform` its world transform at the stored pose, as a placement's): the light's type,
 //!   colour, intensity, range and a spot's cones as stored, every default the extension's (white, intensity 1, no
-//!   range, cones 0 and pi / 4). Its `cast_shadows` is the node's `extras["primase.shadows"].cast` (`"on"`, `"off"`),
-//!   unknown where the node states none. A light on or under a skeleton's joint stays where the stored pose puts it
-//!   (core's lights follow no rig), counted; a light no scene node places is counted.
-//! - **Shadows**: a mesh node's `extras["primase.shadows"]` (version 1: `cast` `"off"`, `"on"` or `"only"`, `receive`
-//!   a boolean) becomes its placement's `core.shadows`.
+//!   range, cones 0 and pi / 4); whether it casts shadows unknown (glTF states none). A light on or under a
+//!   skeleton's joint stays where the stored pose puts it (core's lights follow no rig), counted; a light no scene
+//!   node places is counted.
 //! - **The asset**: a root with `core.asset` (each skeleton a rig, each placement a part, each clip a clip),
 //!   `core.source` the caller's key and `core.name`.
 //!
 //! Not read, counted: cameras, scene nodes read as nothing of their own (no joint, rig, mesh, light or camera node:
 //! their transforms are composed into the nodes below them, their names and grouping are not read), the skins'
 //! `skeleton` hints (no effect on deformation), images no core material slot
-//! samples, the images refused by name, every `extras` key of the objects read that is not read above (a mesh's
-//! `targetNames`, a node's `primase.shadows`), by name (each component of primase's own `extras.primase` by its name,
-//! `primase/<component>`), and every optional extension of the document, scene, nodes, meshes, primitives, skins,
+//! samples, the images refused by name, every `extras` key of the objects read but a mesh's `targetNames` (read
+//! above), by name, and every optional extension of the document, scene, nodes, meshes, primitives, skins,
 //! animations and lights other than `KHR_lights_punctual`, by name. A material's extensions are its lowering's
 //! (`lower-gltf-materials`), its `extras` are counted here.
 use std::collections::{BTreeMap, BTreeSet};
@@ -70,8 +66,8 @@ use primase_core::{
     Asset, Attachment, Binding, BindingId, Clip, ClipBinding, ClipTarget, Deformation, Deltas, Entity,
     Extrapolation, Influences, Instance, Interpolation, Joint, JointId, Light, LightKind, MorphFrame,
     MorphId, MorphTarget, MorphWeights, Morphs, Name, Opaque, OpaqueData, Property, Rest, RigInstance, Role,
-    Semantic, ShadowCast, Shadows, Skeleton, Skin, SkinInstance, Slot, Socket, SocketId, Sockets, Source,
-    Stream, Transform, WeightRule, World,
+    Semantic, Skeleton, Skin, SkinInstance, Slot, Socket, SocketId, Sockets, Source, Stream, Transform,
+    WeightRule, World,
 };
 use primase_glb::{
     AnimationInterpolation, AnimationPath, Extensions, Gltf, Local, ReadMesh, ReadNode, ReadSkin,
@@ -86,9 +82,6 @@ pub const MATERIAL: &str = "gltf.material";
 
 /// The lights extension, read into `core.light`.
 const LIGHTS: &str = "KHR_lights_punctual";
-
-/// The `extras` key a node states its shadows under (the writer's, `crate::write`).
-const SHADOWS: &str = "primase.shadows";
 
 /// What [`read`] read, and what it did not.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -117,8 +110,7 @@ pub struct ReadReport {
     pub skeleton_hints: usize,
     /// The `extras` keys the reader read nowhere, by name, each with the number of objects stating it: every key of
     /// the scene's, the scene nodes', drawn skins', drawn meshes', their primitives', the animations', the materials'
-    /// and the lights' extras but a mesh's `targetNames` and a light or mesh node's `primase.shadows`; each component
-    /// in primase's own `primase` key as `primase/<component name>`.
+    /// and the lights' extras but a mesh's `targetNames`.
     pub extras_not_read: BTreeMap<String, usize>,
     /// The optional extensions the reader read nowhere, by name, each with the number of objects stating it: the
     /// document's, the scene's, the scene nodes', drawn meshes', their primitives', drawn skins', the animations' and
@@ -234,8 +226,8 @@ fn node_name(n: &ReadNode, i: usize) -> String {
     n.name.clone().unwrap_or_else(|| format!("node {i}"))
 }
 
-/// Counts the `extras` keys of one object that are not in `read`, by name: each component in primase's own `primase`
-/// object as `primase/<name>`; extras that are not an object as `(not an object)`.
+/// Counts the `extras` keys of one object that are not in `read`, by name; extras that are not an object as
+/// `(not an object)`.
 fn tally_extras(report: &mut ReadReport, extras: Option<&Value>, read: &[&str]) {
     let Some(extras) = extras else { return };
     let mut count = |key: String| *report.extras_not_read.entry(key).or_default() += 1;
@@ -243,14 +235,8 @@ fn tally_extras(report: &mut ReadReport, extras: Option<&Value>, read: &[&str]) 
         count("(not an object)".to_owned());
         return;
     };
-    for (key, value) in keys {
-        if read.contains(&key.as_str()) {
-            continue;
-        }
-        match (key.as_str(), value.as_object()) {
-            ("primase", Some(components)) => components.keys().for_each(|c| count(format!("primase/{c}"))),
-            _ => count(key.clone()),
-        }
+    for key in keys.keys().filter(|k| !read.contains(&k.as_str())) {
+        count(key.clone());
     }
 }
 
@@ -259,48 +245,6 @@ fn tally_extensions(report: &mut ReadReport, extensions: &Extensions, read: &[&s
     for name in extensions.keys().filter(|n| !read.contains(&n.as_str())) {
         *report.extensions_not_read.entry(name.clone()).or_default() += 1;
     }
-}
-
-/// A node's `extras["primase.shadows"]` (version 1), as the writer states it: `cast` and `receive`, each where stated.
-/// `None` where the node states none, or states another version (counted as not read by the caller). A malformed
-/// statement is an error naming the node.
-fn node_shadows(node: &ReadNode, n: usize) -> Result<Option<(Option<ShadowCast>, Option<bool>)>> {
-    let Some(v) = node.extras.as_ref().and_then(|x| x.get(SHADOWS)) else {
-        return Ok(None);
-    };
-    let item = || format!("nodes[{n}].extras.{SHADOWS}");
-    let o = v.as_object().ok_or_else(|| invalid(item(), "not an object"))?;
-    if o.get("version").and_then(Value::as_u64) != Some(1) {
-        return Ok(None);
-    }
-    if let Some(k) = o
-        .keys()
-        .find(|k| !["version", "cast", "receive"].contains(&k.as_str()))
-    {
-        return Err(invalid(item(), format!("unknown key {k:?}")));
-    }
-    let cast = match o.get("cast") {
-        None => None,
-        Some(c) => Some(match c.as_str() {
-            Some("off") => ShadowCast::Off,
-            Some("on") => ShadowCast::On,
-            Some("only") => ShadowCast::Only,
-            _ => {
-                return Err(invalid(
-                    item(),
-                    format!("cast {c} is not \"off\", \"on\" or \"only\""),
-                ));
-            }
-        }),
-    };
-    let receive = match o.get("receive") {
-        None => None,
-        Some(r) => Some(
-            r.as_bool()
-                .ok_or_else(|| invalid(item(), format!("receive {r} is not a boolean")))?,
-        ),
-    };
-    Ok(Some((cast, receive)))
 }
 
 /// A number of a light object, finite and at least 0 (`min`), else an error naming it.
@@ -316,16 +260,10 @@ fn light_number(o: &serde_json::Map<String, Value>, key: &str, path: &str) -> Re
     }
 }
 
-/// Light `i` of the document's `KHR_lights_punctual` list as a core light (its shadows the node's), strictly: an
-/// unknown property, type or value out of the extension's ranges is an error naming it. Its extras and extensions are
-/// counted the `first` time a node names it.
-fn punctual_light(
-    report: &mut ReadReport,
-    lights: &[Value],
-    i: usize,
-    cast_shadows: Option<bool>,
-    first: bool,
-) -> Result<Light> {
+/// Light `i` of the document's `KHR_lights_punctual` list as a core light, strictly: an unknown property, type or
+/// value out of the extension's ranges is an error naming it. Its extras and extensions are counted the `first` time
+/// a node names it.
+fn punctual_light(report: &mut ReadReport, lights: &[Value], i: usize, first: bool) -> Result<Light> {
     let path = format!("extensions.{LIGHTS}.lights[{i}]");
     let o = lights
         .get(i)
@@ -427,7 +365,7 @@ fn punctual_light(
         color,
         intensity: light_number(o, "intensity", &path)?.unwrap_or(1.0),
         range,
-        cast_shadows,
+        cast_shadows: None,
         radius: None,
         specular: None,
     })
@@ -566,14 +504,7 @@ pub fn read_with_images(
     report.cameras = order.iter().filter(|&&n| nodes[n].camera.is_some()).count();
     for &n in &order {
         let node = &nodes[n];
-        // a light or mesh node's shadows are read (a version this reader does not know is counted with the rest)
-        let shadows_read =
-            (node.mesh.is_some() || node.extensions.contains_key(LIGHTS)) && node_shadows(node, n)?.is_some();
-        tally_extras(
-            &mut report,
-            node.extras.as_ref(),
-            if shadows_read { &[SHADOWS] } else { &[] },
-        );
+        tally_extras(&mut report, node.extras.as_ref(), &[]);
         tally_extensions(&mut report, &node.extensions, &[LIGHTS]);
     }
 
@@ -877,9 +808,6 @@ pub fn read_with_images(
         );
         w.insert(p, transform(&world_of[&n]));
         w.insert(p, Name(node_name(node, n)));
-        if let Some((cast, receive)) = node_shadows(node, n)? {
-            w.insert(p, Shadows { cast, receive });
-        }
         if let Some(s) = node.skin {
             let (_, rig) = skin_skeleton(s)?;
             w.insert(
@@ -970,20 +898,8 @@ pub fn read_with_images(
             .and_then(Value::as_u64)
             .and_then(|i| usize::try_from(i).ok())
             .ok_or_else(|| invalid(&path, "light is not an index"))?;
-        let cast_shadows = match node_shadows(node, n)? {
-            None => None,
-            Some((None, None)) => None,
-            Some((Some(ShadowCast::On), None)) => Some(true),
-            Some((Some(ShadowCast::Off), None)) => Some(false),
-            Some(_) => {
-                return Err(invalid(
-                    format!("nodes[{n}].extras.{SHADOWS}"),
-                    "a light's shadows are cast \"on\" or \"off\" alone",
-                ));
-            }
-        };
         let first = placed_lights.insert(i);
-        let light = punctual_light(&mut report, &lights, i, cast_shadows, first)?;
+        let light = punctual_light(&mut report, &lights, i, first)?;
         let e = w.spawn();
         w.insert(e, light);
         w.insert(e, transform(&world_of[&n]));

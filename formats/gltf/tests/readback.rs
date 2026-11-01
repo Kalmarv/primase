@@ -1,8 +1,7 @@
-//! What the writer states of lights and shadows reads back: each `KHR_lights_punctual` light a `core.light` equal to
-//! the one written (kind, colour, intensity, range, a spot's cones, shadow casting) at its node's world transform, each
-//! placement's `primase.shadows` its `core.shadows` (the placement's own fields, else its prototype's, as written). An
-//! optional extension or an `extras` key the reader does not read is counted by name, never refused; a required
-//! extension is refused, and a light the extension states outside its ranges is an error naming it.
+//! What the writer writes of lights reads back: each `KHR_lights_punctual` light a `core.light` equal to the one
+//! written (kind, colour, intensity, range, a spot's cones) at its node's world transform. An optional extension or an
+//! `extras` key the reader does not read is counted by name, never refused; a required extension is refused, and a
+//! light the extension states outside its ranges is an error naming it.
 
 #![allow(clippy::unwrap_used)]
 
@@ -11,7 +10,7 @@ mod common;
 use std::collections::BTreeMap;
 
 use primase_core::pbr::PbrMaterial;
-use primase_core::{Instance, Light, LightKind, Mesh, Name, ShadowCast, Shadows, Source, Transform, World};
+use primase_core::{Instance, Light, LightKind, Mesh, Name, Transform, World};
 use primase_gltf::{ReadReport, WriteOptions, read_glb, write};
 use serde_json::{Value, json};
 
@@ -23,33 +22,14 @@ fn placed(angle: f32, at: [f32; 3]) -> Transform {
     }
 }
 
-/// A prototype that casts no shadow (and names its source), placed as a shadow proxy that does not receive, and as a
-/// placement stating nothing; a point light that casts, a spot that does not, a sun that states nothing.
+/// A prototype placed twice; a point light, a spot and a sun (glTF states no light's shadows: none is stated).
 fn world() -> World {
     let mut w = World::new();
     let m = w.spawn();
     w.insert(m, PbrMaterial::default());
     let proto = w.spawn();
     w.insert(proto, Mesh::new(vec![common::rich_primitive(Some(m), 0.0)]));
-    w.insert(proto, Source("models/crate".to_owned()));
-    w.insert(
-        proto,
-        Shadows {
-            cast: Some(ShadowCast::Off),
-            receive: None,
-        },
-    );
-    for (name, x, own) in [
-        (
-            "proxy",
-            0.0,
-            Some(Shadows {
-                cast: Some(ShadowCast::Only),
-                receive: Some(false),
-            }),
-        ),
-        ("plain", 2.0, None),
-    ] {
+    for (name, x) in [("proxy", 0.0), ("plain", 2.0)] {
         let e = w.spawn();
         w.insert(
             e,
@@ -60,9 +40,6 @@ fn world() -> World {
         );
         w.insert(e, placed(0.0, [x, 0.0, 0.0]));
         w.insert(e, Name(name.to_owned()));
-        if let Some(s) = own {
-            w.insert(e, s);
-        }
     }
     let lights = [
         (
@@ -72,7 +49,7 @@ fn world() -> World {
                 color: [0.9, 0.5, 0.25],
                 intensity: 0.5,
                 range: Some(8.0),
-                cast_shadows: Some(true),
+                cast_shadows: None,
                 radius: None,
                 specular: None,
             },
@@ -88,7 +65,7 @@ fn world() -> World {
                 color: [1.0; 3],
                 intensity: 40.0,
                 range: Some(12.0),
-                cast_shadows: Some(false),
+                cast_shadows: None,
                 radius: None,
                 specular: None,
             },
@@ -176,38 +153,6 @@ fn lights_read_back_equal_at_their_place() {
         "{:?}",
         report.extensions_not_read
     );
-}
-
-#[test]
-fn placements_read_back_their_shadows() {
-    let (back, report) = read(&glb(&world())).unwrap();
-    let shadows = by_name::<Shadows>(&back);
-    assert_eq!(
-        shadows,
-        BTreeMap::from([
-            (
-                "proxy".to_owned(),
-                Shadows {
-                    cast: Some(ShadowCast::Only),
-                    receive: Some(false),
-                }
-            ),
-            // stating nothing of its own: its prototype's, as written on its node
-            (
-                "plain".to_owned(),
-                Shadows {
-                    cast: Some(ShadowCast::Off),
-                    receive: None,
-                }
-            ),
-        ])
-    );
-    for (e, _) in back.iter::<Shadows>() {
-        assert!(back.has::<Instance>(e));
-    }
-    // read: not counted; what is not read is counted by name (the prototype's source, on its mesh)
-    assert!(!report.extras_not_read.contains_key("primase.shadows"));
-    assert_eq!(report.extras_not_read.get("primase/core.source"), Some(&1));
 }
 
 /// The writer's group node (one per prototype by default) is read as nothing of its own: counted, with a notice; its

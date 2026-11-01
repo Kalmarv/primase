@@ -123,12 +123,12 @@ type Prepared = Option<([u32; 2], u32, u64)>;
 
 type CacheKey = ([u8; 32], Role, AlphaPolicy, Prepared);
 
-/// The textures a material's `PRIMASE_materials_detail_blend` binds (`primase_gltf::detail`): each slot's index
+/// The textures a material's `PRIMASE_materials_detail_blend` binds ([`crate::gltf_extension`]): each slot's index
 /// pointer, its role by the slot's stated `colorSpace` (`srgb` a colour; `linear` data, the packed normal, gloss and
 /// weight lanes included, so never `Normal`), and, for the colour textures whose alpha is the surface's (the base's and
 /// that of the detail `alphaDetail` names: the equation's alpha is their product), a factor of 1.
 fn detail_textures(material: &Value) -> Vec<(String, Role, Option<f32>)> {
-    let root = format!("/extensions/{}", primase_gltf::detail::NAME);
+    let root = format!("/extensions/{}", crate::gltf_extension::DETAIL);
     let Some(x) = material.pointer(&root) else {
         return Vec::new();
     };

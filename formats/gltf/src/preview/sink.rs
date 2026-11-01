@@ -5,27 +5,46 @@ use std::path::PathBuf;
 
 use primase_core::convert::{Finished, Writer};
 use primase_core::pass::Target;
-use primase_core::state::StateAxis;
-use primase_core::{Asset, Component, Name, Source, World};
+use primase_core::state::{Condition, PrimitiveCondition, StateAxis, StateOverride};
+use primase_core::{Asset, Attachment, Component, Instance, Mesh, Name, Source, World};
 
 use super::describe;
 use super::manifest::{self as m, Manifest};
-use crate::parts::preview_target;
+use crate::parts::{Carried, preview_target};
 use crate::{GlbParts, WriteOptions};
 
-/// What the manifest carries of entities the glTF does not write: an asset root and a state axis, with the name and
-/// source the manifest states as their label and id. Their other components stay told as left out.
-fn carried(part: &World) -> BTreeMap<&'static str, u64> {
-    let mut out = BTreeMap::new();
-    let carriers: Vec<_> = part
-        .entities()
-        .filter(|&e| part.has::<Asset>(e) || part.has::<StateAxis>(e))
-        .collect();
-    for e in carriers {
-        for name in [Asset::NAME, StateAxis::NAME, Name::NAME, Source::NAME] {
+/// What the manifest carries beyond the glTF. Of entities the glTF does not write: an asset root and a state axis,
+/// with the name and source the manifest states as their label and id (their other components stay told as left
+/// out). Of the placements and prototypes it writes: their conditions, per-primitive conditions, overrides and
+/// attachments.
+fn carried(part: &World) -> Carried {
+    let mut out = Carried::default();
+    let count = |into: &mut BTreeMap<&'static str, u64>, e, names: &[&'static str]| {
+        for &name in names {
             if part.entity_has_named(e, name) {
-                *out.entry(name).or_default() += 1;
+                *into.entry(name).or_default() += 1;
             }
+        }
+    };
+    for e in part.entities() {
+        if part.has::<Asset>(e) || part.has::<StateAxis>(e) {
+            count(
+                &mut out.unwritten,
+                e,
+                &[Asset::NAME, StateAxis::NAME, Name::NAME, Source::NAME],
+            );
+        }
+        if part.has::<Instance>(e) || part.has::<Mesh>(e) {
+            count(
+                &mut out.beside,
+                e,
+                &[
+                    Condition::NAME,
+                    PrimitiveCondition::NAME,
+                    StateOverride::NAME,
+                    Attachment::NAME,
+                ],
+            );
         }
     }
     out

@@ -1,7 +1,7 @@
 //! Writer gates: write the synthetic world, read the GLB back with our strict reader, compare everything with the world
 //! (geometry bit for bit, transforms bit for bit, baked mirrors and shears against independent properties, materials,
-//! textures, extras, report counts); a non-rigid placement refused; determinism; the Khronos validator when
-//! `tools.gltf_validator` is set.
+//! textures, report counts, and no extras: what glTF has no form for is counted); a non-rigid placement refused;
+//! determinism; the Khronos validator when `tools.gltf_validator` is set.
 
 // Test code: helpers outside #[test] functions unwrap too (clippy.toml allows it only inside them).
 #![allow(clippy::unwrap_used)]
@@ -12,7 +12,7 @@ mod inputs;
 use std::collections::BTreeMap;
 
 use common::{Built, build, scratch};
-use primase_core::{Entity, Mesh, MeshFile, Semantic, Stream, Topology, World};
+use primase_core::{Entity, Mesh, MeshFile, Semantic, Source, Stream, Topology, World};
 use primase_glb::{Gltf, load_mesh_files};
 use primase_gltf::{GroupBy, WriteOptions, WriteReport, write};
 use serde_json::{Value, json};
@@ -33,11 +33,21 @@ fn arr<'a>(v: &'a Value, key: &str) -> &'a [Value] {
     v[key].as_array().map_or(&[], Vec::as_slice)
 }
 
-/// The node whose extras carry this `core.source`.
-fn node_by_source<'a>(doc: &'a Value, source: &str) -> Option<&'a Value> {
-    arr(doc, "nodes")
+/// The node written for the placement whose `core.source` is `source` (the writer's layout), if it was written.
+fn node_by_source<'a>(b: &Built, report: &WriteReport, doc: &'a Value, source: &str) -> Option<&'a Value> {
+    let (e, _) = b.world.iter::<Source>().find(|(_, s)| s.0 == source)?;
+    arr(doc, "nodes").get(report.layout.placements.get(&e)?.node)
+}
+
+/// The `core.source` of the placement written as node `node`.
+fn source_of_node(b: &Built, report: &WriteReport, node: usize) -> String {
+    let (&e, _) = report
+        .layout
+        .placements
         .iter()
-        .find(|n| n["extras"]["primase"]["core.source"]["value"] == source)
+        .find(|(_, d)| d.node == node)
+        .unwrap();
+    b.world.get::<Source>(e).unwrap().0.clone()
 }
 
 fn f32s(v: &Value) -> Vec<f32> {
@@ -79,14 +89,14 @@ fn round_trip_geometry_and_transforms() {
 
     // Regular and mirrored: the transform exactly, the prototype's mesh shared, geometry bit-exact (glTF reverses
     // the winding of a negative-determinant node itself).
-    let regular = node_by_source(doc, "plac:0").unwrap();
+    let regular = node_by_source(&b, &report, doc, "plac:0").unwrap();
     let attributes =
         &doc["meshes"][regular["mesh"].as_u64().unwrap() as usize]["primitives"][0]["attributes"];
     assert!(attributes.get("TANGENT").is_some());
     assert!(attributes.get("_PRIMASE_TANGENT1").is_some());
     assert!(attributes.get("TANGENT1").is_none());
     assert!(attributes.get("_TANGENT1").is_none());
-    let mirrored = node_by_source(doc, "plac:1").unwrap();
+    let mirrored = node_by_source(&b, &report, doc, "plac:1").unwrap();
     assert_eq!(bits(&f32s(&regular["matrix"])), bits(&matrix_of(&b, b.regular)));
     assert_eq!(bits(&f32s(&mirrored["matrix"])), bits(&matrix_of(&b, b.mirrored)));
     assert_eq!(
@@ -111,7 +121,7 @@ fn round_trip_geometry_and_transforms() {
     assert_eq!(m.primitives[2].material, None);
 
     // Variant 1: its own mesh with the overriding material, sharing the accessors.
-    let v1 = node_by_source(doc, "plac:5").unwrap();
+    let v1 = node_by_source(&b, &report, doc, "plac:5").unwrap();
     assert_ne!(v1["mesh"], regular["mesh"]);
     assert!(
         v1.get("matrix").is_none() && v1.get("translation").is_none(),
@@ -137,7 +147,7 @@ fn round_trip_geometry_and_transforms() {
     // Sheared (baked by bake-nonrigid): only the translation on the node, drawing a copy with the authored 3x3 part
     // applied.
     for (src, entity, mirrored) in [("plac:2", b.sheared, false), ("plac:3", b.sheared_mirrored, true)] {
-        let node = node_by_source(doc, src).unwrap();
+        let node = node_by_source(&b, &report, doc, src).unwrap();
         assert!(node.get("matrix").is_none());
         let tr = b.authored[&entity].cols;
         match node.get("translation") {
@@ -149,16 +159,16 @@ fn round_trip_geometry_and_transforms() {
         check_baked(&baked.to_mesh(), rich, tr, mirrored);
     }
     assert!(
-        node_by_source(doc, "plac:4").is_none(),
+        node_by_source(&b, &report, doc, "plac:4").is_none(),
         "degenerate placement skipped"
     );
     assert!(
-        node_by_source(doc, "plac:8").is_none(),
+        node_by_source(&b, &report, doc, "plac:8").is_none(),
         "placement of a prototype without geometry"
     );
 
     // Big: unsigned int indices; a sequential primitive keeps no indices.
-    let big = node_by_source(doc, "plac:6").unwrap();
+    let big = node_by_source(&b, &report, doc, "plac:6").unwrap();
     assert_eq!(bits(&f32s(&big["translation"])), bits(&[-0.0, 1.0, 2.0]));
     let big_mesh = gltf.read_mesh(big["mesh"].as_u64().unwrap() as usize).unwrap();
     let want = b.world.get::<Mesh>(b.proto_big).unwrap();
@@ -187,7 +197,7 @@ fn round_trip_geometry_and_transforms() {
     assert_eq!(arr(doc, "accessors")[ia]["componentType"], 5123);
 
     // Lines with a unorm16 colour; the skin attribute is skipped and counted.
-    let rail = node_by_source(doc, "plac:7").unwrap();
+    let rail = node_by_source(&b, &report, doc, "plac:7").unwrap();
     let rail_mesh = gltf.read_mesh(rail["mesh"].as_u64().unwrap() as usize).unwrap();
     let p = &rail_mesh.primitives[0].primitive;
     assert_eq!(p.topology, Topology::Lines);
@@ -335,7 +345,7 @@ fn check_baked(baked: &Mesh, proto: &Mesh, tr: [[f32; 3]; 4], mirrored: bool) {
 }
 
 #[test]
-fn round_trip_materials_textures_and_extras() {
+fn round_trip_materials_and_textures_without_extras() {
     let b = build(&scratch("rt-mat"));
     let (gltf, report, _) = written(&b);
     let doc = gltf.json();
@@ -410,17 +420,10 @@ fn round_trip_materials_textures_and_extras() {
         (sampler["wrapS"].as_u64(), sampler["wrapT"].as_u64()),
         (Some(33071), Some(33648))
     );
-    assert_eq!(
-        nt["extras"]["primase"]["core.source"],
-        json!({"version": 1, "value": "tex:normal"})
-    );
+    assert!(nt.get("extras").is_none());
     assert_eq!(f32s(&stone["emissiveFactor"]), [0.1, 0.0, 0.0]);
     assert_eq!(stone["doubleSided"], true);
-    assert_eq!(
-        stone["extras"],
-        json!({"primase": {"skate.material": {"version": 1,
-            "value": {"class": "opaque", "base": "stone_d", "tint": [200, 40, 40]}}}})
-    );
+    assert!(stone.get("extras").is_none());
 
     let fence = by_name("fence");
     assert_eq!(fence["alphaMode"], "MASK");
@@ -458,28 +461,26 @@ fn round_trip_materials_textures_and_extras() {
         BTreeMap::from([("texture files not loaded".to_owned(), 1)])
     );
     assert_eq!(report.texture_slots_dropped, 1);
-    assert_eq!(
-        report.extras_unencoded,
-        BTreeMap::from([("fromsoft.layered_material".to_owned(), 1)]),
-        "opaque bytes have no JSON form"
-    );
-
-    // Placement, prototype and scene extras.
-    let regular = node_by_source(doc, "plac:0").unwrap();
-    assert_eq!(
-        regular["extras"],
-        json!({"primase": {"core.source": {"version": 1, "value": "plac:0"},
-            "core.tile": {"version": 1, "value": {"col": 3, "row": -1}}}})
-    );
+    // what glTF has no form for: counted by name, never in extras (the material's dialect view, the texture's,
+    // placement's and prototype's sources, the placement's tile, opaque bytes alike; the scene's resource)
+    for name in [
+        "skate.material",
+        "fromsoft.layered_material",
+        "core.source",
+        "core.tile",
+    ] {
+        assert!(
+            report.components_without_form.get(name) > Some(&0),
+            "{name}: {:?}",
+            report.components_without_form
+        );
+    }
+    assert_eq!(report.resources_without_form.get("skate.scene"), Some(&1));
+    let regular = node_by_source(&b, &report, doc, "plac:0").unwrap();
     let mesh = &arr(doc, "meshes")[regular["mesh"].as_u64().unwrap() as usize];
-    assert_eq!(
-        mesh["extras"],
-        json!({"primase": {"core.source": {"version": 1, "value": "msb:c1100/rich"}}})
-    );
-    assert_eq!(
-        doc["scenes"][0]["extras"],
-        json!({"primase": {"skate.scene": {"version": 1, "value": {"name": "test_scene", "region": [-10, -10, 10, 10]}}}})
-    );
+    for object in [regular, mesh, &doc["scenes"][0]] {
+        assert!(object.get("extras").is_none(), "{object}");
+    }
     assert_eq!(doc["scenes"][0]["name"], "test");
 }
 
@@ -503,15 +504,13 @@ fn groups_are_empty_nodes_per_prototype_or_tile() {
     assert_eq!(names, ["rich", "big", "rail", "terrain", &copies[0], &copies[1]]);
     for r in &roots {
         assert!(r.get("mesh").is_none());
-        assert_eq!(r["extras"]["primase.collection"], r["name"]);
+        assert!(r.get("extras").is_none());
     }
-    let rich_children: Vec<&Value> = roots[0]["children"]
+    let rich_children: Vec<String> = roots[0]["children"]
         .as_array()
         .unwrap()
         .iter()
-        .map(
-            |i| &arr(doc, "nodes")[i.as_u64().unwrap() as usize]["extras"]["primase"]["core.source"]["value"],
-        )
+        .map(|i| source_of_node(&b, &report, i.as_u64().unwrap() as usize))
         .collect();
     assert_eq!(rich_children, ["plac:0", "plac:1", "plac:5"]);
     assert_eq!(report.group_nodes, 6);
@@ -846,9 +845,10 @@ fn memory_textures_embed_exact_pixels_and_require_normal_conversion() {
     assert!(written(&b).1.textures_skipped.is_empty());
 }
 
-/// A component whose JSON view would lose a value (a NaN written as null) is an error naming it, never a quiet null.
+/// A component glTF has no form for is counted by name, whatever its value (a NaN no JSON could hold): the writer
+/// writes no component.
 #[test]
-fn extras_never_lose_a_value() {
+fn a_component_without_a_gltf_form_is_counted_not_written() {
     /// A component whose JSON form is one float.
     #[derive(Clone, Debug)]
     struct Sample(f32);
@@ -861,8 +861,8 @@ fn extras_never_lose_a_value() {
     }
     let mut b = build(&scratch("nan_extras"));
     b.world.insert(b.regular, Sample(f32::NAN));
-    let err = write(&b.world, &options()).unwrap_err().to_string();
-    assert!(err.contains("test.sample") && err.contains("NaN"), "{err}");
+    let (_, report, _) = written(&b);
+    assert_eq!(report.components_without_form.get("test.sample"), Some(&1));
 }
 
 #[test]

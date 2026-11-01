@@ -1,7 +1,8 @@
 //! Our own glTF 2.0 / GLB writer from the world, and the passes that prepare a world for it.
 //!
-//! - [`write()`] / [`write_file`]: a [`primase_core::World`] to one GLB (prototypes as shared meshes, placements as
-//!   nodes, `pbr.material`s, embedded PNGs, dialect components in extras); see [`write`](mod@write) for the rules.
+//! - [`write()`] / [`write_file`]: a [`primase_core::World`] to one GLB of standard glTF (prototypes as shared meshes,
+//!   placements as nodes, `pbr.material`s, embedded PNGs; what glTF has no form for counted); see
+//!   [`write`](mod@write) for the rules, and [`extend`] for how a writer for a format built on glTF adds to it.
 //! - [`prepare`]: `prepare-gltf-materials` and `fill-missing-texcoords`.
 //! - [`read`](mod@read): a glTF document into a world of one asset (skeletons, skins, morphs, placements, clips).
 //! - [`preview`]: the preview export, GLBs plus a documented manifest of the choices they leave open, and the recipe a
@@ -13,7 +14,7 @@
 //! Frames: the world frame is glTF's (metres, right-handed, +Y up, -Z forward), so nothing is converted.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
-pub mod detail;
+pub mod extend;
 pub mod lower;
 pub mod parts;
 pub mod prepare;
@@ -31,9 +32,7 @@ use primase_core::Entity;
 pub use parts::{GlbParts, preview_target, target};
 pub use preview::{Manifest, PreviewParts, Recipe};
 pub use read::{ReadReport, read_glb, read_with_images};
-pub use textures::{
-    DetailSlot, GltfDetailTextures, GltfMaterialTextures, GltfSlot, ImageResolver, SlotTexture,
-};
+pub use textures::{GltfMaterialTextures, GltfSlot, ImageResolver, SlotTexture};
 pub use write::{
     Drawn, GroupBy, ImageMemo, Layout, Piece, RigNodes, Selected, Selection, WriteOptions, WriteReport,
     write, write_document, write_file,

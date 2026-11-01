@@ -1,5 +1,10 @@
 //! The GLB writer: a [`World`] to one GLB that Blender (and any glTF 2.0 reader) imports.
 //!
+//! It writes standard glTF 2.0 and the Khronos extensions named below, nothing of a format of primase's own: no
+//! component in extras, no vendor extension. What glTF has no form for is left out and counted, by component name
+//! (`components_without_form`, `resources_without_form`) or under the causes below. A writer for a format built on
+//! glTF that carries more extends what this one writes through [`crate::extend`].
+//!
 //! What goes where:
 //! - **Prototypes** (entities with a [`Mesh`]) become glTF meshes shared by every placement that uses them with the
 //!   same resolved materials; a prototype placed with several [`MaterialVariants`] gets one mesh per distinct
@@ -11,10 +16,8 @@
 //!   writing. Degenerate transforms are skipped and counted. An entity with a `Mesh` and a `Transform` but no `Instance` is placed as itself.
 //! - **Collections**: Blender 4.3's importer makes no collections (every object goes to the active collection;
 //!   nodes without a mesh become empties, children are parented). So groups are empty nodes, one per prototype or
-//!   per tile ([`GroupBy`]), with `"primase.collection": <name>` in their extras so a Blender-side script can turn
-//!   them into real collections. Blender's outliner already folds each group's placements under its empty.
-//! - **Materials** come from `pbr.material` ([`PbrMaterial`]). A material entity without one (and not layered) is
-//!   not written: its primitives have no material in glTF (the reader's default material), counted; a program that
+//!   per tile ([`GroupBy`]), named like it. Blender's outliner folds each group's placements under its empty.
+//! - **Materials** come from `pbr.material` ([`PbrMaterial`]). A material entity without one is not written: its primitives have no material in glTF (the reader's default material), counted; a program that
 //!   wants a look for them states it with `prepare-gltf-materials`. A primitive with no material has none in glTF,
 //!   counted.
 //! - **Texture coordinates**: glTF requires every set a material samples. A primitive that lacks one is refused, as
@@ -23,46 +26,36 @@
 //!   written primitive whose material is `core.vertex_color` `ignored` (the source's shader does not take it) is
 //!   written without it, counted; a prototype's `COLOR_0` accessor is not written at all when no material drawing
 //!   that primitive, variants included, reads it ([`primase_core::color0_drawn`]).
-//! - **Layered materials** (`core.layered`) become one glTF material with the `PRIMASE_layered_material` extension:
-//!   the weight attribute (`COLOR_n`), the mapping and up to four layers, each an index of an ordinary material in
-//!   the same file (the layer materials are written like any other; their images are shared) with the layer's UV
-//!   set and transform. The host material is a verbatim copy of the first non-null layer's material (name and extras
-//!   aside), so a reader that ignores the extension shows one plausible layer. The extension is only in
-//!   `extensionsUsed`. A primitive drawn with a layered material but lacking its weight attribute is counted. Its
-//!   `version` is 2 with per-pixel channels or the over composition, 3 with the height composition
-//!   (`"composition": {"height": {"contrast": c}}` and `weights.heights`, a source per slot), 4 with a power channel
-//!   (`{"power": {"v": source, "exponent": n}}`); version 5 adds bounded products (`{"product": [source, ...]}`).
-//!   An older consumer must not draw an unknown version as the form it knows.
+//! - **Layered materials** (`core.layered`): glTF draws one material per primitive and blends none, and the writer
+//!   chooses no layer for a blend. A layered material is written from its `pbr.material` (its `core.layered` counted
+//!   as without a glTF form); one without is not written, its primitives drawn with no material, counted
+//!   (`layered_materials_unwritten`): a pass before the writer states it, a layer as the material or the blend baked
+//!   into one. A material's `pbr.detail` has no glTF form either: the material is written from its `pbr.material`,
+//!   the detail counted. An [`crate::extend::Extension`] may write either (the web format's extensions do).
 //! - **Textures**: a `core.texture` embeds its largest level as deterministic RGBA8 PNG (identical images embedded
 //!   once). Normal maps must already be green-up with stored Z; use the explicit normalization pass first. The writer
 //!   reads no file: a texture still only a `core.texture_file` is skipped and counted (a reader's load step,
 //!   `primase_image::load_textures`, makes its pixels). A texture whose format an 8-bit PNG cannot hold exactly
 //!   (`primase_image::rgba8_exact`: wider, floating-point or signed values) is not written, counted by format
 //!   (`textures_unrepresentable`), its slots left empty: `lower-textures-rgba8` converts it, each conversion named.
-//! - **Extras**: every component with a JSON form (`core.source`, dialect and opaque JSON components) that the glTF
-//!   itself does not express goes into the extras of the object made from its entity, as
-//!   `extras.primase["<component name>"] = {"version": n, "value": ...}`: placement -> node, prototype -> mesh,
-//!   material -> material, texture -> texture; world resources -> the scene. Blender imports node, mesh, material
-//!   and scene extras as custom properties. Components with no JSON form are counted per name in the report, never
-//!   dropped silently; a component whose view would lose a value (a non-finite float) is an error. The
-//!   environment's ambient light has no glTF form: it is data in the scene's extras, lighting nothing, counted
-//!   (`ambient_unlit`).
+//! - **What glTF has no form for**: every component of an entity written as a node, mesh, material or texture that
+//!   the object does not express (`core.source`, `core.shadows`, dialect and opaque components) is counted by name
+//!   (`components_without_form`), each world resource by name (`resources_without_form`); none is written. The
+//!   environment's ambient light has no glTF form: nothing is lit by it, counted (`ambient_unlit`).
 //! - **A base colour past 1** (`pbr.material` holds the source's HDR colour as it is): glTF's `baseColorFactor` is
 //!   0-1, so its channels past 1 are written as 1, and each such material is said by name with its colour
 //!   (`base_colours_past_one`).
 //! - **Levels of detail**: glTF draws one mesh per node and the writer chooses no form, so a placement of a prototype
 //!   with other forms (`core.lods` listing any) is not written, counted (`placements_with_lods`); a pipeline that wants
 //!   it drawn chooses one form per prototype first (`select-lod`). The forms are not prototypes of their own. A
-//!   `core.lods` without other forms leaves nothing to choose: the mesh is written, `core.lods` in its extras.
+//!   `core.lods` without other forms leaves nothing to choose: the mesh is written, `core.lods` counted.
 //! - **Everything else**: without a [`Selection`], an entity the writer neither writes nor counts under one of the
 //!   causes above (a `core.marker`, a standalone collision soup, a material only an unplaced variant draws) is not in
 //!   the glTF; its components are counted by name (`components_unwritten`). An entity left out whole under a counted
 //!   cause (an unplaced prototype, a degenerate placement, one with levels of detail) takes what it reaches with it.
 //!   A selection is the caller's choice of what to write, so what it leaves out is not counted.
-//! - **Shadows**: what is stated of them goes into `extras["primase.shadows"] = {"version": 1, "cast": ...,
-//!   "receive": ...}`, each key only when stated: a placement's `core.shadows` on its node, each field its own else
-//!   its prototype's (`cast` `"off"`, `"on"` or `"only"`, a shadow proxy that is not drawn; absent casts; `receive` a
-//!   boolean), and a light's `cast_shadows` on the light's node (`"off"` or `"on"`). Materials state none.
+//! - **Shadows**: glTF states none: a placement's or prototype's `core.shadows` is counted with the components
+//!   without a glTF form, a light's stated `cast_shadows` as `lights_shadows_unwritten`.
 //! - **A light's own specular** (`core.light`'s `specular`): `KHR_lights_punctual` has one colour and intensity, the
 //!   light's own; its highlights' are not written, counted (`lights_specular_unwritten`).
 //! - **Unlit materials** (`Shading::Unlit`) carry `KHR_materials_unlit` (in `extensionsUsed`, not required), their
@@ -88,8 +81,8 @@
 //! - **Clips** bound by `core.clip_binding` become animations: a joint channel drives its rig's joint node, the morph
 //!   channels of one mesh occurrence one `weights` channel (they must share key times and interpolation; else they
 //!   are left out, counted). Interpolation as stated (`STEP`, `LINEAR`, `CUBICSPLINE`: core's rules are glTF's).
-//!   What glTF has no form for is left out and counted: additive clips, root motion, source controls; a looping
-//!   clip is marked in the animation's extras (`primase.loop`). Nothing is resampled.
+//!   What glTF has no form for is left out and counted: additive clips, root motion, source controls, and a clip's
+//!   looping (a looping clip is written once through, `clips_looping`). Nothing is resampled.
 //! - Rigs, skins and animations are written for a whole world, not with a [`Selection`] (tiles).
 //!
 //! The output is a function of the world: every list is built in entity order or first-use order over entities in
@@ -100,20 +93,14 @@ use std::fmt;
 use std::path::Path;
 
 use iridia_interface::{Filter, Filters, MipFilter};
-use primase_core::detail::{
-    DetailMix, DetailedMaterial, Frozen, GlossScale, ReflectanceTerm, SurfaceLowering, WeightStep,
-};
-use primase_core::layered::{Channel, Composition, Source};
-use primase_core::state::{Condition, PrimitiveCondition, StateOverride};
+use primase_core::LayeredMaterial;
 use primase_core::{
     BindingId, Clip, ClipBinding, ClipTarget, Extrapolation, Interpolation, JointId, MorphWeights, Morphs,
     Property, Rest, RigInstance, RigPose, Skeleton, Skin, SkinInstance,
 };
-use primase_core::{ColorSpace, LayeredMaterial, WeightMapping};
 use primase_core::{
-    Component, ComponentJson, Entity, Instance, Light, LightKind, Lods, MaterialVariants, Mesh, MeshFile,
-    Name, Semantic, ShadowCast, Shadows, Texture, TextureFile, Tile, Topology, Transform, TransformKind,
-    World,
+    Component, Entity, Instance, Light, LightKind, Lods, MaterialVariants, Mesh, MeshFile, Name, Semantic,
+    Texture, TextureFile, Tile, Topology, Transform, TransformKind, World,
 };
 use primase_core::{
     pbr::AlphaMode, pbr::PbrMaterial, pbr::Shading, pbr::TextureRef, pbr::UvTransform, pbr::Wrap,
@@ -124,6 +111,7 @@ use sha2::{Digest, Sha256};
 use primase_core::json::f32s_value;
 use primase_glb::{Buffers, Document, ElementType, PrimitiveAccessors};
 
+use crate::extend::Object;
 use crate::{Error, Result};
 
 /// How placements are grouped under empty nodes (Blender: parent empties; see the module docs).
@@ -167,6 +155,8 @@ pub struct WriteOptions {
     /// them is an [`Error::World`], not an index out of range. A tiled writer that writes many documents of one world
     /// verifies it once.
     pub verified: bool,
+    /// What a writer for a format built on glTF adds to what this one writes ([`crate::extend`]); none by default.
+    pub extensions: crate::extend::Extensions,
 }
 
 /// PNG encodings of textures' level 0, kept between writes that share it ([`WriteOptions::images`]): by the texture's
@@ -246,15 +236,12 @@ impl fmt::Debug for ImageMemo {
 }
 
 /// What to write of the world a tiled writer is given, without changing it: only these placements (instances or
-/// self-placed meshes), each drawn with its prototype's mesh or a piece of its own and with extra node extras; only
-/// these lights; the scene's extras without the omitted resources. The materials and textures written are those the
-/// written meshes use, as always.
+/// self-placed meshes), each drawn with its prototype's mesh or a piece of its own; only these lights. The materials
+/// and textures written are those the written meshes use, as always.
 #[derive(Clone, Debug, Default)]
 pub struct Selection {
     pub placements: BTreeMap<Entity, Selected>,
     pub lights: BTreeSet<Entity>,
-    /// Resources the scene's extras leave out (a writer that carries them elsewhere).
-    pub omit_resources: BTreeSet<String>,
 }
 
 /// One selected placement.
@@ -262,9 +249,6 @@ pub struct Selection {
 pub struct Selected {
     /// A mesh of its own instead of its prototype's (the triangles of it a tile holds).
     pub piece: Option<Piece>,
-    /// Extra entries of the node's `extras.primase`: (name, schema version, value), placed among the placement's own
-    /// components in name order.
-    pub extras: Vec<(String, u32, Value)>,
 }
 
 /// A placement's own piece of its prototype's mesh: the triangles of it a tile holds.
@@ -274,9 +258,8 @@ pub struct Piece {
     pub mesh: Mesh,
     /// The name its glTF mesh is given.
     pub name: String,
-    /// For each of its primitives, the prototype primitive it is cut from. The prototype's components are written
-    /// with the piece as with the prototype's own mesh; those that follow primitives
-    /// ([`primase_core::Component::remap_primitives`]: provenance parts, dialect per-primitive data) remapped by it.
+    /// For each of its primitives, the prototype primitive it is cut from (offered to an extension's extras with the
+    /// piece, [`crate::extend::Object::Mesh`]).
     pub from: Vec<usize>,
 }
 
@@ -312,19 +295,16 @@ pub struct WriteReport {
     pub placements_with_lods: u64,
     /// Prototypes nothing places (written at the origin only with `include_unplaced`).
     pub prototypes_unplaced: u64,
-    /// Material entities without `pbr.material` (nor layered): not written, their primitives drawn with none.
+    /// Material entities without `pbr.material` (nor `core.layered`): not written, their primitives drawn with none.
     pub materials_without_pbr: u64,
-    /// Layer slots of layered materials whose material has no `pbr.material`: written as empty slots.
-    pub layers_without_pbr: u64,
+    /// Layered materials (`core.layered`) without `pbr.material`: not written, their primitives drawn with none. glTF
+    /// draws one material per primitive; a pass before the writer states it (a layer as the material, or the blend
+    /// baked into one).
+    pub layered_materials_unwritten: u64,
     pub primitives_without_material: u64,
-    /// `core.layered` materials written with `PRIMASE_layered_material`.
-    pub layered_materials: u64,
-    /// `pbr.detail` materials written with `PRIMASE_materials_detail_blend` beside their `pbr.material`.
-    pub detail_materials: u64,
-    /// `pbr.detail` materials written without the extension (their `pbr.material` alone), by reason.
-    pub detail_materials_dropped: BTreeMap<String, u64>,
-    /// Primitives drawn with a layered material but lacking its weight attribute (they render as the host).
-    pub primitives_layered_without_weights: u64,
+    /// Primitives drawn with a material an extension wrote whole ([`crate::extend::WholeMaterial::attribute`]) that
+    /// lack the vertex attribute it reads (a layered material's weights: they render as its host).
+    pub primitives_without_material_attribute: u64,
     /// Written primitives with a `COLOR_0` stream drawn without it: their material is `core.vertex_color` `ignored`.
     pub primitives_color0_ignored: u64,
     /// Texture slots left empty, by reason (`dds`, `other file format`, ...), counted per texture entity.
@@ -339,8 +319,14 @@ pub struct WriteReport {
     pub filters_unexpressed: u64,
     /// Vertex streams not written, by glTF attribute name (skin attributes without a skeleton).
     pub streams_skipped: BTreeMap<String, u64>,
-    /// Components with no JSON form, by name: not in the extras.
-    pub extras_unencoded: BTreeMap<String, u64>,
+    /// Components of the entities written as nodes, meshes, materials and textures that the glTF object does not
+    /// express and glTF has no form for, by name, counted per object written (a shared mesh once): not written. What
+    /// an extension writes of a material ([`crate::extend`]) is not counted.
+    pub components_without_form: BTreeMap<String, u64>,
+    /// The world's resources, by name: glTF has no form for any of them, not written.
+    pub resources_without_form: BTreeMap<String, u64>,
+    /// Lights whose stated `cast_shadows` `KHR_lights_punctual` has no form for: written without it.
+    pub lights_shadows_unwritten: u64,
     /// Rigs written as node trees, and their joint nodes.
     pub rigs: u64,
     pub joint_nodes: u64,
@@ -362,8 +348,9 @@ pub struct WriteReport {
     pub draw_group_channels: u64,
     pub material_parameter_channels: u64,
     pub morph_channels_unaligned: u64,
-    /// `core.environment`'s ambient, 1 when the world has one: glTF has no ambient light, so nothing is lit by it
-    /// (the scene's extras still carry it as data, unless the selection omits the environment).
+    /// Looping clips (`Extrapolation::Loop`), written once through: a glTF animation states no looping.
+    pub clips_looping: u64,
+    /// `core.environment`'s ambient, 1 when the world has one: glTF has no ambient light, so nothing is lit by it.
     pub ambient_unlit: u64,
     /// Materials whose base colour has a channel past 1, which glTF's `baseColorFactor` (0-1) cannot hold: written
     /// with those channels at 1, by `"<material name>: <base colour>"`.
@@ -430,7 +417,7 @@ impl fmt::Display for WriteReport {
             f,
             "placements {}: mirrored {}, degenerate skipped {}, without mesh {}, with levels of detail (not \
              written) {}; prototypes unplaced {}; lights sheared (not written) {}, lights whose own specular is \
-             not written {}",
+             not written {}, lights whose shadows are not written {}",
             self.placements,
             self.placements_mirrored,
             self.placements_degenerate_skipped,
@@ -438,18 +425,18 @@ impl fmt::Display for WriteReport {
             self.placements_with_lods,
             self.prototypes_unplaced,
             self.lights_sheared_skipped,
-            self.lights_specular_unwritten
+            self.lights_specular_unwritten,
+            self.lights_shadows_unwritten
         )?;
         writeln!(
             f,
-            "materials without pbr {} (layer slots {}), primitives without material {}, layered materials {} \
-             (primitives without weights {}), primitives drawn without their COLOR_0 (material ignores it) {}, \
-             texture slots dropped {}",
+            "materials without pbr {}, layered materials without pbr (not written) {}, primitives without material \
+             {}, primitives without the attribute their material reads {}, primitives drawn without their COLOR_0 \
+             (material ignores it) {}, texture slots dropped {}",
             self.materials_without_pbr,
-            self.layers_without_pbr,
+            self.layered_materials_unwritten,
             self.primitives_without_material,
-            self.layered_materials,
-            self.primitives_layered_without_weights,
+            self.primitives_without_material_attribute,
             self.primitives_color0_ignored,
             self.texture_slots_dropped
         )?;
@@ -465,12 +452,22 @@ impl fmt::Display for WriteReport {
             self.filters_unexpressed
         )?;
         writeln!(f, "streams skipped {:?}", self.streams_skipped)?;
-        writeln!(f, "extras unencoded {:?}", self.extras_unencoded)?;
+        writeln!(
+            f,
+            "components without a glTF form (not written) {:?}",
+            self.components_without_form
+        )?;
+        writeln!(
+            f,
+            "resources without a glTF form (not written) {:?}",
+            self.resources_without_form
+        )?;
         writeln!(
             f,
             "rigs {} ({} joint nodes), skins {}, skinned placements without a rig (bind pose) {}, morph targets {} \
              (meshes with in-between frames, not written {}), animations {} ({} channels); left out: additive clips \
-             {}, root motions {}, control channels {}, draw-group channels {}, material-parameter channels {}, unaligned morph channels {}",
+             {}, root motions {}, control channels {}, draw-group channels {}, material-parameter channels {}, unaligned morph channels {}, \
+             looping clips (written once through) {}",
             self.rigs,
             self.joint_nodes,
             self.skins,
@@ -484,7 +481,8 @@ impl fmt::Display for WriteReport {
             self.control_channels,
             self.draw_group_channels,
             self.material_parameter_channels,
-            self.morph_channels_unaligned
+            self.morph_channels_unaligned,
+            self.clips_looping
         )?;
         writeln!(f, "ambient not lit (no glTF form) {}", self.ambient_unlit)?;
         writeln!(
@@ -500,47 +498,33 @@ impl fmt::Display for WriteReport {
     }
 }
 
-/// Components the glTF expresses itself, per kind of object; everything else with a JSON form goes to extras.
 /// The extension a texture slot's [`UvTransform`] is written as.
 const TEXTURE_TRANSFORM: &str = "KHR_texture_transform";
 const EMISSIVE_STRENGTH: &str = "KHR_materials_emissive_strength";
 const SPECULAR: &str = "KHR_materials_specular";
-/// The detail blend's vendor extension ([`crate::detail`]).
-const DETAIL: &str = crate::detail::NAME;
 const UNLIT: &str = "KHR_materials_unlit";
 /// The extension lights are written as.
 const LIGHTS: &str = "KHR_lights_punctual";
-const CONSUMED_LIGHT: &[&str] = &[Name::NAME, Transform::NAME, Light::NAME];
-const CONSUMED_PLACEMENT: &[&str] = &[
+/// The components the glTF object made from an entity expresses, per kind of object ([`crate::extend::expressed`]):
+/// every other one is without a glTF form, counted.
+pub(crate) const EXPRESSED_LIGHT: &[&str] = &[Name::NAME, Transform::NAME, Light::NAME];
+pub(crate) const EXPRESSED_PLACEMENT: &[&str] = &[
     Name::NAME,
     Transform::NAME,
     Instance::NAME,
-    Shadows::NAME,
     SkinInstance::NAME,
     MorphWeights::NAME,
-    // what the preview manifest carries, by id (the plain writer refuses these: resolve-state first)
-    Condition::NAME,
-    PrimitiveCondition::NAME,
-    StateOverride::NAME,
 ];
-/// A placement's shadows are its node's, also when an entity with a mesh is placed as itself.
-const CONSUMED_PROTOTYPE: &[&str] = &[
+pub(crate) const EXPRESSED_PROTOTYPE: &[&str] = &[
     Name::NAME,
     Mesh::NAME,
     MaterialVariants::NAME,
     MeshFile::NAME,
-    Shadows::NAME,
     Skin::NAME,
     Morphs::NAME,
-    Condition::NAME,
-    PrimitiveCondition::NAME,
-    StateOverride::NAME,
 ];
-/// The extras key shadows are written under (see the module docs).
-const SHADOWS: &str = "primase.shadows";
-const LAYERED: &str = "PRIMASE_layered_material";
-const CONSUMED_MATERIAL: &[&str] = &[Name::NAME, PbrMaterial::NAME, LayeredMaterial::NAME];
-const CONSUMED_TEXTURE: &[&str] = &[Name::NAME, TextureFile::NAME, Texture::NAME];
+pub(crate) const EXPRESSED_MATERIAL: &[&str] = &[Name::NAME, PbrMaterial::NAME];
+pub(crate) const EXPRESSED_TEXTURE: &[&str] = &[Name::NAME, TextureFile::NAME, Texture::NAME];
 
 /// Write the world as GLB bytes.
 pub fn write(world: &World, options: &WriteOptions) -> Result<(Vec<u8>, WriteReport)> {
@@ -581,11 +565,12 @@ pub fn write_document(world: &World, options: &WriteOptions) -> Result<(Document
         texture_transform_used: false,
         emissive_strength_used: false,
         specular_used: false,
-        detail_used: false,
         unlit_used: false,
-        layered_weights: BTreeMap::new(),
+        extensions_used: BTreeSet::new(),
+        material_attributes: BTreeMap::new(),
         handled: BTreeSet::new(),
         left_out: Vec::new(),
+        expressed: BTreeMap::new(),
         joint_nodes: BTreeMap::new(),
         matrix_joints: BTreeSet::new(),
         rig_roots: BTreeMap::new(),
@@ -602,7 +587,7 @@ pub fn write_document(world: &World, options: &WriteOptions) -> Result<(Document
 }
 
 /// With threads and no selection: every texture that a material reached from `places` (the placements written,
-/// [`World::closure`]) binds, a `pbr.material`'s slots and a `core.layered`'s masks, and that the writer could embed,
+/// [`World::closure`]) binds in a `pbr.material`'s slots, and that the writer could embed,
 /// encoded (or the encoder's error) on the stated threads, for [`Writer::image`] to take instead of encoding it then.
 fn preencode(
     world: &World,
@@ -617,9 +602,6 @@ fn preencode(
     for &e in &reached {
         if let Some(m) = world.get::<PbrMaterial>(e) {
             bound.extend(m.textures().map(|r| r.texture));
-        }
-        if let Some(m) = world.get::<LayeredMaterial>(e) {
-            bound.extend(m.mask_textures().map(|r| r.texture));
         }
     }
     let mut todo: Vec<(Entity, &Texture)> = bound
@@ -665,20 +647,13 @@ struct Place {
     transform: Transform,
 }
 
-/// A written mesh's source: its geometry, its glTF name, and the entity whose components go to its extras.
+/// A written mesh's source: its geometry, its glTF name, and the prototype it is made from (with the primitives a
+/// piece of it is cut from, [`Piece::from`]).
 struct MeshFrom {
     src: Src,
     name: String,
-    extras_of: ExtrasOf,
-}
-
-/// Whose components a written mesh's extras show.
-#[derive(Clone, Debug)]
-enum ExtrasOf {
-    /// The prototype's, as they are.
-    Prototype(Entity),
-    /// The prototype's, per-primitive ones remapped to a piece cut from it ([`Piece::from`]).
-    Piece { prototype: Entity, from: Vec<usize> },
+    prototype: Entity,
+    piece_from: Option<Vec<usize>>,
 }
 
 /// Where a written mesh's geometry comes from: a prototype's mesh, or a selected placement's own piece.
@@ -718,8 +693,8 @@ struct Writer<'w> {
     material_index: BTreeMap<Entity, Option<(usize, BTreeSet<u8>)>>,
     texture_index: BTreeMap<(Entity, [Wrap; 2], Filters), usize>,
     image_of_entity: BTreeMap<Entity, Option<usize>>,
-    /// By the PNG's digest and whether the texture is data: an image tagged `primase.role` data is not shared with a
-    /// colour texture of the same pixels, which a consumer may encode lossily.
+    /// By the PNG's digest and whether the texture is data: a data texture's image is not shared with a colour
+    /// texture of the same pixels, so a consumer that codes colour images lossily can tell them apart.
     image_by_hash: BTreeMap<([u8; 32], bool), usize>,
     /// By wrap and whether the texture is data (sampled nearest, without mips).
     sampler_index: BTreeMap<([Wrap; 2], Filters, bool), usize>,
@@ -728,15 +703,17 @@ struct Writer<'w> {
     /// A written material has an emissive strength other than 1 (`KHR_materials_emissive_strength` is used).
     emissive_strength_used: bool,
     specular_used: bool,
-    /// A material carries `PRIMASE_materials_detail_blend`.
-    detail_used: bool,
     unlit_used: bool,
-    /// Layered material entity -> the glTF attribute carrying its weights.
-    layered_weights: BTreeMap<Entity, String>,
+    /// The extensions' names put on a written material.
+    extensions_used: BTreeSet<&'static str>,
+    /// Material entity written whole by an extension -> the vertex attribute it reads.
+    material_attributes: BTreeMap<Entity, String>,
     /// Entities whose components are written, or counted in the report as not written.
     handled: BTreeSet<Entity>,
     /// Entities left out whole under a counted cause, with what they reach.
     left_out: Vec<Entity>,
+    /// Each entity written as a glTF object: the components the objects made from it express.
+    expressed: BTreeMap<Entity, BTreeSet<&'static str>>,
     /// Each rig's joint nodes, and which of them carry a matrix (no animation may drive those).
     joint_nodes: BTreeMap<(Entity, JointId), usize>,
     matrix_joints: BTreeSet<usize>,
@@ -853,13 +830,17 @@ impl Writer<'_> {
                 node.insert("matrix".into(), f32s_value(&m)?);
             }
             node.insert("extensions".into(), json!({ LIGHTS: {"light": lights.len()} }));
-            let extras = self.extras(e, CONSUMED_LIGHT)?;
-            if let Some(extras) = with_shadows(extras, l.cast_shadows.map(cast_on), None) {
-                node.insert("extras".into(), extras);
+            let object = Object::Light(e);
+            self.written_as(e, &object, &[]);
+            if let Some(extras) = self.object_extras(object)? {
+                node.insert("extras".into(), Value::Object(extras));
             }
             lights.push(self.light(e, l)?);
             if l.specular.is_some() {
                 self.report.lights_specular_unwritten += 1;
+            }
+            if l.cast_shadows.is_some() {
+                self.report.lights_shadows_unwritten += 1;
             }
             self.handled.insert(e);
             nodes.push(Value::Object(node));
@@ -867,6 +848,7 @@ impl Writer<'_> {
         }
         self.report.lights = lights.len() as u64;
         self.count_unwritten();
+        self.count_without_form();
         self.report.nodes = nodes.len() as u64;
         for (key, children) in groups {
             let name = match key {
@@ -874,15 +856,7 @@ impl Writer<'_> {
                 GroupKey::Tile(c, r) => format!("tile_{c}_{r}"),
                 GroupKey::Untiled => "untiled".to_owned(),
             };
-            let kind = match key {
-                GroupKey::Prototype(_) => "prototype",
-                _ => "tile",
-            };
-            nodes.push(json!({
-                "name": name,
-                "children": children,
-                "extras": {"primase.collection": name, "primase.group": kind},
-            }));
+            nodes.push(json!({"name": name, "children": children}));
             roots.push(nodes.len() - 1);
             self.report.group_nodes += 1;
         }
@@ -900,15 +874,15 @@ impl Writer<'_> {
         {
             self.report.ambient_unlit = 1;
         }
-        let mut resources = self.world.resources_json().map_err(|e| Error::Invalid {
-            item: format!("resource {}", e.component),
-            detail: e.message,
-        })?;
-        if let Some(s) = &self.options.selection {
-            resources.retain(|r| !s.omit_resources.contains(r.name));
+        for name in self.world.resource_names() {
+            *self
+                .report
+                .resources_without_form
+                .entry(name.to_owned())
+                .or_default() += 1;
         }
-        if let Some(extras) = self.primase_extras(resources, &[]) {
-            scene.insert("extras".into(), extras);
+        if let Some(extras) = self.object_extras(Object::Scene)? {
+            scene.insert("extras".into(), Value::Object(extras));
         }
 
         let mut root = Map::new();
@@ -929,11 +903,8 @@ impl Writer<'_> {
         if self.unlit_used {
             used.push(UNLIT);
         }
-        if self.detail_used {
-            used.push(DETAIL);
-        }
-        if !self.layered_weights.is_empty() {
-            used.push(LAYERED);
+        for x in &self.options.extensions.0 {
+            used.extend(x.names().iter().filter(|n| self.extensions_used.contains(*n)));
         }
         if !lights.is_empty() {
             used.push(LIGHTS);
@@ -1074,18 +1045,37 @@ impl Writer<'_> {
             .as_ref()
             .and_then(|s| s.placements.get(&place.entity));
         let (mesh, from) = match selected.and_then(|s| s.piece.as_ref()) {
-            // a piece: its own geometry and name, the prototype's components remapped to its primitives
-            Some(piece) => (
-                &piece.mesh,
-                MeshFrom {
-                    src: Src::Piece(place.entity),
-                    name: piece.name.clone(),
-                    extras_of: ExtrasOf::Piece {
+            // a piece: its own geometry and name, each of its primitives one of the prototype's
+            Some(piece) => {
+                let of = world
+                    .get::<Mesh>(place.prototype)
+                    .map_or(0, |m| m.primitives().len());
+                let n = piece.mesh.primitives().len();
+                let refused = |detail: String| Error::World {
+                    entity: place.entity,
+                    detail,
+                };
+                if piece.from.len() != n {
+                    return Err(refused(format!(
+                        "a piece of {n} primitives with {} sources",
+                        piece.from.len()
+                    )));
+                }
+                if let Some(&p) = piece.from.iter().find(|&&p| p >= of) {
+                    return Err(refused(format!(
+                        "a piece cut from primitive {p} of a prototype of {of} primitives"
+                    )));
+                }
+                (
+                    &piece.mesh,
+                    MeshFrom {
+                        src: Src::Piece(place.entity),
+                        name: piece.name.clone(),
                         prototype: place.prototype,
-                        from: piece.from.clone(),
+                        piece_from: Some(piece.from.clone()),
                     },
-                },
-            ),
+                )
+            }
             None => {
                 let Some(mesh) = world.get::<Mesh>(place.prototype) else {
                     self.report.placements_without_mesh += 1;
@@ -1097,7 +1087,8 @@ impl Writer<'_> {
                     MeshFrom {
                         src: self.skinned_src(place),
                         name: self.name_of(place.prototype, "prototype"),
-                        extras_of: ExtrasOf::Prototype(place.prototype),
+                        prototype: place.prototype,
+                        piece_from: None,
                     },
                 )
             }
@@ -1163,44 +1154,13 @@ impl Writer<'_> {
         if let Some(weights) = self.node_weights(place, from.src)? {
             node.insert("weights".into(), weights);
         }
-        let extras = match selected.filter(|s| !s.extras.is_empty()) {
-            None => self.extras(place.entity, CONSUMED_PLACEMENT)?,
-            Some(s) => {
-                let mut shown = world.components_json(place.entity).map_err(|err| Error::World {
-                    entity: place.entity,
-                    detail: err.to_string(),
-                })?;
-                shown.extend(s.extras.iter().map(|(name, version, value)| ComponentJson {
-                    name: name.as_str(),
-                    version: *version,
-                    value: Some(value.clone()),
-                }));
-                shown.sort_by(|a, b| a.name.cmp(b.name));
-                self.primase_extras(shown, CONSUMED_PLACEMENT)
-            }
+        let object = Object::Placement {
+            placement: place.entity,
+            prototype: place.prototype,
         };
-        // the placement's own, else its prototype's
-        let own = self
-            .world
-            .get::<Shadows>(place.entity)
-            .copied()
-            .unwrap_or_default();
-        let inherited = self
-            .world
-            .get::<Shadows>(place.prototype)
-            .copied()
-            .unwrap_or_default();
-        let shadows = Shadows {
-            cast: own.cast.or(inherited.cast),
-            receive: own.receive.or(inherited.receive),
-        };
-        let cast = shadows.cast.map(|c| match c {
-            ShadowCast::Off => "off",
-            ShadowCast::On => "on",
-            ShadowCast::Only => "only",
-        });
-        if let Some(extras) = with_shadows(extras, cast, shadows.receive) {
-            node.insert("extras".into(), extras);
+        self.written_as(place.entity, &object, &[]);
+        if let Some(extras) = self.object_extras(object)? {
+            node.insert("extras".into(), Value::Object(extras));
         }
         self.report.placements += 1;
         self.handled.insert(place.entity);
@@ -1294,21 +1254,20 @@ impl Writer<'_> {
         if key.1 != base {
             name = format!("{name}.v{variant}");
         }
-        let index = self.push_mesh(from.src, &from.extras_of, name, &accessors, &key.1, mesh)?;
+        let index = self.push_mesh(from, name, &accessors, &key.1, mesh)?;
         self.mesh_index.insert(key, index);
         Ok(index)
     }
 
     fn push_mesh(
         &mut self,
-        src: Src,
-        extras_of: &ExtrasOf,
+        from: &MeshFrom,
         name: String,
         accessors: &[PrimitiveAccessors],
         materials: &[Option<Entity>],
         mesh: &Mesh,
     ) -> Result<usize> {
-        let morphs = self.morph_accessors(src, mesh)?;
+        let morphs = self.morph_accessors(from.src, mesh)?;
         let mut prims = Vec::with_capacity(accessors.len());
         for (i, ((acc, material), prim)) in accessors.iter().zip(materials).zip(mesh.primitives()).enumerate()
         {
@@ -1345,11 +1304,11 @@ impl Writer<'_> {
                         });
                     }
                     if self
-                        .layered_weights
+                        .material_attributes
                         .get(&m)
                         .is_some_and(|attribute| !attrs.contains_key(attribute))
                     {
-                        self.report.primitives_layered_without_weights += 1;
+                        self.report.primitives_without_material_attribute += 1;
                     }
                     Some(index)
                 }
@@ -1381,26 +1340,25 @@ impl Writer<'_> {
         let mut m = Map::new();
         m.insert("name".into(), Value::String(name));
         m.insert("primitives".into(), Value::Array(prims));
-        let extras = match extras_of {
-            ExtrasOf::Prototype(e) => self.extras(*e, CONSUMED_PROTOTYPE)?,
-            ExtrasOf::Piece { prototype, from } => self.piece_extras(*prototype, from, mesh)?,
+        let object = Object::Mesh {
+            prototype: from.prototype,
+            piece: from.piece_from.as_deref().map(|f| (mesh, f)),
         };
-        let (ExtrasOf::Prototype(prototype) | ExtrasOf::Piece { prototype, .. }) = extras_of;
-        self.handled.insert(*prototype);
+        self.written_as(from.prototype, &object, &[]);
+        let extras = self.object_extras(object)?;
+        self.handled.insert(from.prototype);
         let extras = match &morphs {
             Some(mo) => {
                 m.insert("weights".into(), f32s_value(&mo.defaults)?);
-                let mut e = match extras {
-                    Some(Value::Object(e)) => e,
-                    _ => Map::new(),
-                };
+                // the morph targets' names as glTF tools read them (Blender, three.js)
+                let mut e = extras.unwrap_or_default();
                 e.insert("targetNames".into(), json!(mo.names));
-                Some(Value::Object(e))
+                Some(e)
             }
             None => extras,
         };
         if let Some(extras) = extras {
-            m.insert("extras".into(), extras);
+            m.insert("extras".into(), Value::Object(extras));
         }
         self.meshes.push(Value::Object(m));
         self.report.meshes += 1;
@@ -1451,22 +1409,40 @@ impl Writer<'_> {
         Ok(out)
     }
 
-    /// The glTF material of an entity, and the texture coordinate sets it samples; `None` for an entity with neither
-    /// `pbr.material` nor `core.layered` (counted once).
+    /// The glTF material of an entity, and the texture coordinate sets it samples; `None` for an entity without
+    /// `pbr.material` (counted once: as a layered material where it has `core.layered`).
     fn material(&mut self, e: Entity) -> Result<Option<(usize, BTreeSet<u8>)>> {
         if let Some(m) = self.material_index.get(&e) {
             return Ok(m.clone());
         }
         self.handled.insert(e);
-        if let Some(layered) = self.world.get::<LayeredMaterial>(e) {
-            return self.layered_material(e, &layered.clone()).map(Some);
+        let options = self.options;
+        for x in &options.extensions.0 {
+            if let Some(whole) = x.material(&mut MaterialWriter { w: self }, e)? {
+                self.written_as(e, &Object::Material(e), whole.components);
+                self.extensions_used.insert(whole.extension);
+                if let Some(attribute) = whole.attribute {
+                    self.material_attributes.insert(e, attribute);
+                }
+                self.materials.push(Value::Object(whole.material));
+                self.report.materials += 1;
+                let i = self.materials.len() - 1;
+                self.material_index.insert(e, Some((i, whole.sets.clone())));
+                return Ok(Some((i, whole.sets)));
+            }
         }
         let mut sets = BTreeSet::new();
         let Some(pbr) = self.world.get::<PbrMaterial>(e).cloned() else {
-            self.report.materials_without_pbr += 1;
+            if self.world.has::<LayeredMaterial>(e) {
+                // glTF draws one material per primitive: which (a layer, or the blend baked) is a pass's choice
+                self.report.layered_materials_unwritten += 1;
+            } else {
+                self.report.materials_without_pbr += 1;
+            }
             self.material_index.insert(e, None);
             return Ok(None);
         };
+        let mut written_by_extensions: Vec<&'static str> = Vec::new();
         let mut m = Map::new();
         let name = self.name_of(e, "material");
         m.insert("name".into(), Value::String(name.clone()));
@@ -1550,14 +1526,11 @@ impl Writer<'_> {
             extensions.insert(SPECULAR.into(), Value::Object(k));
             self.specular_used = true;
         }
-        if let Some(detail) = self.world.get::<DetailedMaterial>(e).cloned() {
-            match self.detail_blend(e, &detail, &mut sets)? {
-                Ok(x) => {
-                    extensions.insert(DETAIL.into(), x);
-                    self.detail_used = true;
-                    self.report.detail_materials += 1;
-                }
-                Err(why) => *self.report.detail_materials_dropped.entry(why).or_default() += 1,
+        for x in &options.extensions.0 {
+            if let Some(k) = x.material_extension(&mut MaterialWriter { w: self }, e, &mut sets)? {
+                extensions.insert(k.name.into(), k.value);
+                self.extensions_used.insert(k.name);
+                written_by_extensions.extend(k.components);
             }
         }
         if pbr.shading == Shading::Unlit {
@@ -1582,8 +1555,9 @@ impl Writer<'_> {
         if pbr.double_sided {
             m.insert("doubleSided".into(), json!(true));
         }
-        if let Some(extras) = self.extras(e, CONSUMED_MATERIAL)? {
-            m.insert("extras".into(), extras);
+        self.written_as(e, &Object::Material(e), &written_by_extensions);
+        if let Some(extras) = self.object_extras(Object::Material(e))? {
+            m.insert("extras".into(), Value::Object(extras));
         }
         self.materials.push(Value::Object(m));
         self.report.materials += 1;
@@ -1654,366 +1628,6 @@ impl Writer<'_> {
         Ok(k)
     }
 
-    /// A `core.layered` material: its layers' materials first, then the host (a copy of the first non-null layer's
-    /// material) carrying `PRIMASE_layered_material`. The sets are every set a layer's textures or the layer's own
-    /// `texcoord` selects.
-    fn layered_material(&mut self, e: Entity, layered: &LayeredMaterial) -> Result<(usize, BTreeSet<u8>)> {
-        let attribute = match layered.weights.attribute {
-            Semantic::Color(n) => format!("COLOR_{n}"),
-            other => {
-                return Err(Error::World {
-                    entity: e,
-                    detail: format!("layer weights must be a COLOR_n stream, not {other:?}"),
-                });
-            }
-        };
-        let mut sets = BTreeSet::new();
-        let mut layers = Vec::with_capacity(layered.layers.len());
-        let mut first = None;
-        for layer in &layered.layers {
-            let Some(layer) = layer else {
-                layers.push(Value::Null);
-                continue;
-            };
-            let Some((index, layer_sets)) = self.material(layer.material)? else {
-                // a layer with no material the writer can express: an empty slot, as the format has
-                self.report.layers_without_pbr += 1;
-                layers.push(Value::Null);
-                continue;
-            };
-            first.get_or_insert(index);
-            sets.extend(layer_sets);
-            sets.insert(layer.texcoord.unwrap_or(0));
-            let mut o = Map::new();
-            o.insert("material".into(), json!(index));
-            if let Some(n) = layer.texcoord {
-                o.insert("texCoord".into(), json!(n));
-            }
-            if let Some(x) = layer.transform.filter(|x| *x != UvTransform::IDENTITY) {
-                o.insert(
-                    "transform".into(),
-                    Value::Object(self.uv_transform(layer.material, x)?),
-                );
-            }
-            layers.push(Value::Object(o));
-        }
-        let mapping = match layered.weights.mapping {
-            WeightMapping::Identity => "identity",
-            WeightMapping::RgbProduct4 => "rgb_product_4",
-        };
-        let mut weights = Map::new();
-        weights.insert("attribute".into(), json!(attribute));
-        weights.insert("mapping".into(), json!(mapping));
-        if let Some(channels) = &layered.weights.channels {
-            let mut out = Vec::with_capacity(channels.len());
-            for c in channels {
-                out.push(self.layer_channel(e, c, &mut sets)?);
-            }
-            weights.insert("channels".into(), Value::Array(out));
-        }
-        if !layered.weights.heights.is_empty() {
-            let mut out = Vec::with_capacity(layered.weights.heights.len());
-            for h in &layered.weights.heights {
-                out.push(self.layer_source(e, h, &mut sets)?);
-            }
-            weights.insert("heights".into(), Value::Array(out));
-        }
-        let mut host = match first {
-            Some(i) => match &self.materials[i] {
-                Value::Object(m) => m.clone(),
-                _ => unreachable!("materials are objects"),
-            },
-            // every slot null: the blend is black everywhere
-            None => {
-                let mut m = Map::new();
-                m.insert(
-                    "pbrMetallicRoughness".into(),
-                    json!({"baseColorFactor": [0.0, 0.0, 0.0, 1.0], "metallicFactor": 0.0}),
-                );
-                m
-            }
-        };
-        host.insert("name".into(), Value::String(self.name_of(e, "material")));
-        host.remove("extras");
-        if let Some(extras) = self.extras(e, CONSUMED_MATERIAL)? {
-            host.insert("extras".into(), extras);
-        }
-        let mut ext = Map::new();
-        // version 2: per-pixel channels or the over composition; 3: the height composition; 4: a power channel. An
-        // older consumer must not draw it as the version it knows; 5: a product channel
-        let power = layered
-            .weights
-            .channels
-            .iter()
-            .flatten()
-            .any(|c| matches!(c, Channel::Power { .. }));
-        let product = layered
-            .weights
-            .channels
-            .iter()
-            .flatten()
-            .any(|c| matches!(c, Channel::Product { .. }));
-        match layered.weights.composition {
-            _ if product => {
-                ext.insert("version".into(), json!(5));
-            }
-            _ if power => {
-                ext.insert("version".into(), json!(4));
-            }
-            Composition::Height { .. } => {
-                ext.insert("version".into(), json!(3));
-            }
-            _ if layered.weights.per_pixel() => {
-                ext.insert("version".into(), json!(2));
-            }
-            _ => {}
-        }
-        ext.insert("weights".into(), Value::Object(weights));
-        match layered.weights.composition {
-            Composition::Over => {
-                ext.insert("composition".into(), json!("over"));
-            }
-            Composition::Height { contrast } => {
-                let c = self.factors(e, &[contrast])?[0].clone();
-                ext.insert("composition".into(), json!({"height": {"contrast": c}}));
-            }
-            Composition::Sum => {}
-        }
-        ext.insert("layers".into(), Value::Array(layers));
-        host.insert("extensions".into(), json!({ LAYERED: Value::Object(ext) }));
-        self.materials.push(Value::Object(host));
-        self.report.materials += 1;
-        self.report.layered_materials += 1;
-        let i = self.materials.len() - 1;
-        self.material_index.insert(e, Some((i, sets.clone())));
-        self.layered_weights.insert(e, attribute);
-        Ok((i, sets))
-    }
-
-    /// A texture slot of `PRIMASE_materials_detail_blend`: its texture info and `colorSpace` (the texture's own, else
-    /// sRGB for a colour slot), or `None` where its texture could not be written; adds its set to `sets`.
-    fn detail_slot(&mut self, r: TextureRef, colour: bool, sets: &mut BTreeSet<u8>) -> Result<Option<Value>> {
-        let Some(Value::Object(mut info)) = self.texture_info(Some(r), sets)? else {
-            return Ok(None);
-        };
-        let srgb = self
-            .world
-            .get::<Texture>(r.texture)
-            .map_or(colour, |t| t.color_space == ColorSpace::Srgb);
-        info.insert("colorSpace".into(), json!(if srgb { "srgb" } else { "linear" }));
-        Ok(Some(Value::Object(info)))
-    }
-
-    /// A `pbr.detail` as `PRIMASE_materials_detail_blend` ([`crate::detail`]); `Err` with why where a texture of it
-    /// could not be written (the material is then written without it, its `pbr.material` alone).
-    fn detail_blend(
-        &mut self,
-        e: Entity,
-        d: &DetailedMaterial,
-        sets: &mut BTreeSet<u8>,
-    ) -> Result<std::result::Result<Value, String>> {
-        let DetailMix::DetailLerp(m) = &d.mix;
-        let mut written = BTreeSet::new();
-        // the slots in the order they are written, each a texture and whether it is a colour
-        let mut textures = vec![
-            (m.base_colour, true),
-            (m.base_normal, false),
-            (m.base_mask, false),
-        ];
-        for detail in &m.details {
-            textures.extend([(detail.colour, true), (detail.normal, false)]);
-        }
-        for w in &m.weights {
-            if let Source::Mask { texture, .. } = w.source {
-                textures.push((texture, false));
-            }
-        }
-        let mut infos = Vec::with_capacity(textures.len());
-        for (r, colour) in textures {
-            match self.detail_slot(r, colour, &mut written)? {
-                Some(info) => infos.push(info),
-                None => return Ok(Err(format!("texture {:?} could not be written", r.texture))),
-            }
-        }
-        let mut infos = infos.into_iter();
-        let mut next = || infos.next().expect("one info a slot");
-        let mut x = Map::new();
-        x.insert("revision".into(), json!(primase_core::detail::REVISION));
-        x.insert("equation".into(), json!("detail_lerp"));
-        x.insert(
-            "lowering".into(),
-            json!(match d.lowering {
-                SurfaceLowering::GlossReflectance { .. } => "gloss_reflectance",
-                SurfaceLowering::MetallicGloss => "metallic_gloss",
-            }),
-        );
-        x.insert("baseColorTexture".into(), next());
-        x.insert("baseNormalTexture".into(), next());
-        x.insert("baseMaskTexture".into(), next());
-        let mut details = Vec::new();
-        for detail in &m.details {
-            let (colour, normal) = (next(), next());
-            let gloss_scale = match detail.gloss_scale {
-                GlossScale::BaseNormalZ => json!({"baseNormalZ": {}}),
-                GlossScale::Constant(c) => json!({"constant": self.factors(e, &[c])?[0].clone()}),
-            };
-            let reflectance = match detail.reflectance {
-                ReflectanceTerm::MaskPlusBias(b) => {
-                    json!({"maskPlusBias": self.factors(e, &[b])?[0].clone()})
-                }
-                ReflectanceTerm::Bias(b) => json!({"bias": self.factors(e, &[b])?[0].clone()}),
-            };
-            let mut o = Map::new();
-            o.insert("colorTexture".into(), colour);
-            o.insert("normalTexture".into(), normal);
-            o.insert("tint".into(), self.factors(e, &detail.tint)?);
-            o.insert(
-                "glossBias".into(),
-                self.factors(e, &[detail.gloss_bias])?[0].clone(),
-            );
-            o.insert("glossScale".into(), gloss_scale);
-            o.insert("reflectance".into(), reflectance);
-            details.push(Value::Object(o));
-        }
-        x.insert("details".into(), Value::Array(details));
-        let mut weights = Vec::new();
-        for w in &m.weights {
-            let source = match &w.source {
-                Source::Mask { channels, bias, .. } => json!({"mask": {
-                    "texture": next(),
-                    "channels": self.factors(e, channels)?,
-                    "bias": self.factors(e, &[*bias])?[0].clone(),
-                }}),
-                vertex @ Source::Vertex { .. } => self.layer_source(e, vertex, &mut written)?,
-            };
-            let mut steps = Vec::new();
-            for step in &w.steps {
-                steps.push(match *step {
-                    WeightStep::Power(n) => json!({"power": n}),
-                    WeightStep::Min(b) => json!({"min": self.factors(e, &[b])?[0].clone()}),
-                    WeightStep::Max(b) => json!({"max": self.factors(e, &[b])?[0].clone()}),
-                    WeightStep::Affine { scale, bias } => json!({"affine": {
-                        "scale": self.factors(e, &[scale])?[0].clone(),
-                        "bias": self.factors(e, &[bias])?[0].clone(),
-                    }}),
-                    WeightStep::Saturate => json!({"saturate": {}}),
-                });
-            }
-            weights.push(json!({"source": source, "steps": steps}));
-        }
-        x.insert("weights".into(), Value::Array(weights));
-        x.insert("gain".into(), self.factors(e, &[m.gain])?[0].clone());
-        x.insert(
-            "normalStrength".into(),
-            self.factors(e, &[m.normal_strength])?[0].clone(),
-        );
-        if let SurfaceLowering::GlossReflectance { dielectric_f0 } = d.lowering {
-            x.insert(
-                "dielectricF0".into(),
-                self.factors(e, &[dielectric_f0])?[0].clone(),
-            );
-        }
-        if m.base_saturation != 0.0 {
-            x.insert(
-                "baseSaturation".into(),
-                self.factors(e, &[m.base_saturation])?[0].clone(),
-            );
-        }
-        x.insert("color".into(), self.factors(e, &m.colour)?);
-        let encoding = m.gloss_encoding;
-        x.insert(
-            "glossEncoding".into(),
-            json!({
-                "power": encoding.power,
-                "root": encoding.root,
-                "scale": self.factors(e, &[f32::from_bits(encoding.scale_bits)])?[0].clone(),
-            }),
-        );
-        if let Some(j) = m.alpha {
-            x.insert("alphaDetail".into(), json!(j));
-        }
-        let mut frozen = Vec::new();
-        for f in &d.frozen {
-            frozen.push(match f {
-                Frozen::FrontFacing => json!({"frontFacing": {}}),
-                Frozen::VertexInput {
-                    semantic,
-                    index,
-                    value,
-                } => json!({"vertexInput": {
-                    "semantic": semantic, "index": index, "value": self.factors(e, value)?,
-                }}),
-                Frozen::EngineConstant { name, value } => json!({"engineConstant": {
-                    "name": name, "value": self.factors(e, value)?,
-                }}),
-                Frozen::EngineTexture { name, value } => json!({"engineTexture": {
-                    "name": name, "value": self.factors(e, value)?,
-                }}),
-            });
-        }
-        x.insert("frozen".into(), Value::Array(frozen));
-        sets.extend(written);
-        Ok(Ok(Value::Object(x)))
-    }
-
-    /// A weight or height source as `PRIMASE_layered_material` writes it.
-    fn layer_source(&mut self, e: Entity, s: &Source, sets: &mut BTreeSet<u8>) -> Result<Value> {
-        Ok(match s {
-            Source::Vertex { semantic, channel } => {
-                let attribute = match semantic {
-                    Semantic::Color(n) => format!("COLOR_{n}"),
-                    Semantic::TexCoord(n) => format!("TEXCOORD_{n}"),
-                    other => {
-                        return Err(Error::World {
-                            entity: e,
-                            detail: format!("a weight channel reads {other:?}: COLOR_n or TEXCOORD_n only"),
-                        });
-                    }
-                };
-                json!({"vertex": {"attribute": attribute, "channel": channel}})
-            }
-            Source::Mask {
-                texture,
-                channels,
-                bias,
-            } => {
-                let info = self
-                    .texture_info(Some(*texture), sets)?
-                    .ok_or_else(|| Error::World {
-                        entity: e,
-                        detail: format!(
-                            "mask texture {:?} could not be written (not loaded, or a format an 8-bit PNG cannot hold \
-                             exactly: lower-textures-rgba8)",
-                            texture.texture
-                        ),
-                    })?;
-                json!({"mask": {
-                    "texture": info,
-                    "channels": self.factors(e, channels)?,
-                    "bias": self.factors(e, &[*bias])?[0].clone(),
-                }})
-            }
-        })
-    }
-
-    /// A per-pixel weight channel as `PRIMASE_layered_material` writes it.
-    fn layer_channel(&mut self, e: Entity, c: &Channel, sets: &mut BTreeSet<u8>) -> Result<Value> {
-        let mut source = |s: &Source| self.layer_source(e, s, sets);
-        Ok(match c {
-            Channel::Source(s) => json!({"source": source(s)?}),
-            Channel::Lerp { a, b, t } => json!({"lerp": {"a": source(a)?, "b": source(b)?, "t": source(t)?}}),
-            Channel::Threshold { v, m, k } => {
-                let (v, m) = (source(v)?, source(m)?);
-                json!({"threshold": {"v": v, "m": m, "k": self.factors(e, k)?}})
-            }
-            Channel::Power { v, exponent } => json!({"power": {"v": source(v)?, "exponent": exponent}}),
-            Channel::Product { sources } => {
-                let factors = sources.iter().map(source).collect::<Result<Vec<_>>>()?;
-                json!({"product": factors})
-            }
-        })
-    }
-
     fn texture(&mut self, r: TextureRef) -> Result<Option<usize>> {
         let key = (r.texture, r.wrap, r.filters);
         if let Some(&i) = self.texture_index.get(&key) {
@@ -2058,14 +1672,17 @@ impl Writer<'_> {
             }
             t.insert("sampler".into(), json!(sampler));
         }
-        if data {
-            // and must reach a consumer whole: no resizing or lossy coding of its image
-            self.images[image]["extras"]["primase.role"] = json!("data");
+        if let Some(extras) = self.object_extras(Object::Image { texture: r.texture })? {
+            for (k, v) in extras {
+                self.images[image]["extras"][k] = v;
+            }
         }
         t.insert("source".into(), json!(image));
         t.insert("name".into(), Value::String(self.name_of(r.texture, "texture")));
-        if let Some(extras) = self.extras(r.texture, CONSUMED_TEXTURE)? {
-            t.insert("extras".into(), extras);
+        let object = Object::Texture(r.texture);
+        self.written_as(r.texture, &object, &[]);
+        if let Some(extras) = self.object_extras(object)? {
+            t.insert("extras".into(), Value::Object(extras));
         }
         self.textures.push(Value::Object(t));
         self.report.textures += 1;
@@ -2149,37 +1766,41 @@ impl Writer<'_> {
         Ok(Some(index))
     }
 
-    /// The extras of an entity: its components with a JSON form, minus what the glTF object already expresses, as
-    /// `{"primase": {"<component name>": {"version": n, "value": ...}}}`. Components without one are counted in
-    /// the report; a view that would lose a value (a non-finite float) is an error.
-    fn extras(&mut self, e: Entity, consumed: &[&str]) -> Result<Option<Value>> {
-        let shown = self.world.components_json(e).map_err(|err| Error::World {
-            entity: e,
-            detail: err.to_string(),
-        })?;
-        Ok(self.primase_extras(shown, consumed))
+    /// `e` is written as `object`: the components it expresses, and `also` those an extension wrote of it, are not
+    /// counted as without a glTF form ([`Writer::count_without_form`]).
+    fn written_as(&mut self, e: Entity, object: &Object<'_>, also: &[&'static str]) {
+        let names = self.expressed.entry(e).or_default();
+        names.extend(crate::extend::expressed(object));
+        names.extend(also);
     }
 
-    /// The extras of a piece cut from `prototype`: the prototype's components on a copy of it rebuilt to the piece
-    /// ([`World::rebuild_primitives`]: per-primitive components remapped by `from`; the world itself is unchanged).
-    fn piece_extras(&mut self, prototype: Entity, from: &[usize], piece: &Mesh) -> Result<Option<Value>> {
-        let failed = |detail: String| Error::World {
-            entity: prototype,
-            detail,
-        };
-        // the one way to change a primitive list: the copy's mesh becomes the piece and every per-primitive
-        // component follows `from`, checked (count and index range) by the world
-        let mut copy = self.world.subset(&BTreeSet::from([prototype]));
-        copy.rebuild_primitives(prototype, |_| Ok((piece.primitives().to_vec(), from.to_vec())))
-            .map_err(failed)?;
-        let shown = copy
-            .components_json(prototype)
-            .map_err(|err| failed(err.to_string()))?;
-        Ok(self.primase_extras(shown, CONSUMED_PROTOTYPE))
+    /// Each entity written: its components no object made from it expresses, by name.
+    fn count_without_form(&mut self) {
+        let world = self.world;
+        for (&e, expressed) in &self.expressed {
+            for name in world.component_names_of(e) {
+                if !expressed.contains(name) {
+                    *self
+                        .report
+                        .components_without_form
+                        .entry(name.to_owned())
+                        .or_default() += 1;
+                }
+            }
+        }
     }
 
-    /// Without a selection, count the components of every entity neither handled nor reached from one left out under a
-    /// counted cause: what the glTF does not hold and no other field of the report names.
+    /// The extensions' extras for `object`, merged in their order.
+    fn object_extras(&mut self, object: Object<'_>) -> Result<Option<Map<String, Value>>> {
+        let mut out: Option<Map<String, Value>> = None;
+        for x in &self.options.extensions.0 {
+            if let Some(extras) = x.extras(self.world, object)? {
+                out.get_or_insert_with(Map::new).extend(extras);
+            }
+        }
+        Ok(out)
+    }
+
     /// The source a placement draws: its prototype skinned by its binding when it follows a written rig and its
     /// prototype has that binding; else the prototype as it is (a skinned one counted, drawn in its bind pose).
     fn skinned_src(&mut self, place: &Place) -> Src {
@@ -2632,10 +2253,7 @@ impl Writer<'_> {
             a.insert("channels".into(), Value::Array(channels));
             a.insert("samplers".into(), Value::Array(samplers));
             if clip.extrapolation == Extrapolation::Loop {
-                a.insert(
-                    "extras".into(),
-                    json!({"primase.loop": true, "primase.duration": clip.duration}),
-                );
+                self.report.clips_looping += 1;
             }
             self.animations.push(Value::Object(a));
             self.report.animations += 1;
@@ -2643,6 +2261,8 @@ impl Writer<'_> {
         Ok(())
     }
 
+    /// Without a selection, count the components of every entity neither handled nor reached from one left out under a
+    /// counted cause: what the glTF does not hold and no other field of the report names.
     fn count_unwritten(&mut self) {
         if self.options.selection.is_some() {
             return;
@@ -2665,47 +2285,64 @@ impl Writer<'_> {
         }
         self.report.entities_unwritten = entities.len() as u64;
     }
+}
 
-    fn primase_extras(&mut self, shown: Vec<ComponentJson<'_>>, consumed: &[&str]) -> Option<Value> {
-        let mut map = Map::new();
-        for c in shown {
-            if consumed.contains(&c.name) {
-                continue;
-            }
-            match c.value {
-                Some(v) => {
-                    map.insert(c.name.to_owned(), json!({"version": c.version, "value": v}));
-                }
-                None => *self.report.extras_unencoded.entry(c.name.to_owned()).or_default() += 1,
-            }
-        }
-        (!map.is_empty()).then(|| json!({ "primase": map }))
+/// The writer's own operations, for an extension that writes a material or a material's extension
+/// ([`crate::extend`]): what it references is written as the writer writes it, and takes its index and its place in
+/// the binary buffer where the writer reaches it.
+pub struct MaterialWriter<'a, 'w> {
+    w: &'a mut Writer<'w>,
+}
+
+impl fmt::Debug for MaterialWriter<'_, '_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MaterialWriter").finish_non_exhaustive()
     }
 }
 
-fn cast_on(cast: bool) -> &'static str {
-    if cast { "on" } else { "off" }
-}
+impl MaterialWriter<'_, '_> {
+    /// The world being written.
+    pub fn world(&self) -> &World {
+        self.w.world
+    }
 
-/// `extras` with `"primase.shadows"` added when anything about them is known.
-fn with_shadows(extras: Option<Value>, cast: Option<&str>, receive: Option<bool>) -> Option<Value> {
-    if cast.is_none() && receive.is_none() {
-        return extras;
+    /// Material entity `e` as the writer writes it (extensions offered it first): its glTF material index and the
+    /// texture coordinate sets it samples; `None` where it has nothing glTF can draw (counted).
+    pub fn material(&mut self, e: Entity) -> Result<Option<(usize, BTreeSet<u8>)>> {
+        self.w.material(e)
     }
-    let mut shadows = Map::new();
-    shadows.insert("version".into(), json!(1));
-    if let Some(cast) = cast {
-        shadows.insert("cast".into(), json!(cast));
+
+    /// The JSON of written material `index`.
+    pub fn written(&self, index: usize) -> &Value {
+        &self.w.materials[index]
     }
-    if let Some(receive) = receive {
-        shadows.insert("receive".into(), json!(receive));
+
+    /// A texture slot as glTF's `textureInfo` (`index`, `texCoord`, its transform as `KHR_texture_transform`), its
+    /// texture, sampler and image written; `None` when its texture could not be written (counted). Adds the slot's
+    /// set to `sets`.
+    pub fn texture_info(&mut self, r: TextureRef, sets: &mut BTreeSet<u8>) -> Result<Option<Value>> {
+        self.w.texture_info(Some(r), sets)
     }
-    let mut extras = extras.unwrap_or_else(|| json!({}));
-    extras
-        .as_object_mut()
-        .expect("extras are an object")
-        .insert(SHADOWS.into(), Value::Object(shadows));
-    Some(extras)
+
+    /// A UV transform as `KHR_texture_transform`'s fields (defaults left out), its numbers checked as `e`'s.
+    pub fn uv_transform(&self, e: Entity, x: UvTransform) -> Result<Map<String, Value>> {
+        self.w.uv_transform(e, x)
+    }
+
+    /// Numbers as JSON, an error naming `e` for a non-finite one.
+    pub fn factors(&self, e: Entity, xs: &[f32]) -> Result<Value> {
+        self.w.factors(e, xs)
+    }
+
+    /// `e`'s name, else `<what>_e<index>`, as the writer names what it writes.
+    pub fn name_of(&self, e: Entity, what: &str) -> String {
+        self.w.name_of(e, what)
+    }
+
+    /// The extensions' extras for `object` ([`crate::extend::Extension::extras`]), for a material written whole.
+    pub fn extras(&mut self, object: Object<'_>) -> Result<Option<Map<String, Value>>> {
+        self.w.object_extras(object)
+    }
 }
 
 /// glTF's `magFilter` (and a `minFilter` without mips): 9728 NEAREST, 9729 LINEAR.

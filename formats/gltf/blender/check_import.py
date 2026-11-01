@@ -8,8 +8,8 @@ many objects/meshes/materials/scenes carry each extras key as a custom property 
 could only store as a string), mirrored objects, and the largest difference between every placed object's world
 matrix and the node's world matrix read from the GLB itself (converted to Blender's Z-up frame).
 
---collections turns the writer's group empties (extras "primase.collection") into Blender collections first, the
-way a user would after import (primase_collections below).
+--collections turns the writer's group empties (the root empties whose children are all meshes, named like their
+prototype or tile) into Blender collections first, the way a user would after import (primase_collections below).
 """
 
 import json
@@ -60,10 +60,16 @@ TO_BLENDER = Matrix(((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (0, 0, 0, 1)))
 
 
 def primase_collections(scene):
-    """Group empties (extras "primase.collection") -> collections holding their children; the empties go."""
+    """Group empties (root empties whose children are all meshes) -> collections named like them, holding their
+    children; the empties go."""
     made = 0
-    for empty in [o for o in scene.objects if o.type == "EMPTY" and "primase.collection" in o]:
-        coll = bpy.data.collections.new(str(empty["primase.collection"]))
+    groups = [
+        o
+        for o in scene.objects
+        if o.type == "EMPTY" and o.parent is None and o.children and all(c.type == "MESH" for c in o.children)
+    ]
+    for empty in groups:
+        coll = bpy.data.collections.new(empty.name)
         scene.collection.children.link(coll)
         for child in list(empty.children):
             world = child.matrix_world.copy()
@@ -85,16 +91,6 @@ def prop_census(ids):
             if k.startswith("_") or k == "cycles":
                 continue
             v = idb[k]
-            if k == "primase" and hasattr(v, "keys"):
-                # extras.primase = {"<component>": {"version": n, "value": ...}}: count per component
-                for name in v.keys():
-                    sub = v[name]
-                    entry = out.setdefault("primase/" + name, [0, 0])
-                    entry[0] += 1
-                    val = sub.get("value") if hasattr(sub, "get") else sub
-                    if isinstance(sub, str) or (isinstance(val, str) and val[:1] in "{["):
-                        entry[1] += 1
-                continue
             entry = out.setdefault(k, [0, 0])
             entry[0] += 1
             if isinstance(v, str) and v[:1] in "{[":
