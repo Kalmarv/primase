@@ -1,9 +1,12 @@
 //! `select-forzatech-drawn`: the placements the game draws at a camera distance the program states, by the game's own
 //! distances; the others dropped by name, and the prototypes no placement uses any more with them.
 //!
-//! A rule-placed placement is drawn at distance `d` when a range of its template's draw behaviour, in a slot that draws
-//! one of the template's LOD sets, holds `d` (`start <= d < end`); which render pass each slot is is not established,
-//! so any slot counts. A hand-placed one is drawn when the band of its LOD profile group's main-view record (pass 2)
+//! A rule-placed placement is drawn at distance `d` when a range of its template's draw behaviour in the main view's
+//! slot ([`MAIN_VIEW_SLOT`]) holds `d` (`start <= d < end`). That slot 13 is the main colour view is inferred: it is the
+//! only slot whose LOD set holds the finest LOD of every template and the whole LOD chain (a tree's 0-25, 25-80,
+//! 80-225 m), and an impostor's range in it starts where its full form's chain ends; the other slots draw one coarser
+//! set (impostor cards from 0 m, flattenable-bush proxies), so counting them kept, at 5 m, impostors and proxies
+//! whose full forms stand at the same positions. A hand-placed one is drawn when the band of its LOD profile group's main-view record (pass 2)
 //! for the stated quality tier that holds `d` has a LOD row (band `k` holds `[max(distances 0..k), distance k)`); a
 //! placement whose group has no such record is not drawn in the main view, and one with no group is drawn when its
 //! nearest band has a row. So at a short distance the impostors, far billboards and HLOD proxies, drawn only further
@@ -15,6 +18,9 @@ use std::collections::BTreeSet;
 
 /// The `.pvs` pass number of the main view's LOD profile records.
 pub const MAIN_VIEW: u16 = 2;
+
+/// The draw behaviour slot of the main colour view (inferred: see the module documentation).
+pub const MAIN_VIEW_SLOT: u8 = 13;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SelectForzaDrawn {
@@ -119,12 +125,12 @@ impl Pass for SelectForzaDrawn {
                     .get::<Instance>(e)
                     .and_then(|i| world.get::<Template>(i.prototype))
                     .is_some_and(|t| {
-                        t.ranges
-                            .iter()
-                            .any(|r| r.start <= self.distance && self.distance < r.end)
+                        t.ranges.iter().any(|r| {
+                            r.slot == MAIN_VIEW_SLOT && r.start <= self.distance && self.distance < r.end
+                        })
                     })
                     .then_some(())
-                    .ok_or("rule-placed placements not drawn at the distance"),
+                    .ok_or("rule-placed placements not drawn at the distance in the main view's slot"),
                 PlacementOrigin::Hand {
                     band_rows, lod_group, ..
                 } => self.hand_drawn(profiles, *lod_group, band_rows),
@@ -149,5 +155,83 @@ impl Pass for SelectForzaDrawn {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::DrawRange;
+
+    /// A rule placement of a prototype whose template is drawn in `ranges` (slot, start, end).
+    fn placed(w: &mut World, ranges: &[(u8, f32, f32)]) -> Entity {
+        let p = w.spawn();
+        w.insert(
+            p,
+            Template {
+                name: "t".into(),
+                category: "TREES".into(),
+                draw_behaviour: "b".into(),
+                models: Vec::new(),
+                ranges: ranges
+                    .iter()
+                    .map(|&(slot, start, end)| DrawRange { slot, start, end })
+                    .collect(),
+            },
+        );
+        let e = w.spawn();
+        w.insert(
+            e,
+            Instance {
+                prototype: p,
+                variant: 0,
+            },
+        );
+        w.insert(
+            e,
+            Placement {
+                origin: PlacementOrigin::Rule {
+                    file: "f.pgeo".into(),
+                    category: "TREES".into(),
+                    block: "t".into(),
+                    record: 0,
+                    route: String::new(),
+                    gameplay_tag: String::new(),
+                    variation: [255; 4],
+                    frame: 0,
+                },
+                season_exclusion: 0,
+                material_variant: 0,
+            },
+        );
+        e
+    }
+
+    #[test]
+    fn a_rule_placement_is_drawn_by_the_main_views_slot_alone() {
+        let mut w = World::new();
+        // a tree's full form: the LOD chain in slot 13, a coarse set in slot 11
+        let full = placed(&mut w, &[(11, 0.0, 135.0), (13, 0.0, 25.0), (13, 25.0, 80.0)]);
+        // its impostor: cards from 0 m in slots 1 and 6, in slot 13 only from where the chain ends
+        let impostor = placed(&mut w, &[(1, 0.0, 400.0), (6, 0.0, 200.0), (13, 225.0, 1000.0)]);
+        // a flattenable-bush proxy: slot 11 alone
+        let proxy = placed(&mut w, &[(11, 0.0, 40.0)]);
+        let mut log = PassLog::default();
+        SelectForzaDrawn::new(5.0, 1)
+            .unwrap()
+            .run(&mut w, &mut log)
+            .unwrap();
+        assert!(w.is_alive(full));
+        assert!(!w.is_alive(impostor) && !w.is_alive(proxy));
+        let mut far = World::new();
+        let impostor = placed(&mut far, &[(1, 0.0, 400.0), (13, 225.0, 1000.0)]);
+        SelectForzaDrawn::new(300.0, 1)
+            .unwrap()
+            .run(&mut far, &mut log)
+            .unwrap();
+        assert!(
+            far.is_alive(impostor),
+            "drawn where its main-view range holds the distance"
+        );
     }
 }
