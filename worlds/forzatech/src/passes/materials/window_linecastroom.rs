@@ -35,6 +35,7 @@ use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform, Wrap};
 use primase_core::{ColorSpace, Entity, Name, TexRole, Texture, World};
 use primase_foundations::color::srgb_to_linear;
 use primase_image::{TextureMetadata, map_rgba8_levels};
+use std::collections::btree_map::Entry;
 
 /// The coordinate set of the window frame.
 const FRAME_SET: u8 = 2;
@@ -61,7 +62,7 @@ impl Lowering {
         room: Entity,
         grid: [u32; 2],
     ) -> Result<Option<&Vec<[f64; 3]>>, String> {
-        if !self.rooms.contains_key(&(room, grid)) {
+        if let Entry::Vacant(slot) = self.rooms.entry((room, grid)) {
             let cells = match w.get::<Texture>(room) {
                 Some(t) if !t.levels.is_empty() => {
                     let space = t.color_space;
@@ -104,7 +105,7 @@ impl Lowering {
                 }
                 _ => None,
             };
-            self.rooms.insert((room, grid), cells);
+            slot.insert(cells);
         }
         Ok(self.rooms.get(&(room, grid)).and_then(Option::as_ref))
     }

@@ -222,6 +222,9 @@ impl<'a> Params<'a> {
     }
 }
 
+/// The back wall's mean colour of each cell of a room atlas, `None` for a texture with no pixels.
+type RoomMeans = Option<Vec<[f64; 3]>>;
+
 /// How the materials of a world were lowered, by reason.
 struct Lowering {
     triangles: BTreeMap<Entity, u64>,
@@ -238,7 +241,7 @@ struct Lowering {
     reflected: BTreeSet<Entity>,
     /// The mean linear colour of the back wall of each cell of a room atlas (cell by cell, row by row), by texture and
     /// the atlas's cell grid; `None` where the texture has no pixels.
-    rooms: BTreeMap<(Entity, [u32; 2]), Option<Vec<[f64; 3]>>>,
+    rooms: BTreeMap<(Entity, [u32; 2]), RoomMeans>,
 }
 
 impl Lowering {
