@@ -22,6 +22,10 @@ filter = "binary(effect_lights_census)"
 threads-required = 17
 
 [[profile.default.overrides]]
+filter = "binary(shibuya_swatch) | binary(shibuya_ground)"
+threads-required = 14
+
+[[profile.default.overrides]]
 filter = "binary(area_reader) | binary(normal_basis)"
 threads-required = 12
 
@@ -39,6 +43,10 @@ threads-required = 9
 [[profile.default.overrides]]
 filter = "binary(baked_area) | binary(material_class_census) | binary(shadow_census) | binary(layer_bake_digest)"
 threads-required = 6
+
+[[profile.default.overrides]]
+filter = "binary(shibuya_materials)"
+threads-required = 3
 
 [[profile.default.overrides]]
 filter = "binary(interchange_real_data)"
