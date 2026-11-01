@@ -26,12 +26,15 @@ mod normals;
 mod orm;
 pub use orm::{MissingLevels, OrmSize, PACK_ORM, PackOrm};
 mod qoi;
+mod rebase;
+pub use rebase::{MAX_GROUPS, PADDING, REBASE_TEXCOORD_SET, RebaseTexcoordSet};
 mod rgba8;
 pub use qoi::{Qoi, QoiChannels, QoiColorspace, read_qoi};
 pub use rgba8::{LOWER_TEXTURES_RGBA8, LowerTexturesRgba8, SignedData, rgba8_exact};
 mod texture;
 mod tga;
 mod upscale;
+mod uv_resample;
 pub use normals::{NormalFilter, normal_mip_chain, rebuild_normal_z, resize_normals, scale_normal};
 use primase_foundations::color::{linear_to_srgb8, srgb8_to_linear};
 use std::io::Cursor;
@@ -43,6 +46,7 @@ pub use texture::{
 pub use tga::{Tga, TgaKind, read_tga};
 use thiserror::Error;
 pub use upscale::{MAX_UPSCALED, UPSCALE_NEAREST, UpscaleBy, UpscaleNearest, enlarge_nearest};
+pub use uv_resample::{Canvas, Rebaked, Source, UvTriangle, claimed_texels, rebake, sample_bilinear};
 /// This crate's source files, for the keys of disk caches whose values its code computes (`primase-cache`): editing
 /// any of them retires those entries. A test keeps the list equal to the `src` folder.
 pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
@@ -60,10 +64,12 @@ pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
     ("image/normals.rs", include_bytes!("normals.rs")),
     ("image/orm.rs", include_bytes!("orm.rs")),
     ("image/qoi.rs", include_bytes!("qoi.rs")),
+    ("image/rebase.rs", include_bytes!("rebase.rs")),
     ("image/rgba8.rs", include_bytes!("rgba8.rs")),
     ("image/texture.rs", include_bytes!("texture.rs")),
     ("image/tga.rs", include_bytes!("tga.rs")),
     ("image/upscale.rs", include_bytes!("upscale.rs")),
+    ("image/uv_resample.rs", include_bytes!("uv_resample.rs")),
 ];
 /// Register this crate's passes by their declarations.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
@@ -80,6 +86,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         &orm::PACK_ORM,
         &BAKE_NORMAL_SCALE,
         &upscale::UPSCALE_NEAREST,
+        &REBASE_TEXCOORD_SET,
     ] {
         reg.add(spec);
     }
