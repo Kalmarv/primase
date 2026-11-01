@@ -138,8 +138,10 @@ fn main() -> Result<()> {
     };
     let studio = Studio { cli, game: skate.clone() };
     let skate_oodle = load_oodle(&skate.join("oo2core_9_win64.dll"), Version::V9)?;
+    // resident: the box is six render cells, all of it near the skater, and Studio's vista proxies (the far view of
+    // streamed cells) have hung the GPU; streamed, they also draw together with the cells they stand for
     let choices = CompileChoices {
-        streaming: Some(Streaming::Cells),
+        streaming: Some(Streaming::Resident),
         lods: true,
         gi: true,
         time_of_day: Some(TimeOfDay::Noon),
