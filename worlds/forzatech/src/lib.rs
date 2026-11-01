@@ -14,6 +14,7 @@ pub mod read;
 /// Register Forza Horizon 6's passes.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.add(&passes::COLLIDE_FORZATECH_DRAWN);
+    reg.add(&passes::LOWER_FORZATECH_MATERIALS);
     reg.add(&passes::SELECT_FORZATECH_DRAWN);
     reg.add(&passes::SELECT_FORZATECH_MAIN_VIEW);
 }

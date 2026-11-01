@@ -5,8 +5,11 @@ use std::path::{Path, PathBuf};
 use forzatech_formats::world::{Area, Season};
 use primase_core::convert::{Result, convert};
 use primase_core::pass::{PassManager, PassRegistry, Pipeline};
+use primase_core::pbr::TextureSlot;
 use primase_core::{LodChoice, SelectLod};
-use primase_forzatech::passes::{CollideForzaDrawn, SeeThrough, SelectForzaDrawn, SelectForzaMainView};
+use primase_forzatech::passes::{
+    CollideForzaDrawn, LowerForzaMaterials, SeeThrough, SelectForzaDrawn, SelectForzaMainView,
+};
 use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
 use primase_forzatech::read::placements::Scope;
@@ -16,8 +19,8 @@ use primase_reskate::compile::{CompileChoices, Streaming, Studio, TimeOfDay, com
 use primase_reskate::components::{CollisionSurfaces, CollisionWeld};
 use primase_reskate::passes::{
     ClipReskateRegion, LightCalibration, PlaceReskateSpawn, PrepareReskateCollision, PrepareReskateFloor,
-    PrepareReskateGrinds, PrepareReskateLaidLayers, PrepareReskateTextures, RaiseOptions, RaiseSkate,
-    SnapReskateMarkers, SummarizeReskateMap, Unclassified,
+    PrepareReskateGrinds, PrepareReskateLaidLayers, PrepareReskateTextures, PrepareReskateUvTransforms, RaiseOptions,
+    RaiseSkate, SamplingConflicts, SnapReskateMarkers, SummarizeReskateMap, Unclassified,
 };
 use primase_reskate::{EncodingOptions, MapSink};
 
@@ -45,9 +48,14 @@ fn main() -> Result<()> {
         ..EncodingOptions::default()
     };
 
-    // Run once on the box as read: what the game draws near the camera, at its second level of detail.
+    // Run once on the box as read: what the game draws near the camera, at its second level of detail, its materials
+    // lowered to `pbr.material` (the families with a rule; the others are left out, counted).
     let select = Pipeline {
-        passes: vec![Box::new(SelectForzaDrawn::new(5.0, 0)?), Box::new(SelectLod { choice: LodChoice::AtMost(1) })],
+        passes: vec![
+            Box::new(SelectForzaDrawn::new(5.0, 0)?),
+            Box::new(SelectLod { choice: LodChoice::AtMost(1) }),
+            Box::new(LowerForzaMaterials),
+        ],
     };
 
     // Run on each part before it is written: the core world prepared as the ReSkate writer encodes it.
@@ -57,6 +65,8 @@ fn main() -> Result<()> {
             Box::new(CollideForzaDrawn { see_through: SeeThrough::LeaveOut }),
             Box::new(NormalizeNormals),
             Box::new(PrepareReskateLaidLayers::default()),
+            // each map of an environment material tiles on its own; skate samples one way, the base colour's
+            Box::new(PrepareReskateUvTransforms::new(TextureSlot::BaseColor, SamplingConflicts::Adopt)),
             // collision surfaces have no class yet: concrete, the city's most common ground (the program's choice)
             Box::new(RaiseSkate::new(RaiseOptions::new(
                 "shibuya",
