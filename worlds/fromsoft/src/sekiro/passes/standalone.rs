@@ -274,7 +274,11 @@ pub const BIND_FROMSOFT_ANIMATION: PassSpec = PassSpec {
         ),
         OptionSpec::required("clips", "all", "selected animation names or all"),
         OptionSpec::required("from", "c0000 havok skeleton", "source skeleton name"),
-        OptionSpec::required("to", "assembled skeleton", "target skeleton name"),
+        OptionSpec::required(
+            "to",
+            "assembly",
+            "the target skeleton's name, or assembly: the character's skeleton assemble-character recorded",
+        ),
         OptionSpec::required("tolerance", "0.001", "rest agreement in model units"),
         OptionSpec::required(
             "empty",
@@ -703,10 +707,28 @@ impl Pass for SelectFromSoftCharacterRead {
     }
 }
 
+/// `bind-fromsoft-animation{to=assembly}`: the clips bind onto the character's skeleton assemble-character recorded.
+pub const TO_ASSEMBLY: &str = "assembly";
+
 impl BindFromSoftAnimation {
+    /// The target skeleton's name: `to`, or with `to=assembly` the character's skeleton `assemble-character` recorded in
+    /// `w` (refused where none did).
+    pub fn target(&self, w: &World) -> Result<String, String> {
+        if self.to != TO_ASSEMBLY {
+            return Ok(self.to.clone());
+        }
+        w.resource::<primase_animation::AssembledCharacter>()
+            .map(|assembled| assembled.skeleton.clone())
+            .ok_or_else(|| {
+                "to=assembly: no assemble-character recorded the character's skeleton (animation.assembled_character)"
+                    .to_owned()
+            })
+    }
+
     /// Diagnostic expansion of this registered operation. Programs run the operation, never branch on this text.
     pub fn expansion(&self, w: &World) -> Result<Vec<String>, String> {
-        let counts = primase_animation::correspond::hierarchy_counts(w, &self.from, &self.to, self.tolerance);
+        let to = self.target(w)?;
+        let counts = primase_animation::correspond::hierarchy_counts(w, &self.from, &to, self.tolerance);
         let model_space = counts.is_some_and(|c| c.paired == 0) && self.empty == "model-space";
         let (parents, rests, reparented) = if model_space {
             ("any", "source", "model-space")
@@ -723,8 +745,8 @@ impl BindFromSoftAnimation {
                 self.absent, self.rate, self.root_motion, self.clips
             ),
             format!(
-                "correspond-skeletons{{from={},to={},tolerance={},parents={parents}}}",
-                self.from, self.to, self.tolerance
+                "correspond-skeletons{{from={},to={to},tolerance={},parents={parents}}}",
+                self.from, self.tolerance
             ),
             format!(
                 "map-clip{{unmapped={},rests={rests},reparented={reparented}}}",

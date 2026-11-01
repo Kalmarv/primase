@@ -56,12 +56,6 @@ pub fn selected_weapon_parts(
     }
     Ok(parts)
 }
-/// The caller's animation target: the skeleton a clip binds onto. Its name follows reader/assembly names; no hierarchy
-/// policy is chosen here, and how closely the rests must agree is the program's (`bind-fromsoft-animation{tolerance}`).
-#[derive(Clone, Debug)]
-pub struct AnimationTarget {
-    pub skeleton: String,
-}
 #[derive(Clone, Debug)]
 pub enum StandaloneAsset {
     /// A character model by id, read as the program states it is placed ([`CharacterRole`]).
@@ -195,15 +189,6 @@ pub enum CharacterRole {
     /// mesh of its own (Sekiro's human NPCs), by the placement's initializer parts (`initializer`).
     Npc,
 }
-pub fn animation_target(asset: &StandaloneAsset) -> AnimationTarget {
-    let skeleton = match asset {
-        StandaloneAsset::Character { id, .. } => format!("{id} skeleton"),
-        StandaloneAsset::Parts(parts) if parts.len() > 1 => "assembled skeleton".into(),
-        StandaloneAsset::Parts(parts) => format!("{} skeleton", parts.first().map_or("", String::as_str)),
-        StandaloneAsset::Form { form, .. } => format!("{form} skeleton"),
-    };
-    AnimationTarget { skeleton }
-}
 /// A staged load retains identities borrowed from the prepared scene, including the selected target rig.
 #[derive(Debug)]
 pub struct StagedCharacterClip {
@@ -213,12 +198,19 @@ pub struct StagedCharacterClip {
     pub notices: Vec<Notice>,
     pub name: String,
 }
+/// The clip `entity` of the prepared character `world` loaded, staged with the character's skeleton the clip binds onto:
+/// the one `assemble-character` recorded (`animation.assembled_character`, carried into the staged world for
+/// `bind-fromsoft-animation{to=assembly}`).
 pub fn load_character_clip(
     reader: &mut CharacterReader<'_>,
     world: &World,
     entity: Entity,
-    target: &str,
 ) -> Result<StagedCharacterClip> {
+    let assembled = world
+        .resource::<primase_animation::AssembledCharacter>()
+        .ok_or("the prepared character records no skeleton (run assemble-character before loading a clip)")?
+        .clone();
+    let target = assembled.skeleton.as_str();
     let targets: Vec<_> = world
         .iter::<Skeleton>()
         .filter(|(e, _)| world.get::<Name>(*e).is_some_and(|name| name.0 == target))
@@ -245,6 +237,7 @@ pub fn load_character_clip(
         staged.absorb(world.subset(&[target_entity].into()))?;
         borrowed.push(target_entity);
     }
+    staged.insert_resource(assembled);
     Ok(StagedCharacterClip {
         world: staged,
         borrowed,

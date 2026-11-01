@@ -26,7 +26,8 @@ pub mod simulation_schedule;
 pub mod weights;
 
 pub use assemble::{
-    ASSEMBLE_CHARACTER, AssembleCharacter, Correspondence, ReferencePose, UnweightedRests, WeightedRests,
+    ASSEMBLE_CHARACTER, AssembleCharacter, AssembledCharacter, Correspondence, ReferencePose,
+    UnweightedRests, WeightedRests,
 };
 pub use fit::{Fit, FitReport};
 pub use map::{MAP_CLIP, MapClip, Rests, Unmapped};

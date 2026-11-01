@@ -91,11 +91,17 @@
 //! **One part** is nothing to relate: the world is left as it is, the part its own character, and the report says so.
 //! No part at all is refused: nothing was read to assemble.
 //!
+//! **The result** is recorded ([`AssembledCharacter`], `animation.assembled_character`): the name of the character's
+//! skeleton, the assembled one (`<name> skeleton`) or, for one part, that part's. What binds clips onto the character
+//! reads it there, never from a name it composes.
+//!
 //! The six original options are required; `leave-out-marked=` and `reference-tolerance=` are optional. Approximations, reported: joints whose rests differ within the
 //! tolerance, the vertex displacement measure of `own`, the inverse binds `assembled` moves, and sockets of one name two
 //! parts place differently.
 
 use std::collections::{BTreeMap, BTreeSet};
+
+use primase_core::{JsonError, Resource};
 
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
@@ -144,6 +150,20 @@ pub enum WeightedRests {
     /// Reported with its amount and counted, the part staying bound to its own rest and inverse binds
     /// (`reference-pose=own`; with `assembled` it is refused all the same).
     Report,
+}
+
+/// What `assemble-character` made of the parts (`animation.assembled_character`): the name of the character's
+/// skeleton, the one clips bind onto.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct AssembledCharacter {
+    pub skeleton: String,
+}
+
+impl Resource for AssembledCharacter {
+    const NAME: &'static str = "animation.assembled_character";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
 }
 
 /// `assemble-character{correspondence=by-name|table, reference-pose=own|assembled, tolerance=<number>,
@@ -917,6 +937,7 @@ impl Pass for AssembleCharacter {
             Asset::NAME,
             Name::NAME,
             Source::NAME,
+            AssembledCharacter::NAME,
         ]
     }
     fn modifies(&self) -> &[&'static str] {
@@ -931,8 +952,14 @@ impl Pass for AssembleCharacter {
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let (mut parts, left_out) = gather(w, self.leave_out_marked.as_deref())?;
         if let [part] = parts.as_slice() {
+            let skeleton = w
+                .get::<Name>(part.rig)
+                .ok_or_else(|| format!("asset {}: its rig has no core.name", part.label))?
+                .0
+                .clone();
             log.count(&format!("parts: 1 ({}), nothing to relate", part.label), 1);
             log.count("held objects left out (leave-out-marked=)", left_out);
+            w.insert_resource(AssembledCharacter { skeleton });
             return Ok(());
         }
         let reference = add_reference(&mut parts, w)?;
@@ -1075,6 +1102,9 @@ impl Pass for AssembleCharacter {
         w.insert(character, Source(format!("assembled/{}", self.name)));
         let assembled = w.spawn();
         w.insert(assembled, Name(format!("{} skeleton", self.name)));
+        w.insert_resource(AssembledCharacter {
+            skeleton: format!("{} skeleton", self.name),
+        });
         w.insert(assembled, skeleton);
         let sockets = self.carry_sockets(w, &parts, &of, log)?;
         if !sockets.is_empty() {
@@ -2260,6 +2290,13 @@ mod tests {
         let report = run(&mut w, &held).unwrap();
         let log = &report.steps[0].log;
         assert_eq!(log.counts["held objects left out (leave-out-marked=)"], 2);
+        // the character's skeleton is recorded under the stated name
+        assert_eq!(
+            w.resource::<AssembledCharacter>(),
+            Some(&AssembledCharacter {
+                skeleton: "hero skeleton".into()
+            })
+        );
         assert_eq!(log.counts["parts assembled"], 2);
         // the two held assets and the character
         assert_eq!(w.iter::<Asset>().count(), 3);
@@ -2320,6 +2357,12 @@ mod tests {
             1
         );
         assert_eq!((w.entities().count(), assembled(&w)), before);
+        assert_eq!(
+            w.resource::<AssembledCharacter>(),
+            Some(&AssembledCharacter {
+                skeleton: "body skeleton".into()
+            })
+        );
         let root = w.iter::<Asset>().next().unwrap().0;
         w.insert(root, Held);
         let held = OWN.replace("name=hero}", "name=hero,leave-out-marked=test.held}");
