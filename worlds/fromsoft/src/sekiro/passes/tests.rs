@@ -630,8 +630,7 @@ fn object_collision_is_skipped_where_no_placed_model_has_collision() {
     let options: Options = [
         ("resolution", "high-else-low"),
         ("convex", "rounded:0.01"),
-        ("leave-out", ""),
-        ("leave-out-motion", ""),
+        ("motion", "all"),
         ("convex-surface", "default"),
         ("reach", "none"),
     ]
