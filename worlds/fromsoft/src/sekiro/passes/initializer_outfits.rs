@@ -341,20 +341,10 @@ impl Pass for SelectFromSoftInitializerOutfits {
                 label: format!("Open {} with its parts", outfit.name),
                 reasons: vec!["The character's drawable body is an installed initializer outfit.".into()],
                 reader: "parts".into(),
-                options: serde_json::json!({"parts":outfit.parts,"animations_of":outfit.animations_of}),
-                inherit: [
-                    "game",
-                    "install",
-                    "keys",
-                    "names",
-                    "bake_layers",
-                    "preview_layers",
-                    "game_shaders",
-                    "clips",
-                    "rate",
-                    "absent",
-                    "root_motion",
-                ]
+                // the read it asks for: the parts, with the animations of the character they dress
+                options: serde_json::json!({"parts":outfit.parts,"animations_of":outfit.animations_of,"animations":true}),
+                // what of the character's read carries over: the install and the clip it was playing
+                inherit: ["game", "install", "keys", "names", "clips", "effects"]
                 .into_iter()
                 .map(str::to_owned)
                 .collect(),
