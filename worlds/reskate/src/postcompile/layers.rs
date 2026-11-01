@@ -6,7 +6,18 @@
 //! of every case compiled by Studio and looked at in the game; the limits name their evidence). Opaque and alpha-tested
 //! surfaces write depth (a reversed float depth buffer, GreaterEqual) and set a stencil bit. Every layer drawn on
 //! another surface is *decal class*: no depth write, GreaterEqual with a depth bias (200 and slope 0.1), drawn only
-//! where the stencil bit is set, blended into the G-buffer after the opaque pass. So:
+//! where the stencil bit is set, blended into the G-buffer after the opaque pass.
+//!
+//! A program draws into the view's depth when it tests and writes depth *and* tests the stencil: the opaque and
+//! prepass programs write the stencil bits (write mask `0xfe`, pass op `Replace`) that decals test (read mask `0x08`).
+//! A program that writes depth but sets no stencil is a shadow or depth copy the main view does not draw (the shadow
+//! pass: depth bias -10, slope bias -4, no stencil), and a section only such programs draw is not depth-writing
+//! ([`Class::DepthWriting`]). Measured over the game's program lookup (57,963 material keys, 2,016 distinct rows, every
+//! raster state of every program in them): the depth-writing states are 33,367 with the stencil on (write mask 254,
+//! pass `Replace`, bias 0) and 1,133 with it off (bias -10); the rule changes the class of 512 keys, each with depth
+//! writers of negative bias only, among them the 87 keys of the alpha-tested cutouts' shadow twin (row 2184, 3303) that
+//! Studio writes beside every cutout section, bit-identical to it (the game does the same, e.g. `cmn_veg_needlepalm_a`).
+//! So:
 //!
 //! - two depth-writing surfaces closer than the depth buffer can tell apart fight ([`Check::DepthWriting`]): they need
 //!   a clearance ([`Limits::clearance`]); two copies of the very same triangles draw one of them cleanly (which one is
@@ -50,13 +61,15 @@ use crate::postcompile::{Error, Result};
 /// layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Class {
-    /// Some program tests and writes depth: opaque, alpha-tested.
+    /// Some program tests and writes depth and tests the stencil (so marks it): opaque, alpha-tested.
     DepthWriting,
     /// No program writes depth; one draws biased and stencil-tested: decals, blended surfaces on the decal row.
     Decal,
-    /// A section of positions alone: a depth or shadow copy of a drawn section, whose triangles it repeats.
+    /// A section of positions alone: a depth or shadow copy of a drawn section, whose triangles it repeats. (A copy
+    /// that also carries the cutout's texture coordinates is told by its programs: they write depth but no stencil,
+    /// so it classes as [`Class::Other`].)
     DepthOnly,
-    /// Anything else (blended without a bias, ...): not checked.
+    /// Anything else (blended without a bias, a shadow copy that writes depth but no stencil, ...): not checked.
     Other,
     /// A program index the game has no program for (a program a Patch carries of its own): not drawable by a runtime
     /// that loads the game's programs.
@@ -68,7 +81,10 @@ pub fn class_of(states: Option<&[FixedState]>) -> Class {
     let Some(states) = states else {
         return Class::Unknown;
     };
-    if states.iter().any(|s| s.depth_test && s.depth_write) {
+    if states
+        .iter()
+        .any(|s| s.depth_test && s.depth_write && s.stencil_test)
+    {
         Class::DepthWriting
     } else if states.iter().any(|s| s.depth_bias > 0 && s.stencil_test) {
         Class::Decal

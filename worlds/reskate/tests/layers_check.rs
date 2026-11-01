@@ -5,7 +5,10 @@
 
 use std::collections::BTreeMap;
 
-use primase_reskate::postcompile::layers::{Check, Class, Limits, Report, check, check_threads};
+use frostbite_formats::permutation::{
+    BlendOp, Compare, Cull, Fill, FixedState, StencilFace, StencilOp, TargetRecord,
+};
+use primase_reskate::postcompile::layers::{Check, Class, Limits, Report, check, check_threads, class_of};
 use primase_reskate::postcompile::level::{Level, Mesh, Placement, Section};
 
 const OPAQUE: u64 = 1;
@@ -231,4 +234,72 @@ fn the_report_is_the_same_on_one_thread_and_many() {
     ] {
         assert!(one.findings.contains_key(&c), "{c:?}: {:?}", one.findings.keys());
     }
+}
+
+/// A raster state as the game's programs state it (solid, back-culled, no blending), with the fields the class reads.
+fn state(depth_write: bool, stencil: bool, bias: i16) -> FixedState {
+    let face = StencilFace {
+        fail: StencilOp::Keep,
+        depth_fail: StencilOp::Keep,
+        pass: if stencil {
+            StencilOp::Replace
+        } else {
+            StencilOp::Keep
+        },
+        compare: if stencil {
+            Compare::GreaterEqual
+        } else {
+            Compare::Always
+        },
+    };
+    FixedState {
+        slope_scaled_depth_bias: if bias < 0 { -4.0 } else { 0.0 },
+        depth_bias: bias,
+        forced_sample_count: 0,
+        fill: Fill::Solid,
+        cull: Cull::Back,
+        front_counter_clockwise: true,
+        depth_clip: true,
+        multisample: false,
+        antialiased_line: false,
+        conservative: false,
+        depth_test: true,
+        depth_write,
+        stencil_test: stencil,
+        depth_compare: Compare::GreaterEqual,
+        stencil_read_mask: if stencil { 8 } else { 255 },
+        stencil_write_mask: if stencil { 254 } else { 255 },
+        front: face,
+        back: face,
+        logic_op: 4,
+        logic_op_enable: false,
+        alpha_to_coverage: false,
+        independent_blend: false,
+        targets: [TargetRecord {
+            blend: false,
+            source: 1,
+            destination: 0,
+            source_alpha: 1,
+            destination_alpha: 0,
+            alpha_op: BlendOp::Add,
+            write_mask: 15,
+        }; 8],
+    }
+}
+
+#[test]
+fn only_programs_that_write_depth_and_mark_the_stencil_draw_depth_into_the_view() {
+    // the prepass and opaque programs (depth written, stencil replaced), as the game states them
+    let main = state(true, true, 0);
+    // the shadow pass (depth written, bias -10, slope -4, no stencil): the shadow map, not the view
+    let shadow = state(true, false, -10);
+    // a decal row (no depth write, biased, stencil-tested)
+    let decal = state(false, true, 200);
+    // the opaque row: main-view programs draw depth; its shadow program rides along
+    assert_eq!(class_of(Some(&[main, main, shadow])), Class::DepthWriting);
+    // a cutout's twin section (row 2184, 3303): only the shadow program writes depth, so it is not checked
+    assert_eq!(class_of(Some(&[shadow, shadow])), Class::Other);
+    assert_eq!(class_of(Some(&[decal])), Class::Decal);
+    assert_eq!(class_of(Some(&[state(false, false, 0)])), Class::Other);
+    assert_eq!(class_of(None), Class::Unknown);
 }
