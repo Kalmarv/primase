@@ -1601,7 +1601,7 @@ pub fn resolve_vertex_for_geometry(
         }
         input.role = InputRole::Unknown {
             why: format!(
-                "TEXCOORD{n}: {points} of the {} primitives drawing this material store a point there (a Half4 member), {} a                  Byte4C member, the rest neither",
+                "TEXCOORD{n}: {points} of the {} primitives drawing this material store a point there (a Half4 member), {} a Byte4C member, the rest neither",
                 primitives.len(),
                 stores(primase_core::Semantic::Color(n))
             ),
