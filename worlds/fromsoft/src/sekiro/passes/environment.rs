@@ -58,7 +58,7 @@
 //! faithful carrying of the values, not a distance-fog approximation.
 use super::settings::Factor;
 use crate::sekiro::source::DrawParam;
-use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
     Ambient, AmbientLight, Atmosphere, AutoExposure, Component, DirectionalLightUnit, Environment,
     ExposureMeter, Light, LightKind, LightSpecular, Name, Resource, Source, TimeOfDay, Transform,
@@ -174,25 +174,57 @@ fn auto_exposure(group: &crate::sekiro::source::DrawGroup) -> Result<(AutoExposu
     Ok((auto, 8 + usize::from(group.value(TONE_FREEZE).is_some())))
 }
 
-/// `lower-fromsoft-environment{lux-per-unit}`: see the module documentation.
+/// How the lowered auto exposure adapts (`auto-exposure=`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutoExposureHold {
+    /// As the file states it: metered and adapted, unless the file disables it or freezes its fade.
+    AsStored,
+    /// Held at the hour's stored Exposure whatever the frame: for a frame that holds only part of what the game's frame
+    /// does (an effect alone), whose metered light would set an exposure the game's frame does not have. It equals the
+    /// game's where the game's whole frame meters at middle grey; elsewhere the game moves its exposure by up to the
+    /// adaption bounds (counted).
+    Held,
+}
+impl Choice for AutoExposureHold {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("as-stored", AutoExposureHold::AsStored),
+        ("held", AutoExposureHold::Held),
+    ];
+}
+
+/// `lower-fromsoft-environment{lux-per-unit, auto-exposure}`: see the module documentation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LowerFromSoftEnvironment {
     /// Lux of the sun, and the ambient's intensity, for a light colour of 1.
     lux_per_unit: Factor,
+    /// Whether the lowered auto exposure is held at its stored stops.
+    auto_exposure: AutoExposureHold,
 }
 
 impl LowerFromSoftEnvironment {
     pub fn new(lux_per_unit: Factor) -> Self {
-        LowerFromSoftEnvironment { lux_per_unit }
+        LowerFromSoftEnvironment {
+            lux_per_unit,
+            auto_exposure: AutoExposureHold::AsStored,
+        }
+    }
+    /// The same lowering with the auto exposure adapting as `hold` says.
+    pub fn with_auto_exposure(self, hold: AutoExposureHold) -> Self {
+        LowerFromSoftEnvironment {
+            auto_exposure: hold,
+            ..self
+        }
     }
     pub fn lux_per_unit(&self) -> Factor {
         self.lux_per_unit
     }
     fn from_given(g: &Given) -> Result<Self, String> {
-        Ok(Self::new(Factor::parse(
-            "lux-per-unit",
-            g.required("lux-per-unit"),
-        )?))
+        Ok(
+            Self::new(Factor::parse("lux-per-unit", g.required("lux-per-unit"))?).with_auto_exposure(
+                g.optional_choice("auto-exposure")
+                    .unwrap_or(AutoExposureHold::AsStored),
+            ),
+        )
     }
 }
 
@@ -200,11 +232,18 @@ impl LowerFromSoftEnvironment {
 /// light colours is not established, so the calibration is the program's.
 pub const LOWER_FROMSOFT_ENVIRONMENT: PassSpec = PassSpec {
     name: "lower-fromsoft-environment",
-    options: &[OptionSpec::required(
-        "lux-per-unit",
-        "1",
-        "at least 0: the lux of a directional light, and the ambient's intensity, for a stored light colour of 1, the program's calibration",
-    )],
+    options: &[
+        OptionSpec::required(
+            "lux-per-unit",
+            "1",
+            "at least 0: the lux of a directional light, and the ambient's intensity, for a stored light colour of 1, the program's calibration",
+        ),
+        OptionSpec::optional_choice::<AutoExposureHold>(
+            "auto-exposure",
+            "held: the auto exposure held at the hour's stored Exposure whatever the frame (a frame of part of the game's, an effect alone), counted",
+            "as the file states it: metered and adapted unless the file disables it or freezes its fade",
+        ),
+    ],
     make: |g| Ok(Box::new(LowerFromSoftEnvironment::from_given(g)?)),
 };
 
@@ -259,7 +298,11 @@ impl Pass for LowerFromSoftEnvironment {
         "lower-fromsoft-environment"
     }
     fn options(&self) -> Options {
-        Options::from([("lux-per-unit".to_owned(), self.lux_per_unit.to_string())])
+        let mut options = Options::from([("lux-per-unit".to_owned(), self.lux_per_unit.to_string())]);
+        if self.auto_exposure != AutoExposureHold::AsStored {
+            options.insert("auto-exposure".to_owned(), self.auto_exposure.text().to_owned());
+        }
+        options
     }
     fn requires(&self) -> &[&'static str] {
         &[DrawParam::NAME]
@@ -431,8 +474,15 @@ impl Pass for LowerFromSoftEnvironment {
             && env.game == fromsoft_formats::Game::EldenRing
         {
             match auto_exposure(group) {
-                Ok((auto, kept)) => {
+                Ok((mut auto, kept)) => {
                     let mut atmosphere = world.resource::<Atmosphere>().cloned().unwrap_or_default();
+                    if self.auto_exposure == AutoExposureHold::Held && !auto.frozen {
+                        auto.frozen = true;
+                        log.approximate(
+                            "auto exposure held at the hour's stored Exposure (auto-exposure=held): the game meters its whole frame, so its exposure differs by up to the adaption bounds where that frame does not meter at middle grey",
+                            1,
+                        );
+                    }
                     if auto.frozen {
                         log.count("auto exposures held at their stored stops (auto exposure off or its fade frozen)", 1);
                     }
@@ -1032,6 +1082,43 @@ mod tests {
                 why_not_lowered(TONE_MAP)
             )],
             12
+        );
+    }
+
+    /// `auto-exposure=held` holds an adapting auto exposure at its stored stops, counted, and prints itself back; left out,
+    /// the pass's text is what it always was.
+    #[test]
+    fn a_held_auto_exposure_is_shown_at_the_stored_stops_whatever_the_frame() {
+        use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport, pass_text};
+        let held = LOWER_FROMSOFT_ENVIRONMENT
+            .instance(&Options::from([
+                ("lux-per-unit".to_owned(), "1".to_owned()),
+                ("auto-exposure".to_owned(), "held".to_owned()),
+            ]))
+            .unwrap();
+        assert_eq!(
+            pass_text(held.as_ref()),
+            "lower-fromsoft-environment{auto-exposure=held,lux-per-unit=1}"
+        );
+        assert_eq!(
+            pass_text(&LowerFromSoftEnvironment::new(Factor::new(1.).unwrap())),
+            "lower-fromsoft-environment{lux-per-unit=1}"
+        );
+        let mut w = elden(vec![tone_map(1, -0.8933)]);
+        let mut report = RunReport::default();
+        PassManager::new(PassRegistry::new())
+            .run(&mut w, &Pipeline { passes: vec![held] }, &mut report)
+            .unwrap();
+        let log = report.steps.remove(0).log;
+        let auto = w.resource::<Atmosphere>().unwrap().auto_exposure.clone().unwrap();
+        assert!(auto.frozen);
+        // a frame far below middle grey is shown at the stored stops, not raised by the adaption bound
+        assert_eq!(auto.scale(-12.0), 3.4042f32.exp2());
+        assert!(
+            log.approximations
+                .keys()
+                .any(|k| k
+                    .starts_with("auto exposure held at the hour's stored Exposure (auto-exposure=held)"))
         );
     }
 
