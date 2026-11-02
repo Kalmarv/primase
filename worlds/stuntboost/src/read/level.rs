@@ -22,8 +22,7 @@ use monogame_formats::xnb::Xnb;
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::pbr::Wrap;
 use primase_core::{
-    ColorSpace, Curve, Entity, Instance, Mesh, Name, Semantic, Source, Stream, TexFormat, TexRole, Texture,
-    Transform, World,
+    ColorSpace, Curve, Entity, Instance, Mesh, Name, Source, TexFormat, TexRole, Texture, Transform, World,
 };
 use primase_glb::Gltf;
 use serde_json::Value;
@@ -688,9 +687,8 @@ fn read_part(
         for p in &read.primitives {
             let mut primitive = p.primitive.clone();
             primitive.material = p.material.and_then(|m| materials.get(m).copied());
-            if let Some(Stream::F32x3(positions)) = primitive.streams.get_mut(&Semantic::Position) {
-                positions.iter_mut().for_each(|v| *v = frame.point(*v));
-            }
+            primase_core::move_streams(&mut primitive.streams, frame)
+                .map_err(|e| Error::Format(format!("mesh {i}: {e}")))?;
             mesh_primitives.push(primitive);
             let mut custom = BTreeMap::new();
             for (name, data) in &p.custom {

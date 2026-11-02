@@ -541,3 +541,28 @@ fn unusable_inputs_are_refused() {
     let err = run(&mut w).unwrap_err();
     assert!(err.contains("Tangent(0) is not four floats"), "{err}");
 }
+
+/// A point stream (a billboard card's pivot, [`Semantic::Point`]) moves as the positions do: a back copy of a vertex
+/// keeps its pivot, as it keeps its position, where its normal and tangent turn.
+#[test]
+fn a_point_stream_is_kept_by_the_copies() {
+    let mut w = World::new();
+    let m = material(&mut w, true);
+    let mut front = quad(Some(m));
+    let pivots = vec![
+        [0.5, 0.5, 0.0],
+        [0.5, 0.5, 0.0],
+        [0.5, 0.5, 0.0],
+        [0.25, 0.75, 0.0],
+    ];
+    front
+        .streams
+        .insert(Semantic::Point(3), Stream::F32x3(pivots.clone()));
+    let e = mesh_of(&mut w, vec![front]);
+    run(&mut w).unwrap();
+    let p = &w.get::<Mesh>(e).unwrap().primitives()[0];
+    assert_eq!(p.vertex_count(), 8);
+    assert_eq!(f32x3(p, Semantic::Point(3))[..4], pivots[..]);
+    assert_eq!(f32x3(p, Semantic::Point(3))[4..], pivots[..]);
+    assert!(w.verify_components().is_empty());
+}

@@ -190,6 +190,21 @@ impl SourceFrame {
     }
 }
 
+/// A frame conversion moves a mesh's streams as it moves positions and directions: normals and tangents by the signed
+/// permutation (a uniform scale turns no direction), a tangent's bitangent sign negated where the conversion mirrors.
+impl crate::VertexMap for SourceFrame {
+    fn point(&self, p: [f32; 3]) -> [f32; 3] {
+        SourceFrame::point(self, p)
+    }
+    fn normal(&self, n: [f32; 3]) -> Option<[f32; 3]> {
+        Some(self.direction(n))
+    }
+    fn tangent(&self, t: [f32; 4]) -> Option<[f32; 4]> {
+        let d = self.direction([t[0], t[1], t[2]]);
+        Some([d[0], d[1], d[2], if self.flips_winding() { -t[3] } else { t[3] }])
+    }
+}
+
 /// `x` negated (sign bit flipped) when the axis is negative.
 fn signed(x: f32, a: Axis) -> f32 {
     if a.is_negative() { -x } else { x }

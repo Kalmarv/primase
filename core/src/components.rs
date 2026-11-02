@@ -447,6 +447,40 @@ pub enum Semantic {
     /// Geometry passes must copy it through; a pass that cannot preserve it must refuse ShaderInput by name.
     /// glTF has no attribute for them: a GLB primase writes leaves them out, and its writer counts them.
     ShaderInput(u8),
+    /// A point per vertex in the mesh's own space (xyz, three floats), bound by the game's input index: a pivot a
+    /// vertex program turns the vertex about (a billboard card's centre). Whatever moves the positions moves it the same
+    /// way ([`Moves::Point`]). glTF has no attribute for it: a GLB primase writes leaves it out, and its writer counts it.
+    Point(u8),
+}
+
+/// How a map of space moves a vertex stream of a [`Semantic`]: every pass that moves vertices (a [`crate::Linear`]
+/// map, a skin, a frame change) moves each stream by its meaning's rule, so a meaning added here moves everywhere at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Moves {
+    /// As a point: the map's linear part and its translation (positions, [`Semantic::Point`]).
+    Point,
+    /// As a surface normal: the inverse transpose of the linear part, kept of unit length.
+    Normal,
+    /// As a tangent (xyz, w the bitangent sign): the linear part, of unit length, w negated under a mirror.
+    Tangent,
+    /// Not at all: texture coordinates, colours, skin weights and opaque shader data.
+    Not,
+}
+
+impl Semantic {
+    /// How a map of space moves a stream of this meaning.
+    pub const fn moves(self) -> Moves {
+        match self {
+            Semantic::Position | Semantic::Point(_) => Moves::Point,
+            Semantic::Normal => Moves::Normal,
+            Semantic::Tangent(_) => Moves::Tangent,
+            Semantic::TexCoord(_)
+            | Semantic::Color(_)
+            | Semantic::Joints(_)
+            | Semantic::Weights(_)
+            | Semantic::ShaderInput(_) => Moves::Not,
+        }
+    }
 }
 
 /// A shader input reads a vertex attribute by the same meaning a mesh stream has.
@@ -462,6 +496,7 @@ impl From<Semantic> for crate::shader::Attribute {
             Semantic::Joints(n) => A::Joints(n),
             Semantic::Weights(n) => A::Weights(n),
             Semantic::ShaderInput(n) => A::ShaderInput(n),
+            Semantic::Point(n) => A::Point(n),
         }
     }
 }
@@ -478,6 +513,7 @@ impl From<crate::shader::Attribute> for Semantic {
             A::Joints(n) => Semantic::Joints(n),
             A::Weights(n) => Semantic::Weights(n),
             A::ShaderInput(n) => Semantic::ShaderInput(n),
+            A::Point(n) => Semantic::Point(n),
         }
     }
 }
@@ -553,6 +589,74 @@ impl Primitive {
     pub fn vertex_count(&self) -> usize {
         self.streams.get(&Semantic::Position).map_or(0, Stream::len)
     }
+}
+
+/// A map of space a primitive's vertices are moved by, one rule per [`Moves`]: the one way a pass moves vertex streams
+/// in place ([`move_streams`]), so every stream whose meaning moves is moved.
+pub trait VertexMap {
+    /// A point (a position, a [`Semantic::Point`]).
+    fn point(&self, p: [f32; 3]) -> [f32; 3];
+    /// A surface normal. `None` where the map turns no normal (a singular map).
+    fn normal(&self, n: [f32; 3]) -> Option<[f32; 3]>;
+    /// A tangent: xyz and the bitangent sign w. `None` where the map turns no tangent.
+    fn tangent(&self, t: [f32; 4]) -> Option<[f32; 4]>;
+}
+
+impl VertexMap for crate::Linear {
+    fn point(&self, p: [f32; 3]) -> [f32; 3] {
+        crate::Linear::point(self, p)
+    }
+    fn normal(&self, n: [f32; 3]) -> Option<[f32; 3]> {
+        crate::Linear::normal(self, n)
+    }
+    fn tangent(&self, t: [f32; 4]) -> Option<[f32; 4]> {
+        crate::Linear::tangent(self, t)
+    }
+}
+
+/// A move of points by a fixed offset: normals and tangents stay.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Offset(pub [f32; 3]);
+
+impl VertexMap for Offset {
+    fn point(&self, p: [f32; 3]) -> [f32; 3] {
+        std::array::from_fn(|k| p[k] + self.0[k])
+    }
+    fn normal(&self, n: [f32; 3]) -> Option<[f32; 3]> {
+        Some(n)
+    }
+    fn tangent(&self, t: [f32; 4]) -> Option<[f32; 4]> {
+        Some(t)
+    }
+}
+
+/// `streams` (a primitive's) each moved by `map` by its meaning's rule ([`Semantic::moves`]); streams that do not move
+/// are kept. Refused, naming the stream and changing nothing, where a stream that moves is not of its meaning's element
+/// type (a point three floats, a normal three, a tangent four) or `map` turns no normal or tangent the streams hold.
+pub fn move_streams(streams: &mut BTreeMap<Semantic, Stream>, map: &impl VertexMap) -> Result<(), String> {
+    let mut moved = Vec::new();
+    for (sem, stream) in streams.iter() {
+        let turned = match (sem.moves(), stream) {
+            (Moves::Not, _) => continue,
+            (Moves::Point, Stream::F32x3(v)) => Stream::F32x3(v.iter().map(|x| map.point(*x)).collect()),
+            (Moves::Normal, Stream::F32x3(v)) => Stream::F32x3(
+                v.iter()
+                    .map(|x| map.normal(*x))
+                    .collect::<Option<_>>()
+                    .ok_or_else(|| format!("{sem:?}: the map turns no normal"))?,
+            ),
+            (Moves::Tangent, Stream::F32x4(v)) => Stream::F32x4(
+                v.iter()
+                    .map(|x| map.tangent(*x))
+                    .collect::<Option<_>>()
+                    .ok_or_else(|| format!("{sem:?}: the map turns no tangent"))?,
+            ),
+            (moves, _) => return Err(format!("{sem:?} is not a stream that moves as a {moves:?}")),
+        };
+        moved.push((*sem, turned));
+    }
+    streams.extend(moved);
+    Ok(())
 }
 
 /// One primitive of a [`Mesh`], edited in place: it reads as a [`Primitive`] and changes field by field (its streams,
@@ -691,31 +795,14 @@ impl Component for Mesh {
     /// Version 2 gives tangent streams a set index, serialized like TexCoord(n).
     const VERSION: u32 = 2;
     const GEOMETRY: crate::Geometry = crate::Geometry::None;
-    /// Positions, normals and tangents mapped ([`crate::Linear`]); triangles reversed under a mirror. A mesh with
-    /// normals or tangents cannot follow a singular map ([`crate::Linear::singular`]): unsupported.
+    /// Every stream mapped by its meaning's rule ([`Semantic::moves`], [`crate::Linear`]); triangles reversed under a
+    /// mirror. A mesh with normals or tangents cannot follow a singular map ([`crate::Linear::singular`]): unsupported.
     fn apply_linear(&self, l: &crate::Linear) -> crate::world::Linearity<Self> {
         let mut m = self.clone();
         for p in &mut m.primitives {
-            for (sem, st) in &mut p.streams {
-                match (sem, st) {
-                    (Semantic::Position, Stream::F32x3(v)) => v.iter_mut().for_each(|x| *x = l.point(*x)),
-                    // a singular map turns no normal or tangent: the mesh cannot follow it
-                    (Semantic::Normal | Semantic::Tangent(_), _) if l.singular() => {
-                        return crate::world::Linearity::Unsupported;
-                    }
-                    (Semantic::Normal, Stream::F32x3(v)) => {
-                        v.iter_mut()
-                            .for_each(|x| *x = l.normal(*x).expect("not singular"));
-                    }
-                    (Semantic::Tangent(_), Stream::F32x4(v)) => {
-                        v.iter_mut()
-                            .for_each(|x| *x = l.tangent(*x).expect("not singular"));
-                    }
-                    (Semantic::Position | Semantic::Normal | Semantic::Tangent(_), _) => {
-                        return crate::world::Linearity::Unsupported;
-                    }
-                    _ => {}
-                }
+            // a singular map turns no normal or tangent, and a moving stream of another type cannot follow
+            if move_streams(&mut p.streams, l).is_err() {
+                return crate::world::Linearity::Unsupported;
             }
             if l.mirrors() && p.topology == Topology::Triangles {
                 let n = p.vertex_count() as u32;
@@ -744,7 +831,8 @@ impl Component for Mesh {
             })
             .sum()
     }
-    /// Each primitive whole: a position stream of points, every stream as long as it (one value per vertex), indices
+    /// Each primitive whole: a position stream of points (and every other stream that moves as a point, three floats),
+    /// every stream as long as it (one value per vertex), indices
     /// within it, whole triangles or lines; and float streams finite (glTF and every writer we have refuse NaN and
     /// infinity). Joint and weight streams mean a skin: only on an entity with a `core.skin`, which checks them.
     fn verify(&self, e: Entity, w: &crate::World) -> Result<(), String> {
@@ -761,6 +849,13 @@ impl Component for Mesh {
                 Some(_) => return Err(format!("primitive {i}: positions not 3 floats")),
                 None => return Err(format!("primitive {i}: no positions")),
             };
+            if let Some((sem, _)) = p
+                .streams
+                .iter()
+                .find(|(sem, st)| sem.moves() == Moves::Point && !matches!(st, Stream::F32x3(_)))
+            {
+                return Err(format!("primitive {i}: {sem:?} points not 3 floats"));
+            }
             if let Some((sem, st)) = p.streams.iter().find(|(_, st)| st.len() != n) {
                 return Err(format!(
                     "primitive {i}: {sem:?} has {} values for {n} vertices",
@@ -1866,6 +1961,62 @@ mod tests {
         assert!(!l.singular() && l.mirrors());
         assert_eq!(l.normal([1.0, 0.0, 0.0]), Some([-1.0, 0.0, 0.0]));
         assert_eq!(l.tangent([0.0, 3.0, 0.0, 1.0]), Some([0.0, 1.0, 0.0, -1.0]));
+    }
+
+    /// Every meaning moves by its rule: a point stream (a billboard's pivot) moves as the positions do, also under a
+    /// mirror; a point stream that is not three floats is refused, by the map and by verify.
+    #[test]
+    fn a_point_stream_moves_as_the_positions_do() {
+        let corners = vec![[1.0, 2.0, 3.0], [-4.0, 5.0, 0.5], [0.0, 0.0, -2.0]];
+        let pivots = vec![[0.5, 1.0, 1.0]; 3];
+        let primitive = |pivot: Stream| Primitive {
+            topology: Topology::Triangles,
+            streams: BTreeMap::from([
+                (Semantic::Position, Stream::F32x3(corners.clone())),
+                (Semantic::Point(3), pivot),
+                (Semantic::TexCoord(0), Stream::F32x2(vec![[0.25, 0.75]; 3])),
+            ]),
+            indices: None,
+            material: None,
+        };
+        let mesh = Mesh::new(vec![primitive(Stream::F32x3(pivots.clone()))]);
+        let l = Linear::of_f64([[-2.0, 0.0, 0.0], [0.0, 0.0, 3.0], [0.0, -1.0, 0.0]]);
+        assert!(l.mirrors());
+        let crate::world::Linearity::Applied(moved) = mesh.apply_linear(&l) else {
+            panic!("a mesh with a point stream follows an invertible map");
+        };
+        let p = &moved.primitives()[0];
+        let points = |s: Semantic| match &p.streams[&s] {
+            Stream::F32x3(v) => v.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            points(Semantic::Position),
+            corners.iter().map(|c| l.point(*c)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            points(Semantic::Point(3)),
+            pivots.iter().map(|c| l.point(*c)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            p.streams[&Semantic::TexCoord(0)],
+            Stream::F32x2(vec![[0.25, 0.75]; 3])
+        );
+        assert_eq!(p.indices, Some(vec![0, 2, 1]), "a mirror reverses the triangles");
+        let wrong = Mesh::new(vec![primitive(Stream::F32x4(vec![[0.0; 4]; 3]))]);
+        assert!(matches!(
+            wrong.apply_linear(&l),
+            crate::world::Linearity::Unsupported
+        ));
+        let mut w = crate::World::new();
+        let e = w.spawn();
+        let err = wrong.verify(e, &w).unwrap_err();
+        assert!(err.contains("Point(3) points not 3 floats"), "{err}");
+        assert_eq!(Semantic::Point(3).moves(), Moves::Point);
+        assert_eq!(
+            crate::shader::Attribute::from(Semantic::Point(3)),
+            crate::shader::Attribute::Point(3)
+        );
     }
 
     #[test]

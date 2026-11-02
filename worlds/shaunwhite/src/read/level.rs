@@ -29,7 +29,7 @@ use anvil_formats::objects::{StoredObject, read_objects};
 use primase_core::convert::Report;
 use primase_core::frame::SourceFrame;
 use primase_core::morphs::{Frame, MorphId, Morphs, Target};
-use primase_core::{Entity, Instance, Marker, Mesh, Name, Primitive, Semantic, Stream, Transform, World};
+use primase_core::{Entity, Instance, Marker, Mesh, Name, Primitive, Transform, World};
 
 use crate::components::{
     Guidance, MaterialRef, MaterialState, MeshFormat, PlacedBy, RealTree, Sampler, SlotRef, Stored,
@@ -500,14 +500,20 @@ fn prototype(
         bump("vertices whose NaN texture coordinates are zeroed".into());
     }
     let mut prims = read.list;
-    to_core_frame(&mut prims, frame, true);
+    if let Err(e) = to_core_frame(&mut prims, frame, true) {
+        bump(format!("meshes not read: {e}"));
+        return None;
+    }
     // the further streams, as morph targets (weight 0 draws the first stream)
     let mut targets = Vec::new();
     match cm.morph_primitives() {
         Ok(states) => {
             for (k, state) in states.into_iter().enumerate() {
                 let mut state = state.list;
-                to_core_frame(&mut state, frame, false);
+                if let Err(e) = to_core_frame(&mut state, frame, false) {
+                    bump(format!("further streams not read: {e}"));
+                    continue;
+                }
                 let d = mesh::deltas(&prims, &state);
                 if d.other_differs {
                     bump(
@@ -581,7 +587,10 @@ fn tree_prototype(
     if !tree.leaves.is_empty() {
         prims.push(tree.cards(Some(leaf)));
     }
-    to_core_frame(&mut prims, frame, true);
+    if let Err(e) = to_core_frame(&mut prims, frame, true) {
+        bump(format!("trees not read: {e}"));
+        return None;
+    }
     for _ in 0..tree.dropped {
         bump("tree nodes of no branch (dropped)".into());
     }
@@ -599,27 +608,15 @@ fn tree_prototype(
     Some(e)
 }
 
-/// `prims` in core's frame (positions and normals; the winding too when `winding`).
-fn to_core_frame(prims: &mut [Primitive], frame: SourceFrame, winding: bool) {
+/// `prims` in core's frame (every stream by its meaning, [`primase_core::move_streams`]; the winding too when
+/// `winding`).
+fn to_core_frame(
+    prims: &mut [Primitive],
+    frame: SourceFrame,
+    winding: bool,
+) -> std::result::Result<(), String> {
     for p in prims {
-        for (sem, st) in &mut p.streams {
-            match (sem, st) {
-                (Semantic::Position, Stream::F32x3(v)) => {
-                    v.iter_mut().for_each(|x| *x = frame.point(*x));
-                }
-                (Semantic::Normal, Stream::F32x3(v)) => {
-                    v.iter_mut().for_each(|x| *x = frame.direction(*x));
-                }
-                (Semantic::Tangent(_), Stream::F32x4(v)) => {
-                    // the frame is a rotation (ENU): the sign w of the bitangent keeps its meaning
-                    for x in v.iter_mut() {
-                        let t = frame.direction([x[0], x[1], x[2]]);
-                        *x = [t[0], t[1], t[2], x[3]];
-                    }
-                }
-                _ => {}
-            }
-        }
+        primase_core::move_streams(&mut p.streams, &frame)?;
         if winding
             && frame.flips_winding()
             && let Some(ix) = &mut p.indices
@@ -627,6 +624,7 @@ fn to_core_frame(prims: &mut [Primitive], frame: SourceFrame, winding: bool) {
             ix.as_chunks_mut::<3>().0.iter_mut().for_each(|t| t.swap(1, 2));
         }
     }
+    Ok(())
 }
 
 /// The texture entity of TextureMap `id`, read once (its first face: a cube map's others are not read).

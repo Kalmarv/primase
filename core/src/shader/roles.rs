@@ -31,6 +31,9 @@ pub enum Attribute {
     /// Opaque per-vertex shader data at the game's input index, copied through geometry passes untransformed.
     /// A consumer that cannot preserve it must refuse ShaderInput by name.
     ShaderInput(u8),
+    /// A point per vertex in the mesh's own space at the game's input index (a billboard's pivot), moved with the
+    /// positions ([`crate::Semantic::Point`]).
+    Point(u8),
 }
 
 /// What a pixel or vertex stage's input is.

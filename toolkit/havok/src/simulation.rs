@@ -369,6 +369,7 @@ impl JointSimulation for Runner {
                         .collect(),
                 ),
                 further_tangents: BTreeMap::new(),
+                points: BTreeMap::new(),
             });
         }
         Ok(())
@@ -797,6 +798,7 @@ mod tests {
             normals: Some(vec![[0.0, 1.0, 0.0]; count]),
             tangents: Some(vec![[1.0, 0.0, 0.0, 1.0]; count]),
             further_tangents: BTreeMap::new(),
+            points: BTreeMap::new(),
         };
         let input = [MeshInput {
             output: 0,

@@ -12,7 +12,7 @@
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use std::collections::BTreeMap;
 
-use primase_core::{Entity, Linear, Lods, Mesh, Semantic, Stream, World};
+use primase_core::{Entity, Linear, Lods, Mesh, Moves, VertexMap, World, move_streams};
 
 use crate::components::GTA;
 use crate::components::{GtaBones, GtaSkeleton};
@@ -33,6 +33,31 @@ pub(crate) fn transform(r: &Pose, v: [f32; 3], w: f64) -> [f32; 3] {
             + f64::from(row[2]) * f64::from(v[2])
             + f64::from(row[3]) * w) as f32
     })
+}
+
+/// A pose as a map of core-frame vertices: each taken to GTA's frame, posed there by the pose (points) or its 3x3 part
+/// as core turns local space (normals and tangents, [`Linear`]), and brought back.
+struct Posed {
+    pose: Pose,
+    part: Linear,
+}
+
+impl VertexMap for Posed {
+    fn point(&self, x: [f32; 3]) -> [f32; 3] {
+        GTA.point(transform(&self.pose, GTA.point_to_source(x), 1.0))
+    }
+    fn normal(&self, x: [f32; 3]) -> Option<[f32; 3]> {
+        self.part
+            .normal(GTA.direction_to_source(x))
+            .map(|n| GTA.direction(n))
+    }
+    fn tangent(&self, x: [f32; 4]) -> Option<[f32; 4]> {
+        let s = GTA.direction_to_source([x[0], x[1], x[2]]);
+        self.part.tangent([s[0], s[1], s[2], x[3]]).map(|u| {
+            let d = GTA.direction([u[0], u[1], u[2]]);
+            [d[0], d[1], d[2], u[3]]
+        })
+    }
 }
 
 /// `gta-pose-fragments` (see the module documentation).
@@ -117,29 +142,12 @@ impl Pass for PoseFragments {
                         log.count("primitives posed by a mirroring pose: triangles reversed", 1);
                     }
                 }
-                if let Some(Stream::F32x3(v)) = p.streams_mut().get_mut(&Semantic::Position) {
-                    for x in v.iter_mut() {
-                        *x = GTA.point(transform(&pose, GTA.point_to_source(*x), 1.0));
-                    }
-                }
                 if t.singular() {
-                    p.streams_mut().remove(&Semantic::Normal);
-                    p.streams_mut().remove(&Semantic::Tangent(0));
-                    continue;
+                    p.streams_mut()
+                        .retain(|s, _| !matches!(s.moves(), Moves::Normal | Moves::Tangent));
                 }
-                if let Some(Stream::F32x3(v)) = p.streams_mut().get_mut(&Semantic::Normal) {
-                    for x in v.iter_mut() {
-                        *x = GTA.direction(t.normal(GTA.direction_to_source(*x)).expect("not singular"));
-                    }
-                }
-                if let Some(Stream::F32x4(v)) = p.streams_mut().get_mut(&Semantic::Tangent(0)) {
-                    for x in v.iter_mut() {
-                        let s = GTA.direction_to_source([x[0], x[1], x[2]]);
-                        let u = t.tangent([s[0], s[1], s[2], x[3]]).expect("not singular");
-                        let d = GTA.direction([u[0], u[1], u[2]]);
-                        *x = [d[0], d[1], d[2], u[3]];
-                    }
-                }
+                // every stream by its meaning: positions and points posed, normals and tangents turned
+                move_streams(p.streams_mut(), &Posed { pose, part: t }).map_err(|x| format!("{e:?}: {x}"))?;
             }
             w.insert(e, mesh);
         }
@@ -203,7 +211,7 @@ mod tests {
 
     #[test]
     fn a_mirroring_pose_keeps_fronts_facing_the_normals() {
-        use primase_core::{Primitive, Topology};
+        use primase_core::{Primitive, Semantic, Stream, Topology};
         // a triangle facing +z in GTA's frame (counter-clockwise seen from above), its normals +z
         let up = GTA.direction([0.0, 0.0, 1.0]);
         let mut streams = std::collections::BTreeMap::new();

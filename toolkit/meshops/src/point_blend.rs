@@ -18,8 +18,8 @@
 use std::collections::BTreeMap;
 
 use primase_core::{
-    Entity, Influences, MaterialVariants, Mesh, MeshFile, Name, Primitive, Semantic, Stream, VertexBlend,
-    World, skin::Skin,
+    Entity, Influences, MaterialVariants, Mesh, MeshFile, Moves, Name, Primitive, Semantic, Stream,
+    VertexBlend, World, skin::Skin,
 };
 
 /// A point of a source triangle as a combination of its corners, in a canonical form (sources ascending, none with
@@ -176,7 +176,7 @@ fn blend_stream(
                 } else {
                     sum.map(|x| x as f32)
                 };
-                if !single && matches!(sem, Semantic::Normal | Semantic::Tangent(_)) {
+                if !single && matches!(sem.moves(), Moves::Normal | Moves::Tangent) {
                     if let (Some(xyz), Some(dst)) = (sum.get(..3), value.get_mut(..3)) {
                         match unit3(xyz) {
                             Some(u) => dst.iter_mut().zip(u).for_each(|(d, u)| *d = u as f32),

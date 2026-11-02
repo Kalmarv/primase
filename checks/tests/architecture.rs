@@ -33,6 +33,9 @@
 //!   `real_data_inputs_are_checked`: every crate that declares real-data inputs (`tests/inputs/mod.rs`) runs
 //!   primase-testdata's self-check on them (`tests/real_data_inputs.rs`), which holds every typed query to a declared
 //!   input.
+//! - `vertex_streams_move_by_meaning`: library code moves a primitive's vertices through `primase_core::move_streams`
+//!   (each stream by its meaning, `Semantic::moves`), never by taking the positions alone, so a stream that moves with
+//!   them (a billboard's pivot) is moved wherever they are.
 //! - `component_geometry_hooks`: every component's stated geometry (`const GEOMETRY`) matches the remap hooks it
 //!   implements, in every crate, tests included.
 //! - `parse_modules_are_checked`: in the crates `architecture.toml` opts in as `parse_crate`, every module that
@@ -1669,6 +1672,179 @@ fn passes_registered() {
         .map(|e| format!("{}: {}", e["file"], e["what"]))
         .collect();
     assert_reconciled("passes registered, lowerings run as passes", found, excused);
+}
+
+// ---- vertex streams move by their meaning ----
+
+/// The functions of `t`: each `fn`'s name and the token ranges of its signature and body (a declaration without a body
+/// is skipped).
+fn functions(t: &[Tok]) -> Vec<(String, std::ops::Range<usize>, std::ops::Range<usize>)> {
+    let mut out = Vec::new();
+    for i in 0..t.len().saturating_sub(1) {
+        let (true, Tok::Ident(name)) = (ident(&t[i], "fn"), &t[i + 1]) else {
+            continue;
+        };
+        // the body's brace or the declaration's semicolon, outside the signature's brackets (`[f32; 3]`)
+        let mut depth = 0i32;
+        let Some(open) = (i + 2..t.len()).find(|&k| {
+            match &t[k] {
+                Tok::Punct('(' | '[') => depth += 1,
+                Tok::Punct(')' | ']') => depth -= 1,
+                _ => {}
+            }
+            depth == 0 && (punct(&t[k], '{') || punct(&t[k], ';'))
+        }) else {
+            continue;
+        };
+        if punct(&t[open], '{') {
+            out.push((name.clone(), i + 2..open, open..block_end(t, open)));
+        }
+    }
+    out
+}
+
+/// Whether `t` holds `Semantic :: <word>` from `i`.
+fn semantic_at(t: &[Tok], i: usize, word: &str) -> bool {
+    i + 3 < t.len()
+        && ident(&t[i], "Semantic")
+        && punct(&t[i + 1], ':')
+        && punct(&t[i + 2], ':')
+        && ident(&t[i + 3], word)
+}
+
+/// Whether the parenthesised group opening at `open` is a match arm's pattern: `=>` follows its `)`.
+fn arm_after(t: &[Tok], open: usize) -> bool {
+    let mut depth = 0;
+    for k in open..t.len() {
+        if punct(&t[k], '(') {
+            depth += 1;
+        } else if punct(&t[k], ')') {
+            depth -= 1;
+            if depth == 0 {
+                return t.get(k + 1).is_some_and(|x| punct(x, '='))
+                    && t.get(k + 2).is_some_and(|x| punct(x, '>'));
+            }
+        }
+    }
+    false
+}
+
+/// What a function body does to a primitive's positions by hand: `None` where it moves none of them in place and
+/// rebuilds none from a primitive's own. A hand-written move covers the positions and leaves the other streams that
+/// move with them ([`primase_core::Moves`]: a billboard's pivot, further tangent sets) where they were.
+fn moves_positions_by_hand(signature: &[Tok], body: &[Tok]) -> Option<&'static str> {
+    let at = |k: usize, word: &str| semantic_at(body, k, word);
+    let names = |word: &str| (0..body.len()).any(|k| at(k, word));
+    let has = |word: &str| body.iter().any(|x| ident(x, word));
+    for k in 0..body.len() {
+        // `get_mut(&Semantic::Position)`: positions changed in place
+        if ident(&body[k], "get_mut")
+            && k + 3 < body.len()
+            && punct(&body[k + 2], '&')
+            && at(k + 3, "Position")
+        {
+            return Some("takes the positions mutably");
+        }
+        // a match arm `(Semantic::Position, Stream::...(v)) =>` over streams it changes in place
+        if k > 0
+            && punct(&body[k - 1], '(')
+            && at(k, "Position")
+            && k + 4 < body.len()
+            && punct(&body[k + 4], ',')
+            && arm_after(body, k - 1)
+            && has("iter_mut")
+        {
+            return Some("moves the positions by a match on their meaning");
+        }
+    }
+    // positions rebuilt from a primitive's own and put back: every stream that moves must be
+    let rebuilds = (0..body.len().saturating_sub(4))
+        .any(|k| ident(&body[k], "insert") && punct(&body[k + 1], '(') && at(k + 2, "Position"));
+    // a primitive's own positions: `Vertices::of`, `get(&Semantic::Position)`, or `.positions()` where the function
+    // is given a core geometry value (a reader's source mesh has a `positions()` of its own)
+    let parameters = signature
+        .iter()
+        .position(|x| punct(x, '('))
+        .map_or(&signature[..0], |open| {
+            let mut depth = 0;
+            let close = (open..signature.len()).find(|&k| {
+                match &signature[k] {
+                    Tok::Punct('(') => depth += 1,
+                    Tok::Punct(')') => depth -= 1,
+                    _ => {}
+                }
+                depth == 0
+            });
+            &signature[open..close.unwrap_or(signature.len())]
+        });
+    let given_geometry = ["Primitive", "Mesh", "Lods", "World", "Entity", "Vertices"]
+        .iter()
+        .any(|w| parameters.iter().any(|x| ident(x, w)));
+    let reads_own = (0..body.len().saturating_sub(4)).any(|k| {
+        (given_geometry
+            && punct(&body[k], '.')
+            && ident(&body[k + 1], "positions")
+            && punct(&body[k + 2], '('))
+            || (ident(&body[k], "Vertices") && punct(&body[k + 1], ':') && ident(&body[k + 3], "of"))
+            || (ident(&body[k], "get") && punct(&body[k + 2], '&') && at(k + 3, "Position"))
+    });
+    let by_meaning = names("Point") || has("moves") || has("move_streams");
+    (rebuilds && reads_own && !by_meaning)
+        .then_some("rebuilds the positions and names no other stream that moves")
+}
+
+/// Every vertex stream moves by its meaning (`Semantic::moves`): a pass, reader or writer that moves a primitive's
+/// vertices does it through `primase_core::move_streams` (or classifies each stream by `moves`), never by taking the
+/// positions alone, so a stream that moves with them (a billboard's pivot, `Semantic::Point`) is moved wherever they
+/// are. Library code of every member; tests may build what they like.
+#[test]
+fn vertex_streams_move_by_meaning() {
+    let mut found = BTreeSet::new();
+    let mut seen = 0;
+    for m in members() {
+        for file in rust_files(&root().join(&m.path).join("src")) {
+            let t = code(&file);
+            for (name, signature, body) in functions(&t) {
+                seen += 1;
+                if let Some(why) = moves_positions_by_hand(&t[signature], &t[body]) {
+                    found.insert(format!("{file}: {name} {why}"));
+                }
+            }
+        }
+    }
+    assert!(seen > 5000, "only {seen} functions found: the scan is broken");
+    assert_reconciled("vertex streams move by their meaning", found, BTreeSet::new());
+}
+
+/// The scan sees each way of moving positions by hand, and not a move by meaning.
+#[test]
+fn vertex_moves_by_hand_are_seen() {
+    let by_hand = [
+        "fn f(p: &mut Primitive) { if let Some(Stream::F32x3(v)) = p.streams.get_mut(&Semantic::Position) { v[0][0] += 1.0; } }",
+        "fn f(p: &mut Primitive) { for (s, st) in &mut p.streams { match (s, st) { (Semantic::Position, Stream::F32x3(v)) => v.iter_mut().for_each(|x| x[0] += 1.0), _ => {} } } }",
+        "fn f(p: &mut Primitive) { let v = Vertices::of(p); p.streams.insert(Semantic::Position, Stream::F32x3(v.positions)); }",
+        "fn f(p: &mut Primitive) { let v: Vec<_> = p.positions().unwrap().iter().map(|x| [x[0] + 1.0, x[1], x[2]]).collect(); p.streams.insert(Semantic::Position, Stream::F32x3(v)); }",
+    ];
+    for src in by_hand {
+        let t = code_of(src);
+        let (_, signature, body) = functions(&t).into_iter().next().unwrap();
+        assert!(
+            moves_positions_by_hand(&t[signature], &t[body]).is_some(),
+            "{src}"
+        );
+    }
+    let by_meaning = [
+        "fn f(p: &mut Primitive) { primase_core::move_streams(&mut p.streams, &Offset([1.0, 0.0, 0.0])) }",
+        "fn f(p: &mut Primitive) { let v = Vertices::of(p); p.streams.insert(Semantic::Position, Stream::F32x3(v.positions)); p.streams.extend(v.points.into_iter().map(|(s, x)| (Semantic::Point(s), Stream::F32x3(x)))); }",
+        "fn f(raw: &[[f32; 3]]) -> Primitive { let mut s = BTreeMap::new(); s.insert(Semantic::Position, Stream::F32x3(raw.to_vec())); Primitive { streams: s } }",
+        "fn f(data: &MeshData<'_>) -> Primitive { let mut s = BTreeMap::new(); s.insert(Semantic::Position, Stream::F32x3(data.positions().to_vec())); Primitive { streams: s } }",
+        "fn f(p: &Primitive) -> f32 { match p.streams.get(&Semantic::Position) { Some(Stream::F32x3(v)) => v[0][0], _ => 0.0 } }",
+    ];
+    for src in by_meaning {
+        let t = code_of(src);
+        let (_, signature, body) = functions(&t).into_iter().next().unwrap();
+        assert_eq!(moves_positions_by_hand(&t[signature], &t[body]), None, "{src}");
+    }
 }
 
 // ---- writers take the world read-only ----

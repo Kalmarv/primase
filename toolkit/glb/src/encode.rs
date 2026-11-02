@@ -57,7 +57,7 @@ pub struct PrimitiveAccessors {
     pub mode: Option<u32>,
     /// Streams not written, by name: skin attributes (`JOINTS_n`, `WEIGHTS_n`), which need a skin, and the streams glTF
     /// has no attribute for: a tangent set past the first (`tangent set n`; glTF has one `TANGENT`) and a shader's raw
-    /// per-vertex inputs (`shader input n`).
+    /// per-vertex inputs (`shader input n`) and points in the mesh's space (`point n`, a billboard's pivot).
     pub skipped: Vec<String>,
 }
 
@@ -220,6 +220,10 @@ impl Buffers {
                 }
                 (Semantic::ShaderInput(n), Stream::F32x4(_)) => {
                     skipped.push(format!("shader input {n}"));
+                    continue;
+                }
+                (Semantic::Point(n), Stream::F32x3(_)) => {
+                    skipped.push(format!("point {n}"));
                     continue;
                 }
                 (Semantic::TexCoord(n), Stream::F32x2(v)) => (

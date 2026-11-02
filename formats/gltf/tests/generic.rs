@@ -295,8 +295,9 @@ fn the_layout_names_each_written_primitive_and_its_material() {
     assert!(meshes[0].primitives[1].attributes.contains("COLOR_1"));
 }
 
-/// glTF has one tangent set and no attribute for a shader's own per-vertex inputs: a second tangent set and the
-/// inputs are not written, each counted per primitive by name; the first tangent set is `TANGENT`.
+/// glTF has one tangent set and no attribute for a shader's own per-vertex inputs or a point per vertex (a billboard's
+/// pivot): a second tangent set, the inputs and the points are not written, each counted per primitive by name; the first
+/// tangent set is `TANGENT`.
 #[test]
 fn streams_gltf_has_no_attribute_for_are_counted_not_written() {
     use primase_core::Stream;
@@ -308,6 +309,8 @@ fn streams_gltf_has_no_attribute_for_are_counted_not_written() {
     );
     p.streams
         .insert(Semantic::ShaderInput(4), Stream::F32x4(vec![[0.5; 4]; 4]));
+    p.streams
+        .insert(Semantic::Point(3), Stream::F32x3(vec![[0.5; 3]; 4]));
     let proto = w.spawn();
     w.insert(proto, Mesh::new(vec![p]));
     w.insert(proto, Transform::IDENTITY);
@@ -319,7 +322,11 @@ fn streams_gltf_has_no_attribute_for_are_counted_not_written() {
     assert!(attributes.keys().all(|n| !n.starts_with('_')), "{attributes:?}");
     assert_eq!(
         report.streams_skipped,
-        BTreeMap::from([("shader input 4".to_owned(), 1), ("tangent set 1".to_owned(), 1)])
+        BTreeMap::from([
+            ("point 3".to_owned(), 1),
+            ("shader input 4".to_owned(), 1),
+            ("tangent set 1".to_owned(), 1)
+        ])
     );
 }
 

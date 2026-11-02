@@ -24,6 +24,9 @@ pub struct Vertices {
     pub tangents: Option<Vec<[f32; 4]>>,
     /// Further tangent sets; morph tangent deltas address set 0, while skinning turns every set alike.
     pub further_tangents: BTreeMap<u8, Vec<[f32; 4]>>,
+    /// The point streams by set ([`Semantic::Point`]): skinning moves them as it moves the positions; morph targets,
+    /// which state position deltas only, leave them.
+    pub points: BTreeMap<u8, Vec<[f32; 3]>>,
 }
 
 impl Vertices {
@@ -52,6 +55,21 @@ impl Vertices {
                         }
                         _ => Err(Error(format!(
                             "Tangent({set}) is not a complete four-float stream"
+                        ))),
+                    }),
+                    _ => None,
+                })
+                .collect::<Result<_>>()?,
+            points: p
+                .streams
+                .iter()
+                .filter_map(|(semantic, stream)| match semantic {
+                    Semantic::Point(set) => Some(match stream {
+                        Stream::F32x3(values) if values.len() == p.vertex_count() => {
+                            Ok((*set, values.clone()))
+                        }
+                        _ => Err(Error(format!(
+                            "Point({set}) is not a complete three-float stream"
                         ))),
                     }),
                     _ => None,
@@ -166,6 +184,7 @@ pub fn apply_morphs(
     Ok(Vertices {
         positions: pos.iter().map(|p| p.map(|x| x as f32)).collect(),
         further_tangents: v.further_tangents.clone(),
+        points: v.points.clone(),
         normals: nor.map(|x| {
             x.iter()
                 .zip(&normals_moved)
@@ -300,6 +319,11 @@ pub fn skin_counted(
             .keys()
             .map(|&set| (set, Vec::with_capacity(v.positions.len())))
             .collect(),
+        points: v
+            .points
+            .keys()
+            .map(|&set| (set, Vec::with_capacity(v.positions.len())))
+            .collect(),
     };
     for (i, inf) in per_vertex.iter().enumerate() {
         let mut m = [[0.0f64; 3]; 4];
@@ -321,6 +345,15 @@ pub fn skin_counted(
             .get(i)
             .ok_or_else(|| Error(format!("vertex {i} has no position")))?;
         out.positions.push(apply(p.map(f64::from), 1.0).map(|x| x as f32));
+        for (set, src) in &v.points {
+            let q = *src
+                .get(i)
+                .ok_or_else(|| Error(format!("Point({set}) has no vertex {i}")))?;
+            out.points
+                .get_mut(set)
+                .expect("output point set")
+                .push(apply(q.map(f64::from), 1.0).map(|x| x as f32));
+        }
         if let (Some(src), Some(dst)) = (&v.normals, out.normals.as_mut()) {
             // the inverse transpose of the linear part, up to its determinant's scale: the cofactors
             let c = |a: [f64; 3], b: [f64; 3]| {
@@ -381,6 +414,75 @@ mod tests {
             indices: None,
             material: None,
         }
+    }
+
+    /// A point stream (a billboard's pivot) is skinned as the positions are, by each vertex's own blend matrix: a pivot
+    /// at the vertex's rest position lands where the vertex lands.
+    #[test]
+    fn skinning_moves_point_streams_as_positions() {
+        let palette = [
+            Slot {
+                joint: JointId(1),
+                inverse_bind: Transform::IDENTITY,
+            },
+            Slot {
+                joint: JointId(2),
+                inverse_bind: {
+                    let mut t = Transform::IDENTITY;
+                    t.cols[3] = [0.0, -1.0, 0.0];
+                    t
+                },
+            },
+        ];
+        // joint 2 raised by 1 and turned a quarter about y: a translation alone would not tell a point from a position
+        let model = BTreeMap::from([
+            (JointId(1), translate([0.0; 3])),
+            (
+                JointId(2),
+                [
+                    [0.0, 0.0, -1.0],
+                    [0.0, 1.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 2.0, 0.0],
+                ],
+            ),
+        ]);
+        let rest = vec![[0.5, 1.0, 0.0], [1.0, 1.0, 2.0], [0.0, 3.0, 1.0]];
+        let p = primitive(vec![
+            (Semantic::Position, Stream::F32x3(rest.clone())),
+            (Semantic::Point(3), Stream::F32x3(rest.clone())),
+            (
+                Semantic::Joints(0),
+                Stream::U8x4(vec![[0, 1, 0, 0], [1, 0, 0, 0], [0, 0, 0, 0]]),
+            ),
+            (
+                Semantic::Weights(0),
+                Stream::F32x4(vec![
+                    [0.5, 0.5, 0.0, 0.0],
+                    [1.0, 0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0, 0.0],
+                ]),
+            ),
+        ]);
+        let v = Vertices::of(&p).unwrap();
+        assert_eq!(v.points[&3], rest);
+        let s = skin(
+            &v,
+            &p,
+            Influences::Streams { sets: 1 },
+            WeightRule::SumsToOne,
+            Deformation::Linear,
+            &palette,
+            &model,
+        )
+        .unwrap();
+        assert_eq!(s.points[&3], s.positions);
+        assert!(s.positions != rest, "the pose moves the vertices");
+        let wrong = primitive(vec![
+            (Semantic::Position, Stream::F32x3(rest.clone())),
+            (Semantic::Point(3), Stream::F32x4(vec![[0.0; 4]; 3])),
+        ]);
+        assert!(Vertices::of(&wrong).unwrap_err().0.contains("Point(3)"));
     }
 
     /// Hand-worked LBS: joint 1 at rest at the origin, joint 2 at rest at y=1 (inverse bind T(0,-1,0)), posed raised to
@@ -624,6 +726,7 @@ mod tests {
             normals: None,
             tangents: None,
             further_tangents: BTreeMap::new(),
+            points: BTreeMap::new(),
         };
         let inbetween = Morphs {
             targets: vec![target(1, vec![(0.5, 1.0), (1.0, 3.0)], None)],
@@ -653,6 +756,7 @@ mod tests {
             normals: Some(vec![[2.0, 0.0, 0.0], [0.0, 0.0, 1.0]]),
             tangents: Some(vec![[0.0, 3.0, 0.0, 1.0], [1.0, 0.0, 0.0, -1.0]]),
             further_tangents: BTreeMap::new(),
+            points: BTreeMap::new(),
         };
         let morphs = Morphs {
             targets: vec![MorphTarget {

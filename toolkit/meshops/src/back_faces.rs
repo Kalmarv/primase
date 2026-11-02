@@ -57,7 +57,7 @@ use primase_core::morphs::Morphs;
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
-    Entity, MaterialVariants, Mesh, MeshFile, Name, Primitive, Semantic, Stream, Topology, World,
+    Entity, MaterialVariants, Mesh, MeshFile, Moves, Name, Primitive, Semantic, Stream, Topology, World,
 };
 
 /// See the module documentation.
@@ -226,10 +226,11 @@ fn back_faces(p: &Primitive, what: &str) -> Result<Backed, String> {
     }
     let mut streams = p.streams.clone();
     for (sem, s) in &mut streams {
-        let negate = match sem {
-            Semantic::Normal => Negate::Normal,
-            Semantic::Tangent(_) => Negate::Tangent,
-            _ => Negate::No,
+        // a back face's copy turns as a mirror through the surface does: normals and tangents negated, points kept
+        let negate = match sem.moves() {
+            Moves::Normal => Negate::Normal,
+            Moves::Tangent => Negate::Tangent,
+            Moves::Point | Moves::Not => Negate::No,
         };
         append(s, &gather, negate);
     }

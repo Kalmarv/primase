@@ -345,11 +345,7 @@ impl Pass for LowerAnvilWater {
                 .collect();
             let origin = super::local_origin(&all);
             for p in &mut primitives {
-                if let Some(Stream::F32x3(v)) = p.streams.get_mut(&Semantic::Position) {
-                    for q in v.iter_mut() {
-                        *q = std::array::from_fn(|k| q[k] - origin[k]);
-                    }
-                }
+                primase_core::move_streams(&mut p.streams, &primase_core::Offset(origin.map(|x| -x)))?;
             }
             w.insert(e, Mesh::new(primitives));
             let placed = w.spawn();

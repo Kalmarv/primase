@@ -205,3 +205,36 @@ fn sparse_subset_checks_only_selected_vertices() {
     assert!(compact_primitive(&source).is_err());
     assert!(primase_meshops::subset_primitive(&source, &[0]).is_err());
 }
+
+/// A blended vertex's point stream (a billboard's pivot) is the same affine combination of its corners' points as its
+/// position is of theirs, as every map that moves positions moves points ([`primase_core::Moves::Point`]).
+#[test]
+fn a_blended_point_stream_follows_the_positions() {
+    use primase_core::VertexBlend;
+    let corners = vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 4.0, 0.0]];
+    let p = Primitive {
+        topology: Topology::Triangles,
+        streams: BTreeMap::from([
+            (Semantic::Position, Stream::F32x3(corners.clone())),
+            (Semantic::Point(3), Stream::F32x3(corners.clone())),
+        ]),
+        indices: None,
+        material: None,
+    };
+    let blends = [
+        VertexBlend::copy(1),
+        VertexBlend {
+            sources: [0, 1, 2],
+            weights: [0.5, 0.25, 0.25],
+        },
+    ];
+    let made = primase_meshops::point_blend::blend_streams(&p, &blends, None, "card").unwrap();
+    assert_eq!(
+        made.streams[&Semantic::Point(3)],
+        made.streams[&Semantic::Position]
+    );
+    assert_eq!(
+        made.streams[&Semantic::Point(3)],
+        Stream::F32x3(vec![[2.0, 0.0, 0.0], [0.5, 1.0, 0.0]])
+    );
+}

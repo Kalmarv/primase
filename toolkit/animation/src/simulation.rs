@@ -263,6 +263,7 @@ mod tests {
                     normals: None,
                     tangents: None,
                     further_tangents: BTreeMap::new(),
+                    points: BTreeMap::new(),
                 },
             }))
         }

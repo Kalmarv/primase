@@ -329,6 +329,11 @@ impl Pass for PoseSkin {
                         .into_iter()
                         .map(|(set, values)| (Semantic::Tangent(set), Stream::F32x4(values))),
                 );
+                streams.extend(
+                    v.points
+                        .into_iter()
+                        .map(|(set, values)| (Semantic::Point(set), Stream::F32x3(values))),
+                );
             }
             let holder = if drawn == e {
                 e

@@ -697,6 +697,12 @@ impl Pass for RetargetSkin {
                             .into_iter()
                             .map(|(set, values)| (Semantic::Tangent(set), Stream::F32x4(values))),
                     );
+                    streams.extend(
+                        posed
+                            .points
+                            .into_iter()
+                            .map(|(set, values)| (Semantic::Point(set), Stream::F32x3(values))),
+                    );
                     new_influences.push(Some(Influences::Streams { sets: sets as u8 }));
                 }
                 let palettes = new_influences
