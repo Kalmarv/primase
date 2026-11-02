@@ -6,10 +6,10 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pbr::PbrMaterial;
+use primase_core::pbr::{PbrMaterial, TextureRef};
 use primase_core::{
     Collision, Component, Entity, Instance, LodForm, Lods, Marker, Mesh, Name, Primitive, Semantic, Stream,
-    Surfaces, Topology, Transform, World,
+    Surfaces, TextureAbsent, Topology, Transform, World,
 };
 use primase_gltf::{GroupBy, WriteOptions, WriteReport};
 use serde_json::Value;
@@ -254,4 +254,52 @@ fn a_texture_an_8_bit_png_cannot_hold_is_left_out_until_converted() {
     let (_, report) = written(&w);
     assert!(report.textures_unrepresentable.is_empty());
     assert_eq!((report.texture_slots_dropped, report.images), (0, 1));
+}
+
+#[test]
+fn a_slot_naming_an_absent_texture_is_written_bound_to_none_and_counted_by_its_reason() {
+    let mut w = World::new();
+    let absent = w.spawn();
+    w.insert(
+        absent,
+        TextureAbsent {
+            reason: "not in the install".into(),
+        },
+    );
+    let m = w.spawn();
+    w.insert(
+        m,
+        PbrMaterial {
+            base_color: [0.5, 0.25, 1.0, 1.0],
+            base_color_texture: Some(TextureRef::new(absent)),
+            normal_texture: Some(TextureRef::new(absent)),
+            ..PbrMaterial::default()
+        },
+    );
+    let mesh = w.spawn();
+    w.insert(mesh, quad(Some(m)));
+    place(&mut w, mesh, "quad", 0.);
+    let (doc, report) = written(&w);
+    // the material is written, its factors as stated, with no texture in either slot
+    let materials = doc["materials"].as_array().unwrap();
+    assert_eq!(materials.len(), 1);
+    let material = &materials[0];
+    let pbr = &material["pbrMetallicRoughness"];
+    assert_eq!(pbr["baseColorFactor"], serde_json::json!([0.5, 0.25, 1.0, 1.0]));
+    assert!(pbr.get("baseColorTexture").is_none(), "{material}");
+    assert!(material.get("normalTexture").is_none(), "{material}");
+    assert!(
+        doc.get("textures").is_none() && doc.get("images").is_none(),
+        "{doc}"
+    );
+    // each slot counted by the absence's reason, none as a dropped texture
+    assert_eq!(
+        report.texture_slots_absent,
+        BTreeMap::from([("not in the install".to_owned(), 2)])
+    );
+    assert_eq!(report.texture_slots_dropped, 0);
+    assert!(
+        !report.components_unwritten.contains_key(TextureAbsent::NAME),
+        "{report}"
+    );
 }

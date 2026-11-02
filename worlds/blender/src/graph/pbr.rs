@@ -248,3 +248,43 @@ pub fn graph(s: &mut Sampler, m: &PbrMaterial, color0: bool) -> Result<(Graph, S
     let settings = finish(&mut g, &surface, m);
     Ok((g, settings))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use primase_core::pbr::TextureRef;
+    use primase_core::{TextureAbsent, World};
+    use std::collections::BTreeMap;
+
+    /// A slot naming a texture the read could not give samples nothing: the surface is the stated factors, no image
+    /// is used, and each slot is counted by the absence's reason.
+    #[test]
+    fn a_slot_naming_an_absent_texture_samples_nothing_and_is_counted_by_its_reason() {
+        let mut w = World::new();
+        let absent = w.spawn();
+        w.insert(
+            absent,
+            TextureAbsent {
+                reason: "not in the install".into(),
+            },
+        );
+        let m = PbrMaterial {
+            base_color: [0.5, 0.25, 1.0, 0.75],
+            base_color_texture: Some(TextureRef::new(absent)),
+            normal_texture: Some(TextureRef::new(absent)),
+            ..PbrMaterial::default()
+        };
+        let mut s = Sampler::new(&w);
+        let mut g = Graph::new();
+        let surface = surface(&mut s, &mut g, &m, Coordinates::default(), false).unwrap();
+        assert_eq!(surface.base, Vec3::Const([0.5, 0.25, 1.0]));
+        assert_eq!(surface.alpha, Float::Const(0.75));
+        assert_eq!(surface.normal, None);
+        assert!(s.images.list.is_empty());
+        assert_eq!(
+            s.counts.slots_unsampled,
+            BTreeMap::from([("the read could not give it: not in the install".to_owned(), 2)])
+        );
+        assert_eq!(s.counts.normal_maps_mikktspace, 0);
+    }
+}

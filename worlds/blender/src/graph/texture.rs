@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 
 use iridia_interface::{Filter, MipFilter};
 use primase_core::pbr::{TextureRef, UvTransform, Wrap};
-use primase_core::{Entity, Name, NormalConvention, TexRole, Texture, TextureFile, World};
+use primase_core::{Entity, Name, NormalConvention, TexRole, Texture, TextureAbsent, TextureFile, World};
 use serde::Serialize;
 use serde_json::json;
 
@@ -198,6 +198,10 @@ impl<'w> Sampler<'w> {
     /// Whether texture `e` is sampled: why not where it is not (its pixels not loaded, or no exact 8-bit form).
     pub fn unsampled(&self, e: Entity) -> Result<Option<String>> {
         let Some(t) = self.world.get::<Texture>(e) else {
+            // a texture the source names that its read could not give: the slot is drawn bound to none
+            if let Some(absent) = self.world.get::<TextureAbsent>(e) {
+                return Ok(Some(format!("the read could not give it: {}", absent.reason)));
+            }
             if self.world.has::<TextureFile>(e) {
                 // a reader's load step makes the pixels (primase_image::load_textures); the writer reads no file
                 return Ok(Some("texture files not loaded".into()));

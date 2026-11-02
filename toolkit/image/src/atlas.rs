@@ -251,7 +251,13 @@ fn neutral(slot: TextureSlot) -> [u8; 4] {
     }
 }
 
-fn slot_ref(m: &PbrMaterial, slot: TextureSlot) -> Option<TextureRef> {
+/// The texture `m` binds to `slot`, as the atlas reads it: a slot naming an absent texture is bound to none (counted where
+/// the textures are gathered, [`crate::absent::bound`]).
+fn slot_ref(w: &World, m: &PbrMaterial, slot: TextureSlot) -> Option<TextureRef> {
+    crate::absent::present(w, stated_ref(m, slot))
+}
+
+fn stated_ref(m: &PbrMaterial, slot: TextureSlot) -> Option<TextureRef> {
     match slot {
         TextureSlot::BaseColor => m.base_color_texture,
         TextureSlot::MetallicRoughness => m.metallic_roughness_texture,
@@ -441,7 +447,9 @@ impl PackTextureAtlas {
         let mut clamped = vec![[true; 2]; set.len()];
         for (k, (m, &e)) in mats.iter().zip(set).enumerate() {
             for slot in SLOTS {
-                let Some(r) = slot_ref(m, slot) else { continue };
+                let Some(r) = crate::absent::bound(w, stated_ref(m, slot), log) else {
+                    continue;
+                };
                 let at = format!("material {}'s {} texture", label(w, e), slot.name());
                 if r.texcoord != 0 {
                     return Err(format!(
@@ -525,7 +533,7 @@ impl PackTextureAtlas {
         material.emissive_texture = None;
         let mut textures: Vec<(TextureSlot, Texture)> = Vec::new();
         for slot in SLOTS {
-            let present = mats.iter().any(|m| slot_ref(m, slot).is_some());
+            let present = mats.iter().any(|m| slot_ref(w, m, slot).is_some());
             let baked = mats.iter().any(|m| !same_factor(&mats[0], m, slot));
             if baked
                 && slot == TextureSlot::BaseColor
@@ -548,7 +556,7 @@ impl PackTextureAtlas {
             let mut canvas: Vec<u8> = neutral(slot).repeat(aw * ah);
             for (k, m) in mats.iter().enumerate() {
                 let r = rects[k];
-                let region = match slot_ref(m, slot) {
+                let region = match slot_ref(w, m, slot) {
                     Some(tr) => {
                         let img = &images[&tr.texture];
                         if (img.width, img.height) != (r.w, r.h) && (img.width < r.w || img.height < r.h) {

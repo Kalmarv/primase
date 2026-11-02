@@ -281,7 +281,7 @@ fn detail(
             }
             TextureSource::Missing { .. } => {
                 return Err(format!(
-                    "slot t{slot}, the {role} the equation reads, is missing and the source states no default"
+                    "slot t{slot}, the {role} the equation reads, is missing: a texture the install does not hold, or none and no default"
                 ));
             }
             TextureSource::Target { view } => {

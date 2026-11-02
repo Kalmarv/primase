@@ -152,3 +152,36 @@ fn normal_scales_are_baked_into_copies_or_in_place() {
     assert_eq!((mc.normal_texture.unwrap().texture, mc.normal_scale), (own, 1.0));
     assert_eq!(w.get::<Texture>(own).unwrap().levels[0], [230, 128, 203, 255]);
 }
+
+/// A normal slot naming a texture the read could not give is read as bound to none: nothing is baked for it, the slot
+/// and its scale are left for a later consumer, and it is counted by the absence's reason (not refused as a texture
+/// without pixels).
+#[test]
+fn a_normal_slot_naming_an_absent_texture_is_left_and_counted_by_its_reason() {
+    use primase_core::pbr::{PbrMaterial, TextureRef};
+    use primase_core::{TextureAbsent, World};
+    let mut w = World::new();
+    let absent = w.spawn();
+    w.insert(
+        absent,
+        TextureAbsent {
+            reason: "not in the install".into(),
+        },
+    );
+    let material = PbrMaterial {
+        normal_texture: Some(TextureRef::new(absent)),
+        normal_scale: 2.0,
+        ..PbrMaterial::default()
+    };
+    let e = w.spawn();
+    w.insert(e, material.clone());
+    let log = primase_image::bake_normal_scale(&mut w).unwrap();
+    assert_eq!(w.get::<PbrMaterial>(e), Some(&material));
+    assert_eq!(
+        log.counts.get(
+            "material texture slots naming a texture the read could not give, read as bound to none: not in the install"
+        ),
+        Some(&1)
+    );
+    assert!(!log.counts.contains_key("normal textures baked"));
+}

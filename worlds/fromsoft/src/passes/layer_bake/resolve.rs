@@ -37,7 +37,9 @@ pub const SECOND_COLOUR: primase_core::Semantic = primase_core::Semantic::Color(
 const EYE_COLOUR_DEFAULT_POLICY: &str = "eye colour lanes: the MATBIN default; the one capture shows 100/255 on every lane (perhaps character creation), not established";
 const EYE_SCALAR_DEFAULT_POLICY: &str = "eye scalar input: the MATBIN default; the one capture shows 0.024705887 instead of 0 (perhaps character creation), not established";
 
-/// What becomes of a texture slot the material binds no texture to, or whose texture file the reader does not hold.
+/// What becomes of a texture slot the material binds no texture to (and the engine names no default for). A slot
+/// naming a texture the read does not hold is left `Missing`, naming it, whatever the policy: no colour stands in for a
+/// texture the source names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unbound {
     /// The slot reads a stated colour for its role (a mid-grey albedo, a flat normal, zero elsewhere), counted as an
@@ -490,12 +492,16 @@ pub fn resolve(
             ));
         }
         let (role, binding) = role_and_binding(material, &slots, named)?;
+        // the texture the slot names (the material's binding, else the engine's default for it) and, where the read
+        // holds it, its entity
+        let mut stem: Option<String> = binding.map(|b| b.texture.clone());
         let found = match binding {
             Some(b) => texture(&b.texture, role == "AlbedoMap")?,
             None if game == fromsoft_formats::Game::EldenRing => {
                 let found = match default_texture(material, metaparam, resource) {
                     Some(d) => {
                         let found = texture(&d, role == "AlbedoMap")?;
+                        stem = Some(d.clone());
                         // the engine binds this default; a read that did not keep it is a different fact from a slot
                         // with no default, counted before the unbound policy below applies
                         if found.is_none() {
@@ -526,8 +532,8 @@ pub fn resolve(
             16,
             words(&tiling(material, metaparam, resource, binding)),
         )?;
-        let source = match (found, unbound) {
-            (Some(texture), _) => TextureSource::Texture {
+        let source = match (found, stem, unbound) {
+            (Some(texture), _, _) => TextureSource::Texture {
                 texture,
                 // the addressing the FLVER stores for this binding; the source states no filters
                 sampler: SamplerState {
@@ -539,7 +545,16 @@ pub fn resolve(
                     ..SamplerState::default()
                 },
             },
-            (None, Unbound::Preview) => {
+            // a texture the slot names that the read does not hold: no colour stands in for it, whatever the policy
+            (None, Some(stem), _) => {
+                *policies
+                    .entry("texture slots naming a texture not in the install, left missing".to_owned())
+                    .or_default() += 1;
+                TextureSource::Missing {
+                    why: format!("{stem}: not in the install"),
+                }
+            }
+            (None, None, Unbound::Preview) => {
                 let why = format!("preview default for missing {role} binding");
                 *policies.entry(why.clone()).or_default() += 1;
                 TextureSource::Default {
@@ -547,7 +562,7 @@ pub fn resolve(
                     why,
                 }
             }
-            (None, Unbound::Leave) => TextureSource::Missing {
+            (None, None, Unbound::Leave) => TextureSource::Missing {
                 why: "the material binds no texture and unbound=leave supplies no default".into(),
             },
         };

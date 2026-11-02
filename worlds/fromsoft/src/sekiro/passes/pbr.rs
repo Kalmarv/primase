@@ -402,6 +402,39 @@ fn texture_name(stem: &str, normal: bool) -> String {
         stem.to_owned()
     }
 }
+/// The entity standing for texture `name` in a role when the install does not hold it: a `core.texture_absent` named as
+/// [`texture_name`] names the texture, made once per stem and role, so a material slot still says a texture belongs there.
+fn absent(
+    world: &mut World,
+    gone: &mut BTreeMap<(String, bool), Entity>,
+    name: &str,
+    normal: bool,
+) -> Entity {
+    *gone.entry((name.to_owned(), normal)).or_insert_with(|| {
+        let e = world.spawn();
+        world.insert(e, Name(texture_name(name, normal)));
+        world.insert(
+            e,
+            primase_core::TextureAbsent {
+                reason: "not in the install".to_owned(),
+            },
+        );
+        e
+    })
+}
+/// Absent textures already in the world, by stem and role (the names [`absent`] gives them).
+fn existing_absent(world: &World) -> BTreeMap<(String, bool), Entity> {
+    world
+        .iter::<primase_core::TextureAbsent>()
+        .filter_map(|(e, _)| {
+            let Name(name) = world.get::<Name>(e)?;
+            Some(match name.strip_suffix("@normal") {
+                Some(stem) => ((stem.to_owned(), true), e),
+                None => ((name.clone(), false), e),
+            })
+        })
+        .collect()
+}
 /// Source textures already in the world, by stem and role.
 fn existing_textures(world: &World) -> BTreeMap<(String, bool), Entity> {
     let mut found = BTreeMap::new();
@@ -538,6 +571,7 @@ fn lower_materials(
     let mut log = PassLog::default();
     let mut previews = BTreeSet::new();
     let mut cache = existing_textures(world);
+    let mut gone = existing_absent(world);
     let mut reader = coverage::Reader::default();
     for (e, m) in sources {
         if m.skip.is_some() {
@@ -751,8 +785,18 @@ fn lower_materials(
                     }
                 }
                 p.base_color_texture = Some(r);
+            } else if p.base_color_texture.is_none()
+                && let Some(name) = &pv.albedo
+            {
+                // a base texture the material names and the install does not hold (an authoring placeholder such as
+                // `3dsmax`): the slot names it absent, no colour stands in for it
+                p.base_color_texture = Some(TextureRef::new(absent(world, &mut gone, name, false)));
+                log.count(
+                    "base textures named and not in the install: the slot names them absent",
+                    1,
+                );
             } else if fresh && p.base_color_texture.is_none() {
-                // no base texture named, or one the install does not hold (an authoring placeholder such as `3dsmax`)
+                // no base texture named
                 p.base_color = fallback_base_color(&m, water_colour);
                 log.approximate_on(e, "missing base texture: preview fallback colour", 1);
             }
@@ -765,9 +809,15 @@ fn lower_materials(
                     r.transform = Some(transform(tiling_row(world, e, &m, kind, b), applied, b)?);
                 }
                 p.normal_texture = Some(r);
-            } else if p.normal_texture.is_none() && pv.normal.is_some() {
-                // a normal map the material names and the install does not hold: drawn with the surface normal alone
-                log.approximate_on(e, "named normal texture not in the install: flat normal", 1);
+            } else if p.normal_texture.is_none()
+                && let Some(name) = &pv.normal
+            {
+                // a normal map the material names and the install does not hold: the slot names it absent
+                p.normal_texture = Some(TextureRef::new(absent(world, &mut gone, name, true)));
+                log.count(
+                    "normal textures named and not in the install: the slot names them absent",
+                    1,
+                );
             }
             p.alpha_mode = crate::materials::alpha_mode_read(
                 &m,
@@ -1188,12 +1238,17 @@ mod tests {
         let e = world.spawn();
         world.insert(e, m);
         let log = lower(&mut world, &BTreeMap::<String, Vec<u8>>::new(), None, WATER).unwrap();
-        let normal = "named normal texture not in the install: flat normal";
+        let normal = "normal textures named and not in the install: the slot names them absent";
         let packing = "named normal texture not in the install: roughness and metal packing skipped; retained target roughness";
-        assert_eq!(log.approximations[normal], 1);
-        assert_eq!(log.approximated_on[normal], BTreeSet::from([e]));
+        assert_eq!(log.counts[normal], 1);
         assert_eq!(log.approximated_on[packing], BTreeSet::from([e]));
-        assert!(world.get::<PbrMaterial>(e).unwrap().normal_texture.is_none());
+        let absent = world
+            .get::<PbrMaterial>(e)
+            .unwrap()
+            .normal_texture
+            .unwrap()
+            .texture;
+        assert!(world.has::<primase_core::TextureAbsent>(absent) && !world.has::<Texture>(absent));
 
         // a metallic map alone missing, the normal held: the packing runs on the normal and the metal is the factor
         let mut held = World::new();

@@ -91,10 +91,12 @@ impl Pass for LowerFromSoftMaterials {
     }
     fn provides(&self) -> &[&'static str] {
         // a material drawn both culled and not is split: its copy has the source material's components; a texture made
-        // from a stem the read holds a low-resolution twin of is given it as a form ([`super::add_low_forms`])
+        // from a stem the read holds a low-resolution twin of is given it as a form ([`super::add_low_forms`]); a texture
+        // a material names that the install does not hold stands as a `core.texture_absent` its slot names
         &[
             "pbr.material",
             "core.texture",
+            primase_core::TextureAbsent::NAME,
             primase_core::TextureForms::NAME,
             "core.name",
             MaterialUsage::NAME,
@@ -113,7 +115,7 @@ impl Pass for LowerFromSoftMaterials {
         &["pbr.material", "core.texture", "core.name", Mesh::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "unevidenced metallic as dielectric 0; per-light gloss correction omitted; with layers=preview, unbaked layered materials from their main-layer preview; preview fallback colour"
+        "unevidenced metallic as dielectric 0; per-light gloss correction omitted; with layers=preview, unbaked layered materials from their main-layer preview; preview fallback colour for a material that names no base texture"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         use crate::sekiro::source::TexturePayloads;

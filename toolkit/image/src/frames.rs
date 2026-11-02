@@ -138,7 +138,7 @@ fn run(world: &mut World, bitangent: Bitangent, log: &mut PassLog) -> Result<()>
     // the normal map each material binds, with its coordinates
     let mut bound = BTreeMap::<Entity, primase_core::pbr::TextureRef>::new();
     for (e, m) in world.iter::<PbrMaterial>() {
-        if let Some(r) = m.normal_texture {
+        if let Some(r) = crate::absent::bound(world, m.normal_texture, log) {
             let t = world
                 .get::<Texture>(r.texture)
                 .ok_or_else(|| Error::Invalid(format!("normal map {:?} is not loaded", r.texture)))?;

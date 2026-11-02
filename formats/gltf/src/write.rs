@@ -39,6 +39,8 @@
 //!   `primase_image::load_textures`, makes its pixels). A texture whose format an 8-bit PNG cannot hold exactly
 //!   (`primase_image::rgba8_exact`: wider, floating-point or signed values) is not written, counted by format
 //!   (`textures_unrepresentable`), its slots left empty: `lower-textures-rgba8` converts it, each conversion named.
+//!   A slot naming a `core.texture_absent` (a texture the source names that its read could not give) is written
+//!   without a texture, as a slot bound to none, and counted by the absence's reason (`texture_slots_absent`).
 //! - **What glTF has no form for**: every component of an entity written as a node, mesh, material or texture that
 //!   the object does not express (`core.source`, `core.shadows`, dialect and opaque components) is counted by name
 //!   (`components_without_form`), each world resource by name (`resources_without_form`); none is written. The
@@ -107,7 +109,7 @@ use primase_core::{
 };
 use primase_core::{
     Component, Entity, Instance, Light, LightKind, Lods, MaterialVariants, Mesh, MeshFile, Name, Semantic,
-    Texture, TextureFile, Tile, Topology, Transform, TransformKind, World,
+    Texture, TextureAbsent, TextureFile, Tile, Topology, Transform, TransformKind, World,
 };
 use primase_core::{
     WaterBody, pbr::AlphaMode, pbr::PbrMaterial, pbr::Shading, pbr::TextureRef, pbr::UvTransform, pbr::Wrap,
@@ -205,6 +207,9 @@ pub struct WriteReport {
     pub textures_unrepresentable: BTreeMap<String, u64>,
     /// Material texture slots left empty because their texture was skipped or could not be held exactly.
     pub texture_slots_dropped: u64,
+    /// Material texture slots naming a texture the read could not give (`core.texture_absent`), by its reason: written
+    /// without a texture.
+    pub texture_slots_absent: BTreeMap<String, u64>,
     /// Texture slots stating a minification filter without a mip filter, or the reverse: glTF's `minFilter` names
     /// both, so neither is written.
     pub filters_unexpressed: u64,
@@ -357,6 +362,11 @@ impl fmt::Display for WriteReport {
             self.texture_slots_dropped
         )?;
         writeln!(f, "textures skipped {:?}", self.textures_skipped)?;
+        writeln!(
+            f,
+            "texture slots naming an absent texture {:?}",
+            self.texture_slots_absent
+        )?;
         writeln!(
             f,
             "textures an 8-bit PNG cannot hold exactly (not written) {:?}",
@@ -1567,6 +1577,16 @@ impl Writer<'_> {
     /// texture was skipped; adds the slot's texture coordinate set to `sets`.
     fn texture_info(&mut self, r: Option<TextureRef>, sets: &mut BTreeSet<u8>) -> Result<Option<Value>> {
         let Some(r) = r else { return Ok(None) };
+        // a texture the source names that its read could not give: the slot is written bound to none
+        if let Some(absent) = self.world.get::<TextureAbsent>(r.texture) {
+            self.handled.insert(r.texture);
+            *self
+                .report
+                .texture_slots_absent
+                .entry(absent.reason.clone())
+                .or_default() += 1;
+            return Ok(None);
+        }
         let Some(index) = self.texture(r)? else {
             self.report.texture_slots_dropped += 1;
             return Ok(None);

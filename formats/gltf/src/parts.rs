@@ -14,7 +14,7 @@ use primase_core::state::{Condition, PrimitiveCondition, StateOverride};
 use primase_core::{
     Asset, Clip, ClipBinding, Component, Entity, Instance, Light, Lods, MaterialVariants, Mesh, MeshFile,
     MorphWeights, Morphs, Name, RigInstance, RigPose, Skeleton, Skin, SkinInstance, Source, Texture,
-    TextureFile, Tile, Transform, TransformKind, World, pbr::PbrMaterial,
+    TextureAbsent, TextureFile, Tile, Transform, TransformKind, World, pbr::PbrMaterial,
 };
 
 use crate::{WriteOptions, WriteReport, write_file};
@@ -40,6 +40,8 @@ pub fn target() -> Target {
         .legal(PbrMaterial::NAME)
         .legal(Texture::NAME)
         .dynamic(TextureFile::NAME, |w, e| w.has::<Texture>(e))
+        // a slot naming it is written bound to no texture, counted by the absence's reason
+        .legal(TextureAbsent::NAME)
         .legal(Tile::NAME)
         .legal(Lods::NAME)
         .legal(Skeleton::NAME)
@@ -262,6 +264,9 @@ fn omissions(report: &WriteReport, include_unplaced: bool) -> Vec<(NoticeKind, S
     });
     by(&mut out, &report.textures_skipped, &|k| {
         format!("textures not written ({k}): their slots left empty")
+    });
+    by(&mut out, &report.texture_slots_absent, &|k| {
+        format!("material texture slots naming a texture the read could not give ({k}): written without it")
     });
     by(&mut out, &report.textures_unrepresentable, &|k| {
         format!(

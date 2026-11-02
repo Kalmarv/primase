@@ -67,7 +67,9 @@ impl UvTransform {
 /// A texture used by a material slot.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct TextureRef {
-    /// The texture entity (`core.texture` or `core.texture_file`).
+    /// The texture entity (`core.texture` or `core.texture_file`), or a `core.texture_absent`
+    /// ([`crate::TextureAbsent`]): a texture the source names for this slot that the read could not give. A consumer
+    /// treats such a slot as bound to no texture and counts it by the absence's reason; a viewer shows the absence.
     pub texture: Entity,
     /// Which `TexCoord(n)` stream it samples.
     pub texcoord: u8,

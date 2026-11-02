@@ -3,6 +3,7 @@
 //! No implicit gamma conversion: filtering averages the stored channel values.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+mod absent;
 mod atlas;
 pub use atlas::{GUTTER, PACK_TEXTURE_ATLAS, PackTextureAtlas};
 mod bleed;

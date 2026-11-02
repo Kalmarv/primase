@@ -320,6 +320,13 @@ impl RebaseTexcoordSet {
     fn load(w: &World, r: TextureRef, slot: TextureSlot) -> Result<Read, String> {
         let undecodable = || "a texture does not decode".to_owned();
         let Some(t) = w.get::<Texture>(r.texture) else {
+            // a slot naming a texture the read could not give: the primitive keeps its coordinate sets, counted by why
+            if let Some(absent) = w.get::<primase_core::TextureAbsent>(r.texture) {
+                return Err(format!(
+                    "a texture slot names a texture the read could not give ({})",
+                    absent.reason
+                ));
+            }
             return Err("a texture is not loaded as pixels".to_owned());
         };
         // the atlases are 8-bit, so a wider or floating-point source is read as 8-bit RGBA, each counted

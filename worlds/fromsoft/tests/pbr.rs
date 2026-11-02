@@ -5,7 +5,7 @@ use fromsoft_formats::{
     mtd::{MaterialDefinition, Texture as Slot},
 };
 use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
-use primase_core::{ColorSpace, TexFormat, TexRole, Texture, World};
+use primase_core::{ColorSpace, Name, TexFormat, TexRole, Texture, TextureAbsent, World};
 use primase_fromsoft::{materials, sekiro::pbr};
 use std::collections::BTreeMap;
 
@@ -274,12 +274,53 @@ fn missing_source_data_is_not_a_silent_default() {
     let mut world = World::new();
     let e = world.spawn();
     world.insert(e, source("MetallicTex"));
-    // a texture the material names and the install does not hold is no error (the material is drawn without it), but it
-    // is never silent: the log names it and the entity
+    // a texture the material names and the install does not hold is no error, and nothing stands in for it: its slot
+    // names a core.texture_absent named as the texture is, with the reason, and the log counts it
     let log = pbr::lower(&mut world, &no_payloads(), None, WATER).unwrap();
-    let normal = "named normal texture not in the install: flat normal";
-    assert_eq!(log.approximations.get(normal).copied(), Some(1));
-    assert_eq!(log.approximated_on[normal], std::collections::BTreeSet::from([e]));
+    let p = world.get::<PbrMaterial>(e).unwrap().clone();
+    for (slot, name) in [(p.base_color_texture, "a"), (p.normal_texture, "n@normal")] {
+        let t = slot
+            .unwrap_or_else(|| panic!("{name}: the slot names no texture"))
+            .texture;
+        assert_eq!(
+            world.get::<TextureAbsent>(t),
+            Some(&TextureAbsent {
+                reason: "not in the install".into()
+            }),
+            "{name}"
+        );
+        assert_eq!(world.get::<Name>(t), Some(&Name(name.into())));
+        assert!(!world.has::<Texture>(t), "{name}");
+    }
+    assert_eq!(
+        p.base_color,
+        PbrMaterial::default().base_color,
+        "no colour stands in for the base"
+    );
+    for counted in [
+        "base textures named and not in the install: the slot names them absent",
+        "normal textures named and not in the install: the slot names them absent",
+    ] {
+        assert_eq!(log.counts.get(counted).copied(), Some(1), "{counted}");
+    }
+    assert!(
+        !log.approximations
+            .contains_key("missing base texture: preview fallback colour")
+    );
+    assert!(
+        !log.approximations
+            .contains_key("named normal texture not in the install: flat normal")
+    );
+    // a second lowering names the same absent entities, not new ones
+    let again = world.spawn();
+    world.insert(again, source("MetallicTex"));
+    pbr::lower(&mut world, &no_payloads(), None, WATER).unwrap();
+    let q = world.get::<PbrMaterial>(again).unwrap();
+    assert_eq!(
+        q.base_color_texture.unwrap().texture,
+        p.base_color_texture.unwrap().texture
+    );
+    assert_eq!(world.iter::<TextureAbsent>().count(), 2);
 }
 
 #[test]

@@ -58,7 +58,13 @@ fn texture_in<'a>(world: &'a World, e: Entity, form: Form, absent: &str) -> Resu
             .map(|f| f.texture)
             .ok_or(NO_LOW_FORM)?,
     };
-    world.get::<Texture>(e).ok_or_else(|| absent.to_owned())
+    world
+        .get::<Texture>(e)
+        .ok_or_else(|| match world.get::<primase_core::TextureAbsent>(e) {
+            // a texture the material names that the read could not give: the refusal says so
+            Some(gone) => format!("{absent}: the read could not give it ({})", gone.reason),
+            None => absent.to_owned(),
+        })
 }
 
 /// Whether a texture `stage` binds or `material`'s base colour (its alpha) has stored forms: a read that brought in

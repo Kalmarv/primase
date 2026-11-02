@@ -105,15 +105,16 @@ impl Spec {
     }
 }
 
-/// The spec of a masked material, `None` when it is not masked.
-fn spec_of(m: &PbrMaterial, what: &str) -> Result<Option<Spec>, String> {
+/// The spec of a masked material, `None` when it is not masked. A base colour slot naming an absent texture is read as
+/// bound to none ([`crate::absent::bound`]).
+fn spec_of(w: &World, m: &PbrMaterial, what: &str, log: &mut PassLog) -> Result<Option<Spec>, String> {
     let AlphaMode::Mask { cutoff } = m.alpha_mode else {
         return Ok(None);
     };
     if !cutoff.is_finite() || !m.base_color[3].is_finite() {
         return Err(format!("{what}: the cutoff or base-colour alpha is not finite"));
     }
-    let r = m.base_color_texture;
+    let r = crate::absent::bound(w, m.base_color_texture, log);
     if r.is_some_and(|r| r.transform.is_some_and(|t| t != UvTransform::IDENTITY)) {
         return Err(format!(
             "{what}: the base-colour texture has a transform (bake-texture-transforms first)"
@@ -275,7 +276,12 @@ fn plan(w: &World, log: &mut PassLog) -> Result<Vec<Job>, String> {
                 let mat = w.get::<PbrMaterial>(m).ok_or_else(|| {
                     format!("{what}: material {m:?} has no pbr.material, so its alpha mode is not known")
                 })?;
-                specs.push(spec_of(mat, &format!("{what}: material {}", name_of(w, m)))?);
+                specs.push(spec_of(
+                    w,
+                    mat,
+                    &format!("{what}: material {}", name_of(w, m)),
+                    log,
+                )?);
             }
             let Some(spec) = specs.iter().flatten().next().copied() else {
                 continue;

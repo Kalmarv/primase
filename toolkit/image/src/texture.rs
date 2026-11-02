@@ -234,7 +234,7 @@ pub fn bake_normal_scale(world: &mut World) -> Result<PassLog> {
     // per normal texture, the scales its bindings use (by bits: a scale is a number, not a value to compare loosely)
     let mut scales = BTreeMap::<Entity, BTreeMap<u32, f32>>::new();
     for (_, m) in world.iter::<PbrMaterial>() {
-        if let Some(r) = m.normal_texture {
+        if let Some(r) = crate::absent::bound(world, m.normal_texture, &mut log) {
             if !m.normal_scale.is_finite() {
                 return Err(Error::Invalid(format!(
                     "normal scale {} of texture {:?} is not finite",

@@ -247,7 +247,11 @@ impl Pass for PackOrm {
         log.count(MATERIALS, 0);
         log.count(IMAGES, 0);
         for (e, m) in materials {
-            let (Some(mr), Some(ao)) = (m.metallic_roughness_texture, m.occlusion_texture) else {
+            // a map naming an absent texture is bound to none: there is no pair to pack
+            let (Some(mr), Some(ao)) = (
+                crate::absent::bound(world, m.metallic_roughness_texture, log),
+                crate::absent::bound(world, m.occlusion_texture, log),
+            ) else {
                 continue;
             };
             if mr.texture == ao.texture {

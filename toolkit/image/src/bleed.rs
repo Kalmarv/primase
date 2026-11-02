@@ -151,7 +151,7 @@ impl Pass for BleedAlphaColors {
             let AlphaMode::Mask { cutoff } = mat.alpha_mode else {
                 continue;
             };
-            let Some(r) = mat.base_color_texture else {
+            let Some(r) = crate::absent::bound(w, mat.base_color_texture, log) else {
                 continue;
             };
             if !cutoff.is_finite() || !mat.base_color[3].is_finite() {

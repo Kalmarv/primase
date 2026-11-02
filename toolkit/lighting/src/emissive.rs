@@ -69,7 +69,7 @@ use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, Pass
 use primase_core::pbr::{PbrMaterial, Wrap};
 use primase_core::{
     ColorSpace, Component, Entity, Instance, Light, LightKind, Mesh, Name, Semantic, Stream, Texture,
-    Topology, Transform, World,
+    TextureAbsent, Topology, Transform, World,
 };
 use primase_foundations::{sampling::Address, sampling::Levels, sampling::Transfer};
 use primase_texcodec::{Decoder, TexDecoder};
@@ -535,6 +535,9 @@ struct Sites {
     dark: u64,
     thinned: u64,
     strips: u64,
+    /// Primitives whose emissive slot names a texture the read could not give (`core.texture_absent`), by its reason:
+    /// read as emitting the factor alone.
+    absent: BTreeMap<String, u64>,
 }
 
 /// `sites` (at least one) as one light: at their intensity-weighted mean position, with their total intensity, their
@@ -715,8 +718,19 @@ impl EmissiveLights {
             if let Some(a) = animated {
                 animated_used.insert(a.clone());
             }
-            // the emissive texture, decoded once
-            let texture = match &material.1.emissive_texture {
+            // the emissive texture, decoded once; one the read could not give is bound to none, counted
+            let emissive_texture = match material
+                .1
+                .emissive_texture
+                .and_then(|r| w.get::<TextureAbsent>(r.texture))
+            {
+                Some(absent) => {
+                    *found.absent.entry(absent.reason.clone()).or_default() += 1;
+                    None
+                }
+                None => material.1.emissive_texture,
+            };
+            let texture = match &emissive_texture {
                 Some(r) => {
                     let t = w.get::<Texture>(r.texture).ok_or_else(|| {
                         format!(
@@ -1035,6 +1049,14 @@ impl Pass for EmissiveLights {
                 .map(|n| n.0.clone())
                 .unwrap_or_else(|| format!("{holder:?}"));
             let mut sites = self.read_mesh(w, mesh, &name, &mut textures, &mut animated_used)?;
+            for (reason, n) in std::mem::take(&mut sites.absent) {
+                log.count(
+                    &format!(
+                        "emissive primitives whose emissive texture the read could not give, emitting their factor: {reason}"
+                    ),
+                    n,
+                );
+            }
             // a fixture `down` names: its lights as one, aimed below
             if let Some(prefix) = p.down.iter().find(|d| name.starts_with(d.as_str()))
                 && !sites.sites.is_empty()
