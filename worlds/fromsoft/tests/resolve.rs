@@ -2650,6 +2650,68 @@ fn the_scene_depth_and_the_shadow_map_are_frame_textures() {
     assert!(matches!(source("g_SSAOTexture"), TextureSource::Default { value, .. } if value == [0.; 4]));
 }
 
+/// A forward water program's frame inputs come from the one engine-texture table: the colour of the scene behind, under
+/// both names the water programs read it by, is the frame's scene colour; the screen-space reflection and the water
+/// interaction normals, whose stages are not executed, are stated constants whose zero alpha leaves the probes' light and
+/// the program's own normal, each with its reason.
+#[test]
+fn a_water_programs_scene_colour_is_the_frames_and_its_unexecuted_inputs_say_why() {
+    const WATER: &[u8] = include_bytes!("fixtures/forward_water.dxbc");
+    let shader = executor(WATER);
+    let program = World::default().spawn();
+    let resolution = resolve(
+        &shader,
+        program,
+        &material().view(),
+        fromsoft_formats::Game::EldenRing,
+        None,
+        Unbound::Preview,
+        &mut |_, _| Ok(None),
+    )
+    .unwrap();
+    let source = |name: &str| {
+        let resource = shader
+            .interface()
+            .resources
+            .iter()
+            .find(|r| r.provenance.name == name)
+            .unwrap();
+        resolution
+            .stage
+            .textures
+            .iter()
+            .find(|t| t.resource == resource.id)
+            .unwrap()
+            .source
+            .clone()
+    };
+    for name in ["g_RefractionTexture", "SceneColor_0_Screen_0"] {
+        assert_eq!(
+            source(name),
+            TextureSource::Frame(FrameTexture::SceneColour),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        source("g_DepthTexture"),
+        TextureSource::Frame(FrameTexture::SceneDepth)
+    );
+    for (name, said) in [
+        ("g_RLRTexture", "the reflection probes' light alone"),
+        ("g_WaterSimulationNormalTexture", "the program's own wave normal"),
+    ] {
+        let TextureSource::Default { value, why } = source(name) else {
+            panic!("{name}: {:?}", source(name));
+        };
+        assert_eq!(value, [0.; 4], "{name}");
+        assert!(
+            why.starts_with(&format!("engine texture {name}: ")) && why.ends_with(said),
+            "{why}"
+        );
+        assert_eq!(resolution.policies.get(&why), Some(&1), "{why}");
+    }
+}
+
 /// Sekiro picks a forward material's pixel pass per draw job, not per material: `FwdSdw` where the placements drawing it
 /// receive shadows, `Fwd` where they do not (the fog's parts) and where no placement draws it (the sky's); a material
 /// placed both ways, which no layout read has, is counted and given `Fwd`.

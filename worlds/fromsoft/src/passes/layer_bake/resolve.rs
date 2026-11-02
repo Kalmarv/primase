@@ -161,6 +161,67 @@ pub const ENGINE_VOLUME_FOG_TEXTURE: &str = "g_VolumeFog0";
 /// transmit nothing and draw it black).
 pub const ENGINE_VOLUME_FOG_NEUTRAL: [f32; 4] = [0., 0., 0., 1.];
 
+/// The names under which the forward programs of water read the colour of the scene behind their surface: Elden Ring's
+/// water families read both (`t55` and `t45`), Sekiro's `g_RefractionTexture` (`t55`). In the recorded Stormveil frames
+/// every one of the 39 forward draws of `M[PlacidLake]` and `M[Water][ocean4]` binds both to one image, a full-screen
+/// copy of the lit composite the game makes just before those draws (the render graph's `PointSampleColor1` step into
+/// target 34), which the draws then blend over.
+pub const ENGINE_REFRACTION_TEXTURE: &str = "g_RefractionTexture";
+pub const ENGINE_SCENE_COLOUR_TEXTURE: &str = "SceneColor_0_Screen_0";
+
+/// The name of the screen-space reflection the forward programs of water read (`t44`): the recorded Stormveil water
+/// draws bind the result of the frame's reflection chain (half resolution, six levels). Elden Ring's
+/// `M[PlacidLake]_FwdSdw` mixes it over the reflection probes' light as `ssr.rgb + (1 - ssr.a) * probes`.
+pub const ENGINE_SCREEN_REFLECTION_TEXTURE: &str = "g_RLRTexture";
+
+/// The name of the water interaction normals the water programs read (Elden Ring `t57`, Sekiro `t58`): the recorded
+/// Stormveil water draws bind the frame's `GXWaterInteractionNormalMap2` target (512 x 512, RGBA8), the ripples of what
+/// moves through the water. Elden Ring's `M[PlacidLake]_FwdSdw` moves its own wave normal toward the map's by the map's
+/// alpha, inside the map's square only.
+pub const ENGINE_WATER_SIMULATION_TEXTURE: &str = "g_WaterSimulationNormalTexture";
+
+/// What the engine binds at one of its own textures (one the material neither numbers nor names), as a program's binding
+/// states it ([`engine_texture`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum EngineTexture {
+    /// An image of the frame.
+    Frame(FrameTexture),
+    /// A constant standing for the image of a stage that is not executed, and what it means to the programs that read it.
+    Neutral { value: [f32; 4], what: &'static str },
+}
+
+/// The engine's textures by their names, one table for every program that reads one (G-buffer, forward and the rest): the
+/// frame's copy of its depth, the colour of the scene behind, the shadow map; the rest stated constants with what they
+/// leave the program, and an untraced name zero, each counted by its reason where it is bound.
+pub(crate) fn engine_texture(name: &str) -> EngineTexture {
+    use EngineTexture::{Frame, Neutral};
+    match name {
+        ENGINE_SCENE_DEPTH_TEXTURE => Frame(FrameTexture::SceneDepth),
+        ENGINE_SHADOW_TEXTURE => Frame(FrameTexture::ShadowMap),
+        ENGINE_REFRACTION_TEXTURE | ENGINE_SCENE_COLOUR_TEXTURE => Frame(FrameTexture::SceneColour),
+        ENGINE_DITHER_TEXTURE => Neutral {
+            value: [ENGINE_DITHER_NEUTRAL as f32; 4],
+            what: "read only by the dithered alpha fade, which is off",
+        },
+        ENGINE_VOLUME_FOG_TEXTURE => Neutral {
+            value: ENGINE_VOLUME_FOG_NEUTRAL,
+            what: "no fog (nothing scattered in, everything transmitted)",
+        },
+        ENGINE_SCREEN_REFLECTION_TEXTURE => Neutral {
+            value: [0.; 4],
+            what: "no screen-space reflection is traced: coverage 0, the reflection probes' light alone",
+        },
+        ENGINE_WATER_SIMULATION_TEXTURE => Neutral {
+            value: [0.; 4],
+            what: "no water interaction is simulated: weight 0, the program's own wave normal",
+        },
+        _ => Neutral {
+            value: [0.; 4],
+            what: "not traced, left at zero",
+        },
+    }
+}
+
 /// `<index>` and role of a texture kind named `…Texture2D_<index>_<Role>…`: the first named segment after the index, past
 /// a blend shader's `GSBlendMap` prefix (`…Texture2D_2_GSBlendMap_AlbedoMap_1` is an albedo map, as both games' blend
 /// shaders name their slots; a slot named only `GSBlendMap` is the blend map) and past the empty segments of a kind such
@@ -398,41 +459,22 @@ pub fn resolve(
         let individual_2d =
             resource.count == 1 && dim == iridia_interface::TextureDim::D2 && !arrayed && !multisampled;
         let register = register(resource)?;
-        // the engine's own texture: the dither noise a neutral grey (the fade is off), the volumetric fog none, the scene
-        // depth and the shadow map the frame's, any other zero; each default is counted by name
+        // the engine's own texture, as its table states it ([`engine_texture`]); each constant is counted by its reason
         let named = match program_texture(material, resource) {
             ProgramTexture::Material(named) => named,
             ProgramTexture::Engine(name) => {
-                let frame = match name {
-                    ENGINE_SCENE_DEPTH_TEXTURE => Some(FrameTexture::SceneDepth),
-                    ENGINE_SHADOW_TEXTURE => Some(FrameTexture::ShadowMap),
-                    _ => None,
+                let source = match engine_texture(name) {
+                    EngineTexture::Frame(frame) => TextureSource::Frame(frame),
+                    EngineTexture::Neutral { value, what } => {
+                        let why = format!("engine texture {name}: {what}");
+                        *policies.entry(why.clone()).or_default() += 1;
+                        TextureSource::Default { value, why }
+                    }
                 };
-                if let Some(frame) = frame {
-                    bindings.push(TextureBinding {
-                        resource: resource.id,
-                        sampler: None,
-                        source: TextureSource::Frame(frame),
-                    });
-                    continue;
-                }
-                let (value, what) = match name {
-                    ENGINE_DITHER_TEXTURE => (
-                        [ENGINE_DITHER_NEUTRAL as f32; 4],
-                        "read only by the dithered alpha fade, which is off",
-                    ),
-                    ENGINE_VOLUME_FOG_TEXTURE => (
-                        ENGINE_VOLUME_FOG_NEUTRAL,
-                        "no fog (nothing scattered in, everything transmitted)",
-                    ),
-                    _ => ([0.; 4], "not a material slot, left at zero"),
-                };
-                let why = format!("engine texture {name}: {what}");
-                *policies.entry(why.clone()).or_default() += 1;
                 bindings.push(TextureBinding {
                     resource: resource.id,
                     sampler: None,
-                    source: TextureSource::Default { value, why },
+                    source,
                 });
                 continue;
             }
