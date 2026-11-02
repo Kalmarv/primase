@@ -533,6 +533,7 @@ mod registration_tests {
             "normalize-normals",
             "pack-orm",
             "pack-texture-atlas",
+            "rebase-texcoord-set",
             "set-material-modes",
             "upscale-nearest",
             "uv-frame-normals",

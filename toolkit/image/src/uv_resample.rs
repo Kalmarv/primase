@@ -327,7 +327,9 @@ mod tests {
     #[test]
     fn two_triangles_of_a_square_claim_every_texel_once() {
         let (a, b, c, d) = ([0., 0.], [1., 0.], [1., 1.], [0., 1.]);
-        for size in [1, 2, 3, 8, 13] {
+        // from 2 x 2: a triangle that claims no centre takes the texel of its centroid, so at 1 x 1 the one texel is
+        // claimed by both
+        for size in [2, 3, 8, 13] {
             let first = claimed_texels(&[a, b, c], size, size);
             let second = claimed_texels(&[a, c, d], size, size);
             let mut all: Vec<_> = first.iter().chain(&second).copied().collect();
