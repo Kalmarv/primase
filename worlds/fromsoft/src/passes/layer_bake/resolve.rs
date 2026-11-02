@@ -1263,13 +1263,20 @@ fn scene_values(
     constant("FC_FarClipInfo", 0, 4, view(ViewParameter::FarPlane))?;
     constant("FC_FarClipInfo", 1, 4, view(ViewParameter::InverseFarPlane))?;
     constant("FC_FarClipInfo", 2, 4, view(ViewParameter::DepthRange))?;
-    // the two light sets of cbLight (224 bytes each)
+    // the two light sets of cbLight (224 bytes each): the primary light's direction, diffuse colour and specular colour
     for set in [0, 56] {
         constant(
             "Vec_0",
             set,
             12,
             ConstantRole::Frame(FrameParameter::DirectionToLight),
+        )?;
+        constant("Col_0", set, 12, ConstantRole::Frame(FrameParameter::LightColour))?;
+        constant(
+            "Spc_0",
+            set,
+            12,
+            ConstantRole::Frame(FrameParameter::LightSpecularColour),
         )?;
     }
     constant(
