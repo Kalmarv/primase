@@ -2,8 +2,9 @@
 
 Writes a prepared world for Blender, its materials live shader node graphs of core's material model rendering in
 Cycles: nothing core states as live is baked. Each texture slot is sampled as it states, with its UV set, transform,
-wrap and filters; vertex colour, alpha mode, sidedness and emission are drawn by nodes. Every material writes its base
-colour, emission and coverage as render passes (AOVs), so a render can be compared with what core states.
+wrap and filters; vertex colour, alpha mode, sidedness and emission are drawn by nodes, and a `core.layered` blend by
+its layers, weights and composition, per pixel. Every material writes its base colour, emission and coverage as render
+passes (AOVs), so a render can be compared with what core states.
 
 Three stages:
 
@@ -15,7 +16,8 @@ Three stages:
   and each pass as raw floats.
 
 What has no form in Blender is counted in the report, never chosen around: minification and mip filters, colour
-textures Cycles filters before decoding them, occlusion maps, normal maps in Blender's own tangents, specular f90.
+textures Cycles filters before decoding them, occlusion maps, normal maps in Blender's own tangents, specular f90, and
+a blend that reads what `scene.glb` does not carry (drawn as its host, named by the reason).
 
 ## Example
 

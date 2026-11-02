@@ -4,15 +4,18 @@
 //!   placements, rigs and lights reach Blender through Blender's own glTF importer. Its materials are glTF's form of
 //!   the world's; Blender draws the graphs here instead.
 //! - `materials.json` ([`crate::MATERIALS_SCHEMA`]): one node graph per material drawn ([`crate::graph`]), and for
-//!   each glTF mesh, by index, each primitive's graph (or none). A material is drawn with one graph per whether its
-//!   primitives give it `COLOR_0` (a primitive the glTF writer wrote with it, of a material that takes it).
+//!   each glTF mesh, by index, each primitive's graph (or none). A material is drawn with one graph per form its
+//!   primitives give it: with or without `COLOR_0` (a primitive the glTF writer wrote with it, for a material that
+//!   reads it), and with its blend or its host alone.
 //! - `textures/<sha256>.png`: each texture the graphs sample, its largest level as RGBA8 PNG, named by its bytes'
 //!   hash (one file for identical images).
 //!
-//! What it draws: a material entity's `pbr.material` as its graph. A `core.layered` without a host `pbr.material` is
-//! not drawn, its primitives drawn with no material, counted (core's rule: no default a writer picks). A material
-//! that also states a live form this writer does not draw yet (`core.layered`, `pbr.detail`) is drawn from its host
-//! `pbr.material`, counted by the form. A material entity with neither is not drawn, counted.
+//! What it draws: a material entity's `pbr.material` as its graph, and a `core.layered` on it as its blend, the
+//! `pbr.material` its host ([`crate::graph::layered`]). A blend is drawn on a primitive that carries all it reads; on
+//! one that does not, its host alone, counted by the reason ([`crate::graph::layered::Blocker`]). A `core.layered`
+//! without a host `pbr.material` is not drawn, its primitives drawn with no material, counted (core's rule: no
+//! default a writer picks). A material that also states a live form this writer does not draw yet (`pbr.detail`) is
+//! drawn from its host `pbr.material`, counted by the form. A material entity with neither is not drawn, counted.
 //!
 //! The folder is the writer's: one that holds anything is refused, never emptied here.
 
@@ -27,13 +30,13 @@ use std::path::Path;
 
 use primase_core::detail::DetailedMaterial;
 use primase_core::pbr::PbrMaterial;
-use primase_core::{Component, Entity, LayeredMaterial, Name, Texture, VertexColor, World};
+use primase_core::{Component, Entity, LayeredMaterial, Mesh, Name, Semantic, Texture, VertexColor, World};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::graph::texture::{Counts, Reading, Sampler};
-use crate::graph::{Graph, PASS_ALPHA_THRESHOLD, Settings, aov, pbr};
+use crate::graph::{Graph, PASS_ALPHA_THRESHOLD, Settings, aov, layered, pbr};
 use crate::{Error, MATERIALS_SCHEMA, Result};
 
 /// Writer options.
@@ -59,8 +62,16 @@ pub struct BlenderReport {
     pub primitives_without_material: u64,
     /// Material entities not drawn, by cause: their primitives have no material.
     pub materials_not_drawn: BTreeMap<String, u64>,
+    /// Blender materials drawing a `core.layered` blend.
+    pub blends: u64,
+    /// `core.layered` materials drawn as their host alone on some primitive, by the reason (once per material and
+    /// reason).
+    pub blends_drawn_from_host: BTreeMap<String, u64>,
+    /// Primitives drawn with a blend whose mesh has `COLOR_0` and a layer takes it as its colour, where `scene.glb`
+    /// leaves it out (the host does not read it, and the glTF writer writes it for the host).
+    pub blend_layers_without_color0: u64,
     /// Material entities drawn from their host `pbr.material` that also state a live form this writer does not draw
-    /// yet, by the form's component.
+    /// yet (`pbr.detail`), by the form's component.
     pub live_forms_drawn_from_host: BTreeMap<String, u64>,
     /// Images the graphs sample (a texture read as colour and as data is two).
     pub images: u64,
@@ -76,19 +87,22 @@ impl fmt::Display for BlenderReport {
         writeln!(f, "{}", self.gltf.to_string().trim_end())?;
         writeln!(
             f,
-            "blender: {} materials ({} nodes, {} links) drawing {} primitives; {} primitives without a material; \
-             {} images in {} files ({} bytes)",
+            "blender: {} materials ({} blends; {} nodes, {} links) drawing {} primitives; {} primitives without a \
+             material; {} images in {} files ({} bytes); primitives whose blend's layers lose COLOR_0 {}",
             self.materials,
+            self.blends,
             self.nodes,
             self.links,
             self.primitives_drawn,
             self.primitives_without_material,
             self.images,
             self.image_files,
-            self.image_bytes
+            self.image_bytes,
+            self.blend_layers_without_color0
         )?;
         let maps = [
             ("materials not drawn", &self.materials_not_drawn),
+            ("blends drawn as their host alone", &self.blends_drawn_from_host),
             (
                 "drawn from their host pbr.material, a live form not drawn yet",
                 &self.live_forms_drawn_from_host,
@@ -162,33 +176,52 @@ pub fn write_file(world: &World, options: &WriteOptions, dir: &Path) -> Result<B
     let mut report = BlenderReport::default();
     let mut sampler = Sampler::new(world);
     let mut materials: Vec<MaterialEntry> = Vec::new();
-    let mut entities: Vec<Entity> = Vec::new();
-    let mut index: BTreeMap<(Entity, bool), Option<usize>> = BTreeMap::new();
+    let mut index: BTreeMap<(Entity, Form), Option<usize>> = BTreeMap::new();
+    let mut blocked: BTreeSet<(Entity, String)> = BTreeSet::new();
     let mut meshes = Vec::new();
     for mesh in &gltf.layout.meshes {
         let mut prims = Vec::new();
-        for p in &mesh.primitives {
+        for (i, p) in mesh.primitives.iter().enumerate() {
             let Some(m) = p.material else {
                 report.primitives_without_material += 1;
                 prims.push(None);
                 continue;
             };
-            let color0 = p.attributes.contains("COLOR_0") && !world.has::<VertexColor>(m);
-            let k = match index.get(&(m, color0)) {
+            let carries = p.attributes.contains("COLOR_0");
+            let blend = match world.get::<LayeredMaterial>(m) {
+                Some(l) if world.has::<PbrMaterial>(m) => {
+                    match layered::blocker(world, &sampler, l, &p.attributes)? {
+                        None => {
+                            if !carries
+                                && layers_take_color0(world, l)
+                                && mesh_has_color0(world, mesh.prototype, i)
+                            {
+                                report.blend_layers_without_color0 += 1;
+                            }
+                            true
+                        }
+                        Some(why) => {
+                            let why = why.to_string();
+                            if blocked.insert((m, why.clone())) {
+                                *report.blends_drawn_from_host.entry(why).or_default() += 1;
+                            }
+                            false
+                        }
+                    }
+                }
+                _ => false,
+            };
+            let form = Form {
+                // a blend's layers each take COLOR_0 or not; a material alone as it states
+                color0: carries && (blend || !world.has::<VertexColor>(m)),
+                blend,
+            };
+            let k = match index.get(&(m, form)) {
                 Some(&k) => k,
                 None => {
-                    let first = !index.contains_key(&(m, !color0));
-                    let k = material(
-                        world,
-                        &mut sampler,
-                        &mut report,
-                        (m, color0, first),
-                        &mut materials,
-                    )?;
-                    if k.is_some() {
-                        entities.push(m);
-                    }
-                    index.insert((m, color0), k);
+                    let first = !index.keys().any(|(e, _)| *e == m);
+                    let k = material(world, &mut sampler, &mut report, (m, form, first), &mut materials)?;
+                    index.insert((m, form), k);
                     k
                 }
             };
@@ -199,17 +232,21 @@ pub fn write_file(world: &World, options: &WriteOptions, dir: &Path) -> Result<B
         }
         meshes.push(prims);
     }
-    // a material drawn both with and without COLOR_0 names the graph with it so
-    let mut drawn: BTreeMap<Entity, u32> = BTreeMap::new();
-    for e in &entities {
-        *drawn.entry(*e).or_default() += 1;
+    // a material drawn in more than one form names each graph by what sets it apart
+    let mut forms: BTreeMap<Entity, Vec<Form>> = BTreeMap::new();
+    for ((e, form), k) in &index {
+        if k.is_some() {
+            forms.entry(*e).or_default().push(*form);
+        }
     }
-    for ((e, color0), k) in &index {
-        if let Some(k) = k
-            && *color0
-            && drawn[e] > 1
-        {
+    for ((e, form), k) in &index {
+        let Some(k) = k else { continue };
+        let all = &forms[e];
+        if form.color0 && all.iter().any(|f| !f.color0) {
             materials[*k].name.push_str(" (COLOR_0)");
+        }
+        if !form.blend && all.iter().any(|f| f.blend) {
+            materials[*k].name.push_str(" (host)");
         }
     }
     let mut files: BTreeMap<Entity, String> = BTreeMap::new();
@@ -272,13 +309,39 @@ pub fn write_file(world: &World, options: &WriteOptions, dir: &Path) -> Result<B
     Ok(report)
 }
 
-/// The graph drawing material entity `m` (with `COLOR_0` where `color0`), pushed to `out`; `None` where it is not
-/// drawn. What it does not draw is counted once per entity, its `first` graph.
+/// How a material entity is drawn on a primitive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Form {
+    /// The primitive carries `COLOR_0` and the material may read it as a colour (a blend's layers each by its own).
+    color0: bool,
+    /// Its `core.layered` blend is drawn (else its `pbr.material` alone).
+    blend: bool,
+}
+
+/// Whether some layer of `l` takes `COLOR_0` as its colour ([`layered`]'s rule).
+fn layers_take_color0(world: &World, l: &LayeredMaterial) -> bool {
+    !l.reads(Semantic::Color(0))
+        && l.layers
+            .iter()
+            .flatten()
+            .any(|layer| !world.has::<VertexColor>(layer.material))
+}
+
+/// Whether primitive `i` of `prototype`'s mesh has a `COLOR_0` stream.
+fn mesh_has_color0(world: &World, prototype: Entity, i: usize) -> bool {
+    world
+        .get::<Mesh>(prototype)
+        .and_then(|m| m.primitives().get(i))
+        .is_some_and(|p| p.streams.contains_key(&Semantic::Color(0)))
+}
+
+/// The graph drawing material entity `m` in `form`, pushed to `out`; `None` where it is not drawn. What it does not
+/// draw is counted once per entity, its `first` graph.
 fn material(
     world: &World,
     sampler: &mut Sampler,
     report: &mut BlenderReport,
-    (m, color0, first): (Entity, bool, bool),
+    (m, form, first): (Entity, Form, bool),
     out: &mut Vec<MaterialEntry>,
 ) -> Result<Option<usize>> {
     let Some(pbr) = world.get::<PbrMaterial>(m) else {
@@ -292,19 +355,19 @@ fn material(
         }
         return Ok(None);
     };
-    let live = [
-        (LayeredMaterial::NAME, world.has::<LayeredMaterial>(m)),
-        (DetailedMaterial::NAME, world.has::<DetailedMaterial>(m)),
-    ];
-    for (form, stated) in live {
-        if stated && first {
-            *report
-                .live_forms_drawn_from_host
-                .entry(form.to_owned())
-                .or_default() += 1;
-        }
+    if first && world.has::<DetailedMaterial>(m) {
+        *report
+            .live_forms_drawn_from_host
+            .entry(DetailedMaterial::NAME.to_owned())
+            .or_default() += 1;
     }
-    let (graph, settings) = pbr::graph(sampler, pbr, color0)?;
+    let (graph, settings) = match world.get::<LayeredMaterial>(m) {
+        Some(l) if form.blend => {
+            report.blends += 1;
+            layered::graph(sampler, world, l, pbr, form.color0)?
+        }
+        _ => pbr::graph(sampler, pbr, form.color0)?,
+    };
     let name = world
         .get::<Name>(m)
         .map_or_else(|| format!("material {}", m.index()), |n| n.0.clone());

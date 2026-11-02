@@ -1,7 +1,7 @@
 //! Blender (Cycles): a world written as a scene whose materials are live shader node graphs of core's material model,
 //! saved as a `.blend` and rendered in Cycles. Nothing core states as live is baked: each material's textures are
 //! sampled as its slots state them, with their UV sets, transforms, wrap and filters, its vertex colour and alpha
-//! mode drawn by its nodes.
+//! mode drawn by its nodes, and a `core.layered` blend's layers weighted per pixel ([`graph::layered`]).
 //!
 //! Three stages, each a program's step:
 //! - [`write`](mod@write): the world to a folder: `scene.glb` (the glTF writer's, unchanged: geometry, placements,

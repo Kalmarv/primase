@@ -188,16 +188,12 @@ impl<'w> Sampler<'w> {
         }))
     }
 
-    /// The image of texture `e` read as `reading`; `None`, counted, where it is not sampled.
-    fn image(&mut self, e: Entity, reading: Reading) -> Result<Option<Image>> {
-        let skip = |s: &mut Self, reason: String| {
-            *s.counts.slots_unsampled.entry(reason).or_default() += 1;
-            Ok(None)
-        };
+    /// Whether texture `e` is sampled: why not where it is not (its pixels not loaded, or no exact 8-bit form).
+    pub fn unsampled(&self, e: Entity) -> Result<Option<String>> {
         let Some(t) = self.world.get::<Texture>(e) else {
             if self.world.has::<TextureFile>(e) {
                 // a reader's load step makes the pixels (primase_image::load_textures); the writer reads no file
-                return skip(self, "texture files not loaded".into());
+                return Ok(Some("texture files not loaded".into()));
             }
             return Err(Error::World {
                 entity: e,
@@ -208,15 +204,27 @@ impl<'w> Sampler<'w> {
             return Err(Error::World {
                 entity: e,
                 detail:
-                    "normal texture requires tangent/bitangent basis, X in red, green up and stored Z; run \
-                         normalize-normals first"
+                    "normal texture requires tangent/bitangent basis, X in red, green up and stored Z; run                          normalize-normals first"
                         .into(),
             });
         }
         if !primase_image::rgba8_exact(t.format) {
             // its values have no exact 8-bit form: lower-textures-rgba8 converts it, as a program chooses
-            return skip(self, format!("{:?} (no exact 8-bit form)", t.format));
+            return Ok(Some(format!("{:?} (no exact 8-bit form)", t.format)));
         }
+        Ok(None)
+    }
+
+    /// The image of texture `e` read as `reading`; `None`, counted, where it is not sampled ([`Sampler::unsampled`]).
+    fn image(&mut self, e: Entity, reading: Reading) -> Result<Option<Image>> {
+        if let Some(reason) = self.unsampled(e)? {
+            *self.counts.slots_unsampled.entry(reason).or_default() += 1;
+            return Ok(None);
+        }
+        let t = self
+            .world
+            .get::<Texture>(e)
+            .expect("a sampled texture has core.texture");
         let next = self.images.list.len();
         let i = *self.images.index.entry((e, reading)).or_insert(next);
         if i == next {

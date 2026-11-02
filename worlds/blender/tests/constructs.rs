@@ -2,7 +2,8 @@
 //! one construct of `pbr.material`, against values worked by hand.
 //!
 //! The camera is orthographic, eight pixels to the metre, each quad's pixel centres at `(i + 0.5) / 8` of its UVs
-//! (`i` 0 to 7 from its left and top), the pixel filter a hundredth of a pixel wide: a pixel is its centre's value.
+//! (`i` 0 to 7 from its left and top), the pixel filter a hundredth of a pixel wide: a pixel is its centre's value, but
+//! for the few samples Cycles places up to half a pixel off ([`OFF_CENTRE`]).
 //! The texture is 2 x 2 texels, sRGB bytes 0 or 255 so they decode to 0 or 1: `A` (red), `B` (green) on its top row,
 //! `C` (blue), `D` (white, alpha 128/255) below. Nearest sampling makes each texel four pixels of a quad (sixteen),
 //! two with a scale of 2. What each quad shows is worked out in its case's comment and its `expect`.
@@ -21,10 +22,11 @@ use primase_blender::graph::aov;
 use primase_blender::render::{Camera, Device, Projection, RenderOptions, Rendered, render};
 use primase_blender::save::{Blender, save};
 use primase_blender::{BlenderReport, WriteOptions, write_file};
+use primase_core::layered::{Channel, Composition, Source, height_blend, over_as_sum};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Shading, TextureRef, UvTransform, Wrap};
 use primase_core::{
-    ColorSpace, Entity, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, Topology,
-    Transform, VertexColor, World,
+    ColorSpace, Entity, Layer, LayerWeights, LayeredMaterial, Mesh, Name, Primitive, Semantic, Stream,
+    TexFormat, TexRole, Texture, Topology, Transform, VertexColor, WeightMapping, World,
 };
 
 /// Pixels a quad spans; pixels from one quad's corner to the next's; quads in a row.
@@ -48,6 +50,15 @@ const TEXELS: [[u8; 4]; 4] = [
     [255, 255, 255, 128],
 ];
 
+/// Samples a pixel.
+const SAMPLES: u32 = 256;
+
+/// The most a pixel's value can move from its centre's, per unit of the value's change across a pixel. Cycles 5.2.3
+/// places nearly every camera sample within the filter's width of the pixel centre, but some (about 6 in 10,000, with
+/// each filter type, width and sampling pattern) up to half a pixel off; a pixel is taken to have at most three of
+/// its [`SAMPLES`] there (more than one in 256 samples is rare: about 0.15 a pixel).
+const OFF_CENTRE: f32 = 0.5 * 3.0 / SAMPLES as f32;
+
 /// What a pixel of a quad holds: base colour (RGB), coverage, and where stated its emission and Cycles' image.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Want {
@@ -55,7 +66,11 @@ struct Want {
     coverage: f32,
     emission: Option<[f32; 3]>,
     combined: Option<[f32; 3]>,
+    /// How far a value may be from what is worked, where the pixel's samples all read it.
     tolerance: f32,
+    /// The most any value changes across a pixel (0 where it is the same across it): its samples off the centre
+    /// move it by up to this times [`OFF_CENTRE`].
+    slope: f32,
 }
 
 impl Want {
@@ -66,6 +81,7 @@ impl Want {
             emission: None,
             combined: None,
             tolerance: 1e-5,
+            slope: 0.0,
         }
     }
     fn uncovered() -> Self {
@@ -135,10 +151,12 @@ struct Case {
     material: PbrMaterial,
     /// The quad faces away from the camera.
     back: bool,
-    color0: Option<Stream>,
-    /// A second UV set: the quad's own mirrored left to right.
-    texcoord1: bool,
+    /// Streams beyond position, normal and UV set 0, a value per corner: top-left, top-right, bottom-right,
+    /// bottom-left.
+    streams: Vec<(Semantic, Stream)>,
     ignores_color: bool,
+    /// A blend on the material, `material` its host.
+    layered: Option<LayeredMaterial>,
     expect: Box<dyn Fn(usize, usize) -> Want>,
 }
 
@@ -152,9 +170,9 @@ impl Case {
             name,
             material,
             back: false,
-            color0: None,
-            texcoord1: false,
+            streams: Vec::new(),
             ignores_color: false,
+            layered: None,
             expect: Box::new(expect),
         }
     }
@@ -297,7 +315,7 @@ fn cases(w: &mut World) -> Vec<Case> {
             },
             move |_, _| Want::base(want),
         );
-        c.color0 = Some(stream);
+        c.streams = vec![(Semantic::Color(0), stream)];
         c.ignores_color = ignores;
         out.push(c);
     };
@@ -393,8 +411,8 @@ fn cases(w: &mut World) -> Vec<Case> {
         ),
         // a colour texture with no filter stated is filtered: bilinear, repeating ([`bilinear`]). Cycles filters an
         // 8-bit sRGB image's encoded values and decodes the result (the writer counts it): the texels here are 0 or 1
-        // encoded and decoded alike, so the pixel is the decoded bilinear value. The filter's samples spread over a
-        // hundredth of a pixel, where the value moves by up to 0.25 a pixel: within 3e-3.
+        // encoded and decoded alike, so the pixel is the decoded bilinear value. The encoded value moves by up to 0.25
+        // a pixel (a texel is four), the decoded by up to 2.28 times that (sRGB's slope at 1).
         Case::new(
             "bilinear",
             PbrMaterial {
@@ -402,7 +420,7 @@ fn cases(w: &mut World) -> Vec<Case> {
                 ..white()
             },
             |i, j| Want {
-                tolerance: 3e-3,
+                slope: 0.25 * 2.28,
                 ..Want::base(bilinear(i, j).map(srgb_decode))
             },
         ),
@@ -435,7 +453,7 @@ fn cases(w: &mut World) -> Vec<Case> {
     let mut second = Case::new("texcoord 1", textured(|r| r.texcoord = 1), |i, j| {
         Want::base(rgb(quadrant(7 - i, j)))
     });
-    second.texcoord1 = true;
+    second.streams = vec![(Semantic::TexCoord(1), mirrored())];
     out.push(second);
     // seen from behind, a single-sided quad is not drawn, a double-sided one is
     let mut single = Case::new(
@@ -467,7 +485,309 @@ fn cases(w: &mut World) -> Vec<Case> {
         },
         |_, _| Want::base([0.6, 0.4, 0.2]),
     ));
+    out.extend(blends(w, tex, data));
     out
+}
+
+/// A pixel's coordinate along one axis of its quad: `(k + 0.5) / 8`.
+fn at(k: usize) -> f32 {
+    (k as f32 + 0.5) / PX as f32
+}
+
+/// A stream of four channels per corner (top-left, top-right, bottom-right, bottom-left) from the corner's `(u, v)`.
+fn corners(f: impl Fn(f32, f32) -> [f32; 4]) -> Stream {
+    Stream::F32x4(
+        [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+            .map(|(u, v)| f(u, v))
+            .to_vec(),
+    )
+}
+
+/// `w` times `c`, summed.
+fn weighted(ws: &[f32], cs: &[[f32; 3]]) -> [f32; 3] {
+    let mut out = [0.0; 3];
+    for (w, c) in ws.iter().zip(cs) {
+        for k in 0..3 {
+            out[k] += w * c[k];
+        }
+    }
+    out
+}
+
+const RED: [f32; 3] = [1.0, 0.0, 0.0];
+const GREEN: [f32; 3] = [0.0, 1.0, 0.0];
+const BLUE: [f32; 3] = [0.0, 0.0, 1.0];
+
+/// Blends (`core.layered`) of `pbr.material` layers on a host whose own colour, (0.1, 0.2, 0.3), shows only where a
+/// blend is not drawn. Each case's weights and colours are worked from core's equations ([`over_as_sum`],
+/// [`height_blend`], [`WeightMapping::evaluate`]).
+fn blends(w: &mut World, tex: Entity, data: Entity) -> Vec<Case> {
+    let mut flat = |c: [f32; 3]| {
+        let e = w.spawn();
+        w.insert(
+            e,
+            PbrMaterial {
+                base_color: [c[0], c[1], c[2], 1.0],
+                ..white()
+            },
+        );
+        e
+    };
+    let (red, green, blue, white_layer) = (flat(RED), flat(GREEN), flat([0.0, 0.0, 1.0]), flat([1.0; 3]));
+    let red_taking = flat(RED);
+    let green_ignoring = flat(GREEN);
+    let black = |w: &mut World, emissive: [f32; 3], strength: f32| {
+        let e = w.spawn();
+        w.insert(
+            e,
+            PbrMaterial {
+                base_color: [0.0, 0.0, 0.0, 1.0],
+                emissive,
+                emissive_strength: strength,
+                ..white()
+            },
+        );
+        e
+    };
+    let glowing_red = black(w, RED, 2.0);
+    let glowing_green = black(w, GREEN, 1.0);
+    w.insert(green_ignoring, VertexColor::Ignored);
+    let textured_layer = w.spawn();
+    w.insert(
+        textured_layer,
+        PbrMaterial {
+            base_color_texture: slot(tex, |_| {}),
+            ..white()
+        },
+    );
+    let layer = |material| {
+        Some(Layer {
+            material,
+            texcoord: None,
+            transform: None,
+        })
+    };
+    let host = || PbrMaterial {
+        base_color: [0.1, 0.2, 0.3, 1.0],
+        ..white()
+    };
+    let vertex = |semantic, channel| Source::Vertex { semantic, channel };
+    let c1 = |channel| vertex(Semantic::Color(1), channel);
+    let mask = |channels| Source::Mask {
+        texture: slot(data, |_| {}).unwrap(),
+        channels,
+        bias: 0.0,
+    };
+    let case =
+        |name, layered: LayeredMaterial, colour1: Stream, expect: Box<dyn Fn(usize, usize) -> Want>| Case {
+            streams: vec![(Semantic::Color(1), colour1)],
+            layered: Some(layered),
+            expect,
+            ..Case::new(name, host(), |_, _| Want::uncovered())
+        };
+    let mut out = vec![
+        // COLOR_1's channels weight the layers directly, summed: red at 0.25, green at u
+        case(
+            "blend sum",
+            LayeredMaterial {
+                layers: vec![layer(red), layer(green)],
+                weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
+            },
+            corners(|u, _| [0.25, u, 0.0, 0.0]),
+            Box::new(|i, _| Want {
+                slope: 1.0 / PX as f32,
+                ..Want::base([0.25, at(i), 0.0])
+            }),
+        ),
+        // rgb_product_4 of (0.2, 0.5, 0.25): weights (0.3, 0.1, 0.3, 0.1) of red, green, blue and white
+        case(
+            "blend rgb_product_4",
+            LayeredMaterial {
+                layers: vec![layer(red), layer(green), layer(blue), layer(white_layer)],
+                weights: LayerWeights::new(Semantic::Color(1), WeightMapping::RgbProduct4),
+            },
+            corners(|_, _| [0.2, 0.5, 0.25, 1.0]),
+            Box::new(|_, _| {
+                let ws = WeightMapping::RgbProduct4.evaluate([0.2, 0.5, 0.25, 1.0]);
+                Want::base(weighted(&ws, &[RED, GREEN, BLUE, [1.0; 3]]))
+            }),
+        ),
+        // over: the texture's layer over red by saturate(0.5 + 0.5 m), m the data texture's red per quadrant (1 0 /
+        // 0 1): A and D show the texture, B and C half each
+        case(
+            "blend threshold over",
+            LayeredMaterial {
+                layers: vec![layer(red), layer(textured_layer)],
+                weights: LayerWeights {
+                    channels: Some(vec![
+                        Channel::Source(c1(0)),
+                        Channel::Threshold {
+                            v: c1(1),
+                            m: mask([1.0, 0.0, 0.0, 0.0]),
+                            k: [0.0, 1.0, 0.5, 0.0],
+                        },
+                    ]),
+                    composition: Composition::Over,
+                    ..LayerWeights::new(Semantic::Color(1), WeightMapping::Identity)
+                },
+            },
+            corners(|_, _| [0.3, 0.5, 0.0, 0.0]),
+            Box::new(|i, j| {
+                let t = quadrant(i, j);
+                let w1 = (0.5 + 0.5 * t[0]).clamp(0.0, 1.0);
+                Want::base(weighted(&over_as_sum([0.3, w1, 0.0, 0.0], 2), &[RED, rgb(t)]))
+            }),
+        ),
+        // height: weights 0.5 each, heights 0.8 (red) and u (green), contrast 0.75. Green's weight is u1 / (0.25 + u1)
+        // with u1 = max(0.5 u - 0.15, 0) to u = 0.8, 0.25 / (0.9 - 0.5 u) beyond: its slope is at most 2 a quad
+        case(
+            "blend height",
+            LayeredMaterial {
+                layers: vec![layer(red), layer(green)],
+                weights: LayerWeights {
+                    composition: Composition::Height { contrast: 0.75 },
+                    heights: vec![c1(2), c1(3)],
+                    ..LayerWeights::new(Semantic::Color(1), WeightMapping::Identity)
+                },
+            },
+            corners(|u, _| [0.5, 0.5, 0.8, u]),
+            Box::new(|i, _| {
+                let ws = height_blend([0.5, 0.5, 0.0, 0.0], [0.8, at(i), 0.0, 0.0], 2, 0.75);
+                Want {
+                    slope: 2.0 / PX as f32,
+                    ..Want::base(weighted(&ws, &[RED, GREEN]))
+                }
+            }),
+        ),
+        // channels: lerp(0.2, 0.6, v) (v down the quad, read from UV set 0), 0.5^3, and 0.2 * 0.6 * the data texture's
+        // alpha (128/255 in D), weighting red, green and blue
+        case(
+            "blend lerp power product",
+            LayeredMaterial {
+                layers: vec![layer(red), layer(green), layer(blue)],
+                weights: LayerWeights {
+                    channels: Some(vec![
+                        Channel::Lerp {
+                            a: c1(0),
+                            b: c1(1),
+                            t: vertex(Semantic::TexCoord(0), 1),
+                        },
+                        Channel::Power {
+                            v: c1(2),
+                            exponent: 3,
+                        },
+                        Channel::Product {
+                            sources: vec![c1(0), c1(1), mask([0.0, 0.0, 0.0, 1.0])],
+                        },
+                    ]),
+                    ..LayerWeights::new(Semantic::Color(1), WeightMapping::Identity)
+                },
+            },
+            corners(|_, _| [0.2, 0.6, 0.5, 1.0]),
+            Box::new(|i, j| Want {
+                slope: 0.4 / PX as f32,
+                ..Want::base([0.2 + (0.6 - 0.2) * at(j), 0.125, 0.2 * 0.6 * quadrant(i, j)[3]])
+            }),
+        ),
+        // null slot 0 contributes black: red at 0.4, and alpha 0.4, which the host's mask at 0.3 keeps
+        case(
+            "blend null slot, host mask",
+            LayeredMaterial {
+                layers: vec![None, layer(red)],
+                weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
+            },
+            corners(|_, _| [0.7, 0.4, 0.0, 0.0]),
+            Box::new(|_, _| Want::base([0.4, 0.0, 0.0])),
+        ),
+        // the same at a mask of 0.5: alpha 0.4 is below it
+        case(
+            "blend null slot, host mask above",
+            LayeredMaterial {
+                layers: vec![None, layer(red)],
+                weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
+            },
+            corners(|_, _| [0.7, 0.4, 0.0, 0.0]),
+            Box::new(|_, _| Want::uncovered()),
+        ),
+        // emission blends with the rest: (1, 0, 0) at 2 and (0, 1, 0) at 1, weighted 0.5 and 0.25
+        case(
+            "blend emission",
+            LayeredMaterial {
+                layers: vec![layer(glowing_red), layer(glowing_green)],
+                weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
+            },
+            corners(|_, _| [0.5, 0.25, 0.0, 0.0]),
+            Box::new(|_, _| Want {
+                emission: Some([1.0, 0.25, 0.0]),
+                ..Want::base([0.0; 3])
+            }),
+        ),
+        // weights COLOR_3, which the quad does not have: the host is drawn
+        case(
+            "blend not drawn",
+            LayeredMaterial {
+                layers: vec![layer(red)],
+                weights: LayerWeights::new(Semantic::Color(3), WeightMapping::Identity),
+            },
+            corners(|_, _| [1.0; 4]),
+            Box::new(|_, _| Want::base([0.1, 0.2, 0.3])),
+        ),
+    ];
+    out[5].material.alpha_mode = AlphaMode::Mask { cutoff: 0.3 };
+    out[6].material.alpha_mode = AlphaMode::Mask { cutoff: 0.5 };
+    // the layer's UV set 1 (the quad mirrored) scaled by 2 in its transform, before the texture's own (none)
+    let mut transformed = case(
+        "blend layer set and transform",
+        LayeredMaterial {
+            layers: vec![Some(Layer {
+                material: textured_layer,
+                texcoord: Some(1),
+                transform: Some(UvTransform {
+                    scale: [2.0, 2.0],
+                    ..UvTransform::IDENTITY
+                }),
+            })],
+            weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
+        },
+        corners(|_, _| [1.0, 0.0, 0.0, 0.0]),
+        Box::new(|i, j| {
+            let c = usize::from((2.0 * (1.0 - at(i))).fract() >= 0.5);
+            let r = usize::from((2.0 * at(j)).fract() >= 0.5);
+            Want::base(rgb(texel(c, r)))
+        }),
+    );
+    transformed.streams.push((Semantic::TexCoord(1), mirrored()));
+    // weights read from COLOR_0: the layers do not take it as a colour
+    let mut weights0 = case(
+        "blend weights from COLOR_0",
+        LayeredMaterial {
+            layers: vec![layer(red), layer(green)],
+            weights: LayerWeights::new(Semantic::Color(0), WeightMapping::Identity),
+        },
+        corners(|_, _| [0.0; 4]),
+        Box::new(|_, _| Want::base([0.25, 0.75, 0.0])),
+    );
+    weights0.streams = vec![(Semantic::Color(0), corners(|_, _| [0.25, 0.75, 0.0, 1.0]))];
+    // COLOR_0 (0.5 grey) taken by the red layer, not by the green one, which ignores it: half of each
+    let mut taking = case(
+        "blend layer takes COLOR_0",
+        LayeredMaterial {
+            layers: vec![layer(red_taking), layer(green_ignoring)],
+            weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
+        },
+        corners(|_, _| [0.5, 0.5, 0.0, 0.0]),
+        Box::new(|_, _| Want::base([0.25, 0.5, 0.0])),
+    );
+    taking
+        .streams
+        .push((Semantic::Color(0), corners(|_, _| [0.5, 0.5, 0.5, 1.0])));
+    out.extend([transformed, weights0, taking]);
+    out
+}
+
+/// UV set 0 mirrored left to right, per corner.
+fn mirrored() -> Stream {
+    Stream::F32x2(vec![[1.0, 0.0], [0.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
 }
 
 /// The quad of case `k`: one metre, its top-left corner at its cell's, facing the camera (+Z) unless `back`.
@@ -493,15 +813,7 @@ fn quad(k: usize, case: &Case, material: Entity) -> Primitive {
             Stream::F32x2(vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]),
         ),
     ]);
-    if case.texcoord1 {
-        streams.insert(
-            Semantic::TexCoord(1),
-            Stream::F32x2(vec![[1.0, 0.0], [0.0, 0.0], [0.0, 1.0], [1.0, 1.0]]),
-        );
-    }
-    if let Some(c) = &case.color0 {
-        streams.insert(Semantic::Color(0), c.clone());
-    }
+    streams.extend(case.streams.iter().cloned());
     // counter-clockwise seen from +Z: top-left, bottom-left, bottom-right, then top-left, bottom-right, top-right
     let mut indices = vec![0, 3, 2, 0, 2, 1];
     if case.back {
@@ -529,6 +841,9 @@ fn rendered(
         if case.ignores_color {
             w.insert(m, VertexColor::Ignored);
         }
+        if let Some(l) = &case.layered {
+            w.insert(m, l.clone());
+        }
         let q = w.spawn();
         w.insert(q, Name(format!("quad {k}")));
         w.insert(q, Mesh::new(vec![quad(k, case, m)]));
@@ -555,7 +870,7 @@ fn rendered(
             far: 100.0,
         },
         size: [(COLS * PITCH) as u32, (rows * PITCH) as u32],
-        samples: 4,
+        samples: SAMPLES,
         seed: 0,
         filter_width: 0.01,
         device: Device::Cpu,
@@ -581,6 +896,13 @@ fn each_construct_renders_as_worked_by_hand() {
     let (r, report) = rendered(&blender, &scratch, &cases, &mut w);
     // the one filtered colour slot (the bilinear case's) is counted as Cycles filters it, before decoding
     assert_eq!(report.counts.srgb_filtered_encoded, 1);
+    // every blend drawn but the one that reads a stream the quad lacks, which is counted
+    assert_eq!(report.blends, 11);
+    assert_eq!(
+        report.blends_drawn_from_host,
+        BTreeMap::from([("reads COLOR_3, which scene.glb does not carry".to_owned(), 1)])
+    );
+    assert_eq!(report.blend_layers_without_color0, 0);
     let width = r.size[0] as usize;
     let base = r.pass(aov::BASE_COLOR).unwrap();
     let emission = r.pass(aov::EMISSION).unwrap();
@@ -592,7 +914,7 @@ fn each_construct_renders_as_worked_by_hand() {
         for j in 0..PX {
             for i in 0..PX {
                 let want = (case.expect)(i, j);
-                let tolerance = want.tolerance;
+                let tolerance = want.tolerance + want.slope * OFF_CENTRE;
                 let p = (row * PITCH + 1 + j) * width + col * PITCH + 1 + i;
                 let got = |pass: &[f32], channels: usize| -> Vec<f32> {
                     pass[p * channels..p * channels + channels.min(3)].to_vec()

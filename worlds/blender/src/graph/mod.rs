@@ -9,7 +9,9 @@
 //!
 //! - [`texture`]: a texture slot sampled as core states it (UV set, transforms, wrap, filters).
 //! - [`pbr`]: a `pbr.material`'s surface, alpha and sidedness, and the material's outputs.
+//! - [`layered`]: a `core.layered` blend of `pbr.material` layers, drawn with its host's alpha and sidedness.
 
+pub mod layered;
 pub mod pbr;
 pub mod texture;
 
@@ -202,6 +204,14 @@ impl Graph {
         }
     }
 
+    pub(crate) fn add(&mut self, a: Float, b: Float) -> Float {
+        match (a, b) {
+            (Float::Const(x), Float::Const(y)) => Float::Const(x + y),
+            (Float::Const(0.0), v) | (v, Float::Const(0.0)) => v,
+            _ => self.math_node("ADD", &[a, b]),
+        }
+    }
+
     pub(crate) fn sub(&mut self, a: Float, b: Float) -> Float {
         match (a, b) {
             (Float::Const(x), Float::Const(y)) => Float::Const(x - y),
@@ -224,6 +234,23 @@ impl Graph {
         self.sub(Float::Const(1.0), below)
     }
 
+    /// `v` held within 0 to 1 (a Clamp node).
+    pub(crate) fn clamp01(&mut self, v: Float) -> Float {
+        match v {
+            Float::Const(x) => Float::Const(x.clamp(0.0, 1.0)),
+            Float::Out(_) => {
+                let n = self.node("ShaderNodeClamp", &[("clamp_type", json!("MINMAX"))]);
+                self.float_in(n, "Value", v);
+                self.float_in(n, "Min", Float::Const(0.0));
+                self.float_in(n, "Max", Float::Const(1.0));
+                Float::Out(Socket {
+                    node: n,
+                    output: "Result",
+                })
+            }
+        }
+    }
+
     /// A Math node of a unary or binary `operation` that is not folded.
     pub(crate) fn math(&mut self, operation: &str, inputs: &[Float]) -> Float {
         self.math_node(operation, inputs)
@@ -238,6 +265,28 @@ impl Graph {
         Vec3::Out(Socket {
             node: n,
             output: "Vector",
+        })
+    }
+
+    /// `a + b`.
+    pub(crate) fn vadd(&mut self, a: Vec3, b: Vec3) -> Vec3 {
+        match (a, b) {
+            (Vec3::Const(x), Vec3::Const(y)) => Vec3::Const([x[0] + y[0], x[1] + y[1], x[2] + y[2]]),
+            (Vec3::Const([0.0, 0.0, 0.0]), v) | (v, Vec3::Const([0.0, 0.0, 0.0])) => v,
+            _ => self.vector_math("ADD", &[a, b]),
+        }
+    }
+
+    /// The length of `v` (a Vector Math node's `Value`).
+    pub(crate) fn vlength(&mut self, v: Vec3) -> Float {
+        if let Vec3::Const(x) = v {
+            return Float::Const(x.iter().map(|c| c * c).sum::<f32>().sqrt());
+        }
+        let n = self.node("ShaderNodeVectorMath", &[("operation", json!("LENGTH"))]);
+        self.vector_in(n, "Vector", v);
+        Float::Out(Socket {
+            node: n,
+            output: "Value",
         })
     }
 
