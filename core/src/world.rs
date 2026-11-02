@@ -383,6 +383,11 @@ impl<T> Column<T> {
     pub fn entities(&self) -> impl DoubleEndedIterator<Item = Entity> + ExactSizeIterator + '_ {
         self.values.keys().copied()
     }
+
+    /// `e`'s value taken out as the shared handle: the column's own, never a copy, whoever else shares it.
+    fn remove_shared(&mut self, e: Entity) -> Option<Arc<T>> {
+        self.values.remove(&e)
+    }
 }
 
 impl<T: Clone> Column<T> {
@@ -402,7 +407,7 @@ impl<T: Clone> Column<T> {
 
     /// The value taken out: the column's own where nothing else shares it, else a copy.
     fn remove(&mut self, e: Entity) -> Option<T> {
-        self.values.remove(&e).map(Arc::unwrap_or_clone)
+        self.remove_shared(e).map(Arc::unwrap_or_clone)
     }
 }
 
@@ -1633,6 +1638,13 @@ impl World {
         self.column::<T>()?.get_shared(e)
     }
 
+    /// `e`'s `T` taken out as the shared handle: the world's own value, never a copy, where [`World::remove`] copies a
+    /// value something else still shares. For a holder of [`World::get_shared`] handles that takes over their keeping
+    /// (a renderer that releases a texture's levels once its image is on the GPU): the bytes go when the last handle does.
+    pub fn remove_shared<T: Component>(&mut self, e: Entity) -> Option<Arc<T>> {
+        self.column_mut_existing::<T>()?.remove_shared(e)
+    }
+
     pub fn get_mut<T: Component>(&mut self, e: Entity) -> Option<&mut T> {
         self.column_mut_existing::<T>()?.get_mut(e)
     }
@@ -2236,6 +2248,28 @@ mod tests {
         let f = w.spawn();
         w.insert(f, B("only"));
         assert_eq!(w.remove::<B>(f), Some(B("only")));
+    }
+
+    #[test]
+    fn a_value_taken_out_shared_is_the_world_s_own_never_a_copy() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, A(7));
+        let held = w.get_shared::<A>(e).unwrap();
+        let taken = w.remove_shared::<A>(e).unwrap();
+        assert!(
+            Arc::ptr_eq(&held, &taken),
+            "taken out while shared, the handle is the world's value, not a copy"
+        );
+        assert_eq!(w.get::<A>(e), None);
+        assert_eq!(w.remove_shared::<A>(e), None);
+        drop(held);
+        assert_eq!(
+            Arc::into_inner(taken),
+            Some(A(7)),
+            "the last handle owns the value alone"
+        );
+        assert_eq!(w.remove_shared::<B>(e), None, "a type the world never held");
     }
 
     #[test]
