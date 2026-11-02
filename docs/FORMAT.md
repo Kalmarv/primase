@@ -246,6 +246,12 @@ depth in metres (below the surface along the view axis) over which the surface's
 nonnegative; 0 is a hard edge. What a source's water does beyond this (caustics, interaction ripples, foam, colours by
 hour) is counted by its lowering.
 
+## The frame a source's programs compute in
+
+| Name | Kind | Fields | Invariants |
+| --- | --- | --- | --- |
+| `core.program_frame` | resource | `{"source": {"axes": [axis; 3], "metres_per_unit": f64}}` or `{"not_converted": why}` | Stated by the reader that keeps a source's game programs (`core.shader`), with no default. `source`: the programs compute in that frame (`world = frame(program)`, as `SourceFrame` describes a frame); a consumer that runs them on the world converts each value they read by its spatial kind (`core::shader::SpatialKind`: positions, directions, tangents, planes, lengths, and matrices by the side that is in the world's space) and reads a world-space normal they write in that frame. View and clip space are not converted: a world-to-view matrix fed as `view * C` gives the same view position for the converted point, so rasterisation and winding are unchanged. `not_converted`: the frame is not established for this source, or the conversion is not checked against a render; a consumer feeds world values and shows `why` (non-empty: the world, what is known of its frame and its evidence) with every view. |
+
 ## Lights as a program reads them
 
 | Name | Kind | Fields | Invariants |

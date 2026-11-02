@@ -1245,10 +1245,16 @@ struct ClosedForms {
     paths: &'static [&'static str],
 }
 
-const CLOSED_FORMS: &[ClosedForms] = &[ClosedForms {
-    what: "core.layered channel",
-    paths: &["primase_core::layered::Channel"],
-}];
+const CLOSED_FORMS: &[ClosedForms] = &[
+    ClosedForms {
+        what: "core.layered channel",
+        paths: &["primase_core::layered::Channel"],
+    },
+    ClosedForms {
+        what: "core.shader spatial kind",
+        paths: &["primase_core::shader::SpatialKind"],
+    },
+];
 
 /// The local names of the enum at `paths` in a file of crate `krate`, module `module`: what its `use` items bring in
 /// (`as` aliases and globs of its module included), and its own name in the module that defines it.

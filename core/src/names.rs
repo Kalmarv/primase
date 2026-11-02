@@ -43,7 +43,7 @@ use crate::rig::{
     Attachment, JointMap, JointPlacement, MorphWeights, RigInstance, RigPose, SkinInstance, Sockets,
 };
 use crate::shader::{
-    LiftedShader, MaterialPrograms, ProgramFacts, Shader, ShaderBinding, ShaderDerivation,
+    LiftedShader, MaterialPrograms, ProgramFacts, ProgramFrame, Shader, ShaderBinding, ShaderDerivation,
     ShaderSpecialisations,
 };
 use crate::skeleton::{AssemblyReference, Skeleton};
@@ -91,7 +91,7 @@ declared! {
         DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters, SkyAnchor,
         ParticleSystem, IrradianceVolume, ReflectionProbeRegion, StepBindings, StepDraws, LightFalloff, LightTranslucency, SpotFrustum, WaterBody;
     resources: PartScope, PartitionPlan, Environment, Atmosphere, PostProcessingStatus, StateAssignment, Surfaces, Threads, Memo, RenderGraph,
-        LightUnit, DirectionalLightUnit, TimeOfDay, TextureSwitchView, ReadScopes, OpeningSuggestions,
+        LightUnit, DirectionalLightUnit, TimeOfDay, TextureSwitchView, ReadScopes, OpeningSuggestions, ProgramFrame,
 }
 
 #[cfg(test)]

@@ -188,6 +188,61 @@ impl SourceFrame {
         out.cols[3] = self.point_to_source(m.cols[3]);
         out
     }
+
+    /// A length in metres, in this frame's units (exact for scale 1).
+    pub fn length_to_source(&self, l: f32) -> f32 {
+        if self.metres_per_unit == 1.0 {
+            return l;
+        }
+        (f64::from(l) / self.metres_per_unit) as f32
+    }
+
+    /// One over a length in metres, in this frame's units (exact for scale 1).
+    pub fn inverse_length_to_source(&self, l: f32) -> f32 {
+        scale(l, self.metres_per_unit)
+    }
+
+    /// A tangent (xyz, w the bitangent sign) in this frame: xyz as a direction, w negated where the frame mirrors.
+    pub fn tangent_to_source(&self, t: [f32; 4]) -> [f32; 4] {
+        let d = self.direction_to_source([t[0], t[1], t[2]]);
+        [d[0], d[1], d[2], if self.flips_winding() { -t[3] } else { t[3] }]
+    }
+
+    /// A plane `(n, d)` (`dot(n, p) + d = 0` for its world points `p`) in this frame: the normal as a direction, the
+    /// offset as a length.
+    pub fn plane_to_source(&self, plane: [f32; 4]) -> [f32; 4] {
+        let n = self.direction_to_source([plane[0], plane[1], plane[2]]);
+        [n[0], n[1], n[2], self.length_to_source(plane[3])]
+    }
+
+    /// A 4 x 4 matrix (by columns) that takes world positions to another space (the view, the clip), made to take this
+    /// frame's positions to the same space: `M C`, `C` this frame's map to the world, so `(M C) (C^-1 p) = M p` and
+    /// what it gives is unchanged. Column `j` of `M C` is the column of `M` for the world axis this frame's axis `j`
+    /// is, signed and times the unit scale: for scale 1 the entries only move and change sign (bit-exact), and the
+    /// product with a converted point sums the same terms in this frame's axis order (the same order, so the same
+    /// bits, for a frame that only changes signs).
+    pub fn from_world_matrix_to_source(&self, m: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
+        let mut out = m;
+        for (i, a) in self.axes.iter().enumerate() {
+            out[a.index()] = m[i].map(|x| scale(signed(x, *a), self.metres_per_unit));
+        }
+        out
+    }
+
+    /// A 4 x 4 matrix (by columns) that gives world positions (from the view, the clip), made to give this frame's:
+    /// `C^-1 M`, each column's xyz converted as a point and its w kept.
+    pub fn to_world_matrix_to_source(&self, m: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
+        m.map(|c| {
+            let p = self.point_to_source([c[0], c[1], c[2]]);
+            [p[0], p[1], p[2], c[3]]
+        })
+    }
+
+    /// A 4 x 4 matrix (by columns) from one world-frame space to another (an object's to the world, a joint's) in this
+    /// frame's terms: `C^-1 M C`, as [`SourceFrame::transform_to_source`] converts an affine transform.
+    pub fn world_matrix_to_source(&self, m: [[f32; 4]; 4]) -> [[f32; 4]; 4] {
+        self.to_world_matrix_to_source(self.from_world_matrix_to_source(m))
+    }
 }
 
 /// A frame conversion moves a mesh's streams as it moves positions and directions: normals and tangents by the signed
@@ -208,6 +263,14 @@ impl crate::VertexMap for SourceFrame {
 /// `x` negated (sign bit flipped) when the axis is negative.
 fn signed(x: f32, a: Axis) -> f32 {
     if a.is_negative() { -x } else { x }
+}
+
+/// `x` times the unit scale, in f64, rounded once (`x` itself for scale 1).
+fn scale(x: f32, metres_per_unit: f64) -> f32 {
+    if metres_per_unit == 1.0 {
+        return x;
+    }
+    (f64::from(x) * metres_per_unit) as f32
 }
 
 /// The ground frame `(east, north)` of a world point: `(x, -z)`, bit-exact.
@@ -292,6 +355,106 @@ mod tests {
             SourceFrame::try_new([PosX, PosY, PosZ], f64::NAN),
             Err(FrameError::BadScale(_))
         ));
+    }
+
+    const IDENTITY: [[f32; 4]; 4] = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+
+    fn mat_mul(a: &[[f32; 4]; 4], b: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
+        std::array::from_fn(|j| std::array::from_fn(|i| (0..4).map(|k| a[k][i] * b[j][k]).sum()))
+    }
+
+    fn mat_apply(m: &[[f32; 4]; 4], p: [f32; 3]) -> [f32; 4] {
+        let p = [p[0], p[1], p[2], 1.0];
+        std::array::from_fn(|i| (0..4).map(|k| m[k][i] * p[k]).sum())
+    }
+
+    fn xyz(v: [f32; 4]) -> [f32; 3] {
+        [v[0], v[1], v[2]]
+    }
+
+    /// The matrix forms against the frame's own point map, over every signed permutation at scale 1 and a scaled frame:
+    /// a world-to-view matrix gives what it gave for the converted point, an object-to-world one takes a converted
+    /// point to the converted point, a view-to-world one gives the converted point; the entries only move and change
+    /// sign at scale 1.
+    #[test]
+    fn matrices_take_and_give_the_frames_points() {
+        let m: [[f32; 4]; 4] = [
+            [0.6, -0.8, 0.1, 0.0],
+            [0.8, 0.6, -0.3, 0.0],
+            [0.25, 0.5, 0.9, 0.0],
+            [3.0, -2.0, 7.5, 1.0],
+        ];
+        let p = [1.5, -2.25, 4.0];
+        let world = mat_apply(&m, p);
+        let all = [PosX, NegX, PosY, NegY, PosZ, NegZ];
+        let mut n = 0;
+        for a in all {
+            for b in all {
+                for c in all {
+                    let Ok(f) = SourceFrame::try_new([a, b, c], 1.0) else {
+                        continue;
+                    };
+                    let q = f.point_to_source(p);
+                    let from = mat_apply(&f.from_world_matrix_to_source(m), q);
+                    assert!(
+                        from.iter().zip(world).all(|(x, y)| (x - y).abs() <= 1e-5),
+                        "{f:?}"
+                    );
+                    let moved = f.point_to_source(xyz(world));
+                    let within = xyz(mat_apply(&f.world_matrix_to_source(m), q));
+                    assert!(
+                        within.iter().zip(moved).all(|(x, y)| (x - y).abs() <= 1e-5),
+                        "{f:?}"
+                    );
+                    let to = xyz(mat_apply(&f.to_world_matrix_to_source(m), p));
+                    assert_eq!(bits(to), bits(moved), "{f:?}");
+                    let entries = |m: [[f32; 4]; 4]| {
+                        let mut e: Vec<u32> = m.iter().flatten().map(|x| x.abs().to_bits()).collect();
+                        e.sort_unstable();
+                        e
+                    };
+                    assert_eq!(entries(f.world_matrix_to_source(m)), entries(m), "{f:?}");
+                    n += 1;
+                }
+            }
+        }
+        assert_eq!(n, 48);
+        // a frame that only changes signs keeps the axis order: the products are bit-exact
+        let from = mat_apply(
+            &FROMSOFT.from_world_matrix_to_source(m),
+            FROMSOFT.point_to_source(p),
+        );
+        assert_eq!(from.map(f32::to_bits), world.map(f32::to_bits));
+        // (M C)(C^-1) = M: a world-to-clip matrix fed this way puts every vertex where it was, so rasterisation and
+        // the winding a triangle shows on screen are unchanged
+        let back = mat_mul(
+            &FROMSOFT.from_world_matrix_to_source(m),
+            &FROMSOFT.to_world_matrix_to_source(IDENTITY),
+        );
+        assert_eq!(back, m);
+        // a scaled frame: positions, offsets and lengths in its units
+        let cm = SourceFrame::new([PosX, PosZ, NegY], 0.01);
+        let from = mat_apply(&cm.from_world_matrix_to_source(m), cm.point_to_source(p));
+        assert!(
+            from.iter().zip(world).all(|(x, y)| (x - y).abs() <= 1e-4),
+            "{from:?}"
+        );
+        assert_eq!(cm.length_to_source(2.0), 200.0);
+        assert_eq!(cm.inverse_length_to_source(0.5), 0.005);
+        let plane = cm.plane_to_source([0.0, 1.0, 0.0, -3.0]);
+        let on = cm.point_to_source([5.0, 3.0, -1.0]);
+        let d = plane[0] * on[0] + plane[1] * on[1] + plane[2] * on[2] + plane[3];
+        assert!(d.abs() < 1e-3, "{plane:?}");
+        assert_eq!(
+            FROMSOFT.tangent_to_source([1.0, 0.0, 0.5, 1.0]),
+            [1.0, 0.0, -0.5, -1.0]
+        );
+        assert_eq!(SourceFrame::ENU.tangent_to_source([1.0, 0.0, 0.5, 1.0])[3], 1.0);
     }
 
     #[test]

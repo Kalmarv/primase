@@ -10,6 +10,7 @@ mod facts;
 mod input_fallback;
 mod lights;
 mod program;
+mod program_frame;
 pub mod roles;
 mod select_variant;
 mod shadow_atlas;
@@ -30,6 +31,7 @@ pub use lights::{
     ListConstant, ListUnknown, LocalShadow, LocalShadows, PackedLightLists, PackedLights, pack_light_lists,
 };
 pub use program::{LiftedShader, Shader};
+pub use program_frame::{ProgramFrame, SpatialKind};
 pub use roles::{
     Attribute, BufferBinding, BufferSource, BufferTable, ConstantBinding, ConstantRole, FrameParameter,
     FrameTexture, InputBinding, InputRole, InstanceLanes, InstanceValue, ItemParameter, KeyPart, LaneStream,
