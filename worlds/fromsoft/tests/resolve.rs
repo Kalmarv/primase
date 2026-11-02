@@ -1233,6 +1233,63 @@ fn a_further_tangent_binding_requires_the_materials_primitive_to_store_it() {
     assert!(matches!(role(&world), InputRole::Unknown { .. }));
 }
 
+/// A four-float TEXCOORD<n> is the stream the primitives drawing the material store there: the Byte4C member `Color(n)`
+/// by default, the Half4 point `Point(n)` (a billboard's pivot) where every primitive stores one, and neither, named,
+/// where they differ.
+#[test]
+fn a_four_float_texcoord_binds_the_point_the_meshes_store() {
+    let shader = dxbc_shader(VERTEX_PROGRAM, iridia_dxbc::reflection(VERTEX_PROGRAM).unwrap());
+    let mut world = World::default();
+    let program = world.spawn();
+    let material = world.spawn();
+    let mesh = world.spawn();
+    let primitive = |extra: Option<(Semantic, Stream)>| Primitive {
+        topology: Topology::Triangles,
+        streams: BTreeMap::from_iter(
+            [(Semantic::Position, Stream::F32x3(vec![[0.0; 3]; 3]))]
+                .into_iter()
+                .chain(extra),
+        ),
+        indices: Some(vec![0, 1, 2]),
+        material: Some(material),
+    };
+    let point = || Some((Semantic::Point(3), Stream::F32x3(vec![[1.0, 2.0, 3.0]; 3])));
+    let byte4 = || Some((Semantic::Color(3), Stream::U8x4(vec![[0; 4]; 3])));
+    let mut bind = |primitives: Vec<Primitive>| {
+        world.insert(mesh, Mesh::new(primitives));
+        let vertex = primase_fromsoft::layer_bake::resolve::resolve_vertex_for_geometry(
+            &shader, program, &world, material,
+        )
+        .unwrap();
+        let role = vertex
+            .stage
+            .inputs
+            .iter()
+            .find(|i| i.label.name.eq_ignore_ascii_case("TEXCOORD") && i.label.index == 3)
+            .unwrap()
+            .role
+            .clone();
+        (role, vertex.stores_differ)
+    };
+    assert_eq!(
+        bind(vec![primitive(point()), primitive(point())]),
+        (InputRole::Stream(Attribute::Point(3)), vec![])
+    );
+    assert_eq!(
+        bind(vec![primitive(byte4())]),
+        (InputRole::Stream(Attribute::Color(3)), vec![])
+    );
+    for other in [byte4(), None] {
+        let label = format!("{other:?}");
+        let (role, differ) = bind(vec![primitive(point()), primitive(other)]);
+        assert!(
+            matches!(role, InputRole::Unknown { why } if why.contains("1 of the 2 primitives")),
+            "{label}"
+        );
+        assert_eq!(differ, ["TEXCOORD3"]);
+    }
+}
+
 /// The joints' palette and the cloth-cancel palette of an Elden Ring (DXIL) skinned program are bound at 256 matrices of
 /// three rows. See the following palette test for the captured buffer contract.
 #[test]

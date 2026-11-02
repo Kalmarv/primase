@@ -1553,7 +1553,10 @@ fn tangent_set(interface: &Interface, index: u32) -> Option<u8> {
 
 /// Bind then validate further tangent sets against every primitive drawing this material. A shared material
 /// cannot silently use a vector absent from one of its layouts, including set 0. A material that SpeedTree meshes draw
-/// binds its program's inputs by what their layouts declare ([`speedtree_inputs`]).
+/// binds its program's inputs by what their layouts declare ([`speedtree_inputs`]). A four-float `TEXCOORD<n>` that
+/// [`resolve_vertex`] takes as the Byte4C member `Color(n)` is the Half4 member `Point(n)` (a pivot in the model's
+/// space) where every primitive drawing the material stores one there; where some do and some do not it is left
+/// `Unknown` and named in [`VertexBinding::stores_differ`], never guessed.
 pub fn resolve_vertex_for_geometry(
     shader: &Shader,
     entity: Entity,
@@ -1580,6 +1583,31 @@ pub fn resolve_vertex_for_geometry(
         speedtree_inputs(&mut binding.stage.inputs, &speedtree);
     }
     let primitives: Vec<_> = drawn.iter().map(|&(_, _, p)| p).collect();
+    for input in &mut binding.stage.inputs {
+        let InputRole::Stream(Attribute::Color(n)) = input.role else {
+            continue;
+        };
+        if !input.label.name.eq_ignore_ascii_case("TEXCOORD") {
+            continue;
+        }
+        let stores = |s| primitives.iter().filter(|p| p.streams.contains_key(&s)).count();
+        let points = stores(primase_core::Semantic::Point(n));
+        if points == 0 {
+            continue;
+        }
+        if points == primitives.len() {
+            input.role = InputRole::Stream(Attribute::Point(n));
+            continue;
+        }
+        input.role = InputRole::Unknown {
+            why: format!(
+                "TEXCOORD{n}: {points} of the {} primitives drawing this material store a point there (a Half4 member), {} a                  Byte4C member, the rest neither",
+                primitives.len(),
+                stores(primase_core::Semantic::Color(n))
+            ),
+        };
+        binding.stores_differ.push(format!("TEXCOORD{n}"));
+    }
     for input in &mut binding.stage.inputs {
         let InputRole::Stream(Attribute::Tangent(set)) = &input.role else {
             continue;
@@ -1945,6 +1973,7 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
         undecided,
         palette_rows,
         palette_bound,
+        stores_differ: Vec::new(),
     })
 }
 
@@ -2007,6 +2036,9 @@ pub struct VertexBinding {
     pub palette_rows: bool,
     /// Whether the stage states a bound for its palettes ([`PALETTE_BOUND_POLICY`]), which the caller counts.
     pub palette_bound: bool,
+    /// The inputs left `Unknown` because the primitives drawing the material store different streams at them, by label
+    /// ([`resolve_vertex_for_geometry`]), which the caller counts.
+    pub stores_differ: Vec<String>,
 }
 
 /// A reason with its numbers as `N` (offsets and counts differ program to program; the reason does not).

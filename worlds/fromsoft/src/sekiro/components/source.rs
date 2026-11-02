@@ -905,6 +905,10 @@ impl LayerInputs {
 pub struct LayerLayout {
     /// The Byte4C UV members: `(member index, UV storage slot)`, in member order.
     pub byte4: Vec<(u8, usize)>,
+    /// The Half4 UV members, points in the model's space (`Vertex::uvs`: xyz, the pivot a vegetation or billboard
+    /// program turns the vertex about): `(member index, UV storage slot)`, in member order. A SpeedTree model's are in
+    /// `Vertex::speedtree` instead and are not listed.
+    pub points: Vec<(u8, usize)>,
     /// The UV storage slot of the second UV set: slot 1, when neither slot 0 nor slot 1 is a Byte4C member.
     pub second_uv: Option<usize>,
     /// The position among the mesh's colour elements of the one the FLVER indexes 0 (`COLOR0`).
@@ -932,10 +936,14 @@ impl LayerLayout {
             {
                 match member.semantic {
                     5 => {
+                        let n = || {
+                            u8::try_from(member.index)
+                                .map_err(|_| invalid("FLVER layer inputs", index, "member index"))
+                        };
                         if member.kind == 0x13 {
-                            let n = u8::try_from(member.index)
-                                .map_err(|_| invalid("FLVER layer inputs", index, "member index"))?;
-                            layout.byte4.push((n, layout.uv_slots));
+                            layout.byte4.push((n()?, layout.uv_slots));
+                        } else if member.kind == 0x2e && !model.speedtree {
+                            layout.points.push((n()?, layout.uv_slots));
                         }
                         layout.uv_slots += if matches!(member.kind, 3 | 0x16) { 2 } else { 1 };
                     }

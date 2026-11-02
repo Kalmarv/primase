@@ -580,7 +580,9 @@ impl LowerFromSoftGeometry {
             } else {
                 usize::from(layout.second_colour.is_some())
             };
-            let kept_uvs = layout.byte4.len() + usize::from(layout.second_uv.is_some());
+            // the Half4 members are kept whatever the material: points, moved with the positions (`Part::points`)
+            let points = crate::passes::rigid::point_slots(model, index)?.len();
+            let kept_uvs = layout.byte4.len() + usize::from(layout.second_uv.is_some()) + points;
             if mesh.vertices.iter().any(|v| v.colors.len() > kept_colours) {
                 log.approximate(
                     "meshes with vertex colours not lowered (their shader meaning is unknown)",
@@ -627,6 +629,11 @@ impl LowerFromSoftGeometry {
                     part.further_tangents
                         .into_iter()
                         .map(|(set, values)| (Semantic::Tangent(set), Stream::F32x4(values))),
+                );
+                streams.extend(
+                    part.points
+                        .into_iter()
+                        .map(|(index, values)| (Semantic::Point(index), Stream::F32x3(values))),
                 );
                 let members = layer.iter().map(|(semantic, _)| *semantic).collect();
                 streams.extend(layer);
@@ -763,7 +770,8 @@ fn bind_static_meshes(model: &Model, log: &mut PassLog) -> Result<(Model, Vec<Op
                 ));
             }
         }
-        crate::passes::rigid::pose_static_mesh(mesh, follows, &worlds, log)?;
+        let points = crate::passes::rigid::point_slots(model, index)?;
+        crate::passes::rigid::pose_static_mesh(mesh, follows, &points, &worlds, log)?;
         log.count(
             match follows {
                 StaticBones::PerVertex => {
@@ -890,7 +898,7 @@ fn stored_tangents(mesh: &[Vertex], member: usize, vertices: &[u32]) -> Result<V
 }
 
 /// The UV sets beyond the first, as `TexCoord(n)` in the order the vertex layout stores them (a four component UV member
-/// is two sets), and the vertex colours, each as the input its semantic index in `layout` names (`COLOR0` as `Color(0)`,
+/// is two sets; a Half4 member is a point, not a set, and is lowered as one: `Part::points`), and the vertex colours, each as the input its semantic index in `layout` names (`COLOR0` as `Color(0)`,
 /// `COLOR1` as [`crate::sekiro::source::SECOND_COLOUR`]), of the vertices `vertices` of a mesh: what a material binary's
 /// programs read besides the first UV set. A set or colour the mesh's vertices do not all have is not kept.
 fn source_streams(
@@ -902,6 +910,9 @@ fn source_streams(
     let sets = vertices.iter().map(|v| at(v).uvs.len()).min().unwrap_or(0);
     let mut out = Vec::new();
     for set in 1..sets.min(usize::from(u8::MAX)) {
+        if layout.points.iter().any(|&(_, slot)| slot == set) {
+            continue;
+        }
         out.push((
             Semantic::TexCoord(set as u8),
             Stream::F32x2(

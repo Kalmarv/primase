@@ -86,6 +86,29 @@ fn rigid_points_normals_tangents_and_declared_pass() {
         [3., 5., 7.]
     );
 }
+/// A Half4 UV member is a point in the model's space (a billboard's pivot): the pose moves it as it moves the position,
+/// a UV member before it (one storage slot) left as stored.
+#[test]
+fn a_half4_point_is_posed_with_the_position() {
+    let mut m = model();
+    let uv = |kind, index| Member {
+        unknown: 0,
+        stored: true,
+        offset: 0,
+        kind,
+        semantic: 5,
+        index,
+    };
+    m.layouts[0].extend([uv(0x15, 0), uv(0x2e, 1)]);
+    m.meshes[0].vertices[0].uvs = [[0.25, 0.5, 0., 0.], [1., 1., 1., 0.]].into();
+    let mut log = PassLog::default();
+    let posed = lower_model(&m, &mut log).unwrap();
+    let v = &posed.meshes[0].vertices[0];
+    assert_eq!(v.position, [3., 5., 7.]);
+    // the bone's scale (2, 3, 4) and translation (1, 2, 3), as the position: (1, 1, 1) to (3, 5, 7)
+    assert_eq!(v.uvs[1], [3., 5., 7., 0.]);
+    assert_eq!(v.uvs[0], [0.25, 0.5, 0., 0.]);
+}
 #[test]
 fn hierarchy_rotation_reflection_and_invalid_hierarchy() {
     let mut m = model();

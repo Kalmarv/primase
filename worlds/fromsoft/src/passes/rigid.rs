@@ -119,19 +119,36 @@ fn lower(source: &Model, on: Option<Entity>, log: &mut PassLog) -> Result<Model,
                 continue;
             }
         }
-        pose_static_mesh(m, bones, &worlds, log)?;
+        let points = point_slots(source, index)?;
+        pose_static_mesh(m, bones, &points, &worlds, log)?;
     }
     log.count("models lowered", 1);
     Ok(output)
 }
 
+/// The UV storage slots of mesh `index`'s Half4 members, points in the model's space
+/// ([`crate::sekiro::source::LayerLayout::points`]), which every pose moves as it moves the positions.
+pub(crate) fn point_slots(
+    model: &fromsoft_formats::flver::Model,
+    index: usize,
+) -> Result<Vec<usize>, String> {
+    Ok(crate::sekiro::source::LayerLayout::of(model, index)
+        .map_err(|e| e.to_string())?
+        .points
+        .into_iter()
+        .map(|(_, slot)| slot)
+        .collect())
+}
+
 /// Pose the static mesh `m` into model space: each vertex by the matrix (`worlds`, [`bone_matrices`]) of the bone it
-/// follows (`bones`, [`static_bones`]), its normal by the inverse transpose and its tangents by the 3x3 part; a vertex
+/// follows (`bones`, [`static_bones`]), its points (the `Vertex::uvs` at the storage slots `points`, [`point_slots`])
+/// by the same matrix, its normal by the inverse transpose and its tangents by the 3x3 part; a vertex
 /// whose NORMAL.w names no bone stays as stored (counted), and a triangle whose first vertex a mirroring bone moved has
 /// its winding reversed. The rule [`lower_model`] applies and the stored-pose lowering binds a static mesh by.
 pub(crate) fn pose_static_mesh(
     m: &mut Mesh,
     bones: StaticBones,
+    points: &[usize],
     worlds: &[Matrix],
     log: &mut PassLog,
 ) -> Result<(), String> {
@@ -154,12 +171,21 @@ pub(crate) fn pose_static_mesh(
             return Err("singular rigid bone transform".into());
         }
         v.position = affine_point(matrix, v.position.map(f64::from)).map(|x| x as f32);
+        for &slot in points {
+            let p = v
+                .uvs
+                .get_mut(slot)
+                .ok_or("a vertex without the Half4 member its layout declares")?;
+            let [x, y, z] = affine_point(matrix, [p[0], p[1], p[2]].map(f64::from)).map(|x| x as f32);
+            *p = [x, y, z, p[3]];
+        }
         v.normal = l.normal(v.normal).expect("not singular");
         for t in &mut v.tangents {
             *t = l.tangent(*t).expect("not singular");
         }
         if v.position
             .iter()
+            .chain(points.iter().flat_map(|&s| &v.uvs[s][..3]))
             .chain(&v.normal)
             .chain(v.tangents.iter().flatten())
             .any(|x| !x.is_finite())

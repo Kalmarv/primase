@@ -39,6 +39,11 @@ const UNBOUND_STEP: &str = "the material's pixel program is not bound (its core.
 /// (a field name twice, as `SpeedTree_*_Gbuf.vpo`'s `m_fBranchTime`).
 const VERTEX_PARAMETERS_UNREAD: &str = "vertex programs whose material parameters are not bound: the executor refuses the program or its constant layout";
 
+/// Why a vertex program's input is not bound: the primitives drawing its material store different streams there (a Half4
+/// point on some, a Byte4C member or nothing on others), followed by the input's label.
+const VERTEX_STORES_DIFFER: &str =
+    "vertex program inputs not bound: the meshes drawing the material store different streams there";
+
 struct VertexProgram {
     entity: Entity,
     shader: Shader,
@@ -607,6 +612,9 @@ fn run(
                             "vertex program's view-projection undecided by the probe ({why}): taken as camera-relative"
                         ))
                         .or_default() += 1;
+                }
+                for label in &vertex.stores_differ {
+                    log.omit(&format!("{VERTEX_STORES_DIFFER}: {label}"), 1);
                 }
                 if vertex.palette_rows {
                     *policies.entry(PALETTE_ROWS_RULE.to_owned()).or_default() += 1;
