@@ -38,7 +38,7 @@ pub mod stages;
 pub use crate::ledger::{Conservation, Gap, Measure};
 pub use crate::pass_options::{Choice, Given, OptionSpec, PassSpec, TextForm};
 use crate::world::{Component, Entity, Resource, World};
-pub use stages::{Binding, Bound, Stages};
+pub use stages::Stages;
 
 /// A pass's text options (`name{key=value,...}`), sorted by key.
 pub type Options = BTreeMap<String, String>;
