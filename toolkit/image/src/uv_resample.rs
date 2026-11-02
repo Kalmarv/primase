@@ -334,7 +334,7 @@ mod tests {
             let second = claimed_texels(&[a, c, d], size, size);
             let mut all: Vec<_> = first.iter().chain(&second).copied().collect();
             all.sort_unstable();
-            let want: Vec<_> = (0..size).flat_map(|y| (0..size).map(move |x| (x, y))).collect();
+            let want: Vec<_> = (0..size).flat_map(|x| (0..size).map(move |y| (x, y))).collect();
             assert_eq!(
                 all, want,
                 "{size} x {size}: the diagonal's texels belong to one triangle"
