@@ -34,6 +34,7 @@ pub mod pbr;
 pub mod post;
 pub mod records;
 pub(super) mod reflectance;
+pub mod release;
 pub mod render_graph;
 pub mod resolve_shaders;
 pub mod settings;
@@ -50,6 +51,7 @@ pub use far::DropFromSoftFar;
 pub use geometry::{Cards, Degenerates, LowerFromSoftGeometry, Pose, SpeedTreeFrame, Tiling, Winding};
 pub use materials::{DropFromSoftTextureTransforms, LowerFromSoftMaterials};
 use primase_core::pass::PassRegistry;
+pub use release::ReleaseFromSoftSources;
 pub use resolve_shaders::ResolveFromSoftShaders;
 
 /// A condition holding when any of the clauses holds; None (always present) when any input is None.
@@ -108,6 +110,7 @@ pub fn register(registry: &mut PassRegistry) {
         &standalone::LOWER_FROMSOFT_SELECTED_OUTFIT,
         &visibility::PRESERVE_FROMSOFT_DISPLAY_MASKS,
         &far::DROP_FROMSOFT_FAR,
+        &release::RELEASE_FROMSOFT_SOURCES,
         &resolve_shaders::RESOLVE_FROMSOFT_SHADERS,
         &detail::DERIVE_FROMSOFT_DETAIL,
         &bake::BAKE_FROMSOFT_LAYERS,

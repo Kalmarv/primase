@@ -334,6 +334,8 @@ fn a_lowered_material_carries_what_its_source_class_states_about_its_surfaces() 
             primitives: vec![true; drawn.len()],
         },
     );
+    // the read's texture files: none to decode
+    world.insert_resource(crate::sekiro::source::TexturePayloads::default());
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
         .with_settings(primase_core::pass::Settings {
@@ -469,6 +471,8 @@ fn an_additive_blend_is_a_light_volume_in_sekiro_and_an_additive_surface_in_elde
             primitives: vec![true],
         },
     );
+    // the read's texture files: none to decode
+    world.insert_resource(crate::sekiro::source::TexturePayloads::default());
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
         .with_settings(primase_core::pass::Settings {
@@ -528,6 +532,8 @@ fn a_lowered_material_is_as_sided_as_the_face_sets_drawing_it_and_split_when_the
             primitives: vec![true, false],
         },
     );
+    // the read's texture files: none to decode
+    world.insert_resource(crate::sekiro::source::TexturePayloads::default());
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
         .with_settings(primase_core::pass::Settings {
@@ -761,6 +767,7 @@ fn the_fromsoft_passes_register_by_name() {
         "name-fromsoft-entities",
         "preserve-fromsoft-display-masks",
         "raise-fromsoft-display-masks",
+        "release-fromsoft-sources",
         "resolve-fromsoft-shaders",
         "resolve-fromsoft-state",
         "sample-fromsoft-draw-params",
@@ -796,6 +803,7 @@ fn the_fromsoft_passes_register_by_name() {
         "lower-fromsoft-sky",
         "lower-sekiro-reinhard",
         "raise-fromsoft-display-masks",
+        "release-fromsoft-sources",
         "select-fromsoft-weapon-forms",
         "select-fromsoft-saved-hold",
         "select-fromsoft-requested-form",
@@ -1047,5 +1055,53 @@ fn rigid_skinning_leaves_a_static_mesh_whose_node_names_no_bone_as_stored() {
     assert_eq!(
         log.approximated_on.get(reason),
         Some(&std::collections::BTreeSet::from([prototype]))
+    );
+}
+
+/// The release takes every stored model and the read's texture files out, counted with their bytes; a lowering of
+/// the materials stated after it is refused for the texture files it lacks, never run without them.
+#[test]
+fn released_sources_are_counted_and_a_reader_after_them_is_refused() {
+    use crate::components::models::SourceModel;
+    use crate::sekiro::source::TexturePayloads;
+    use primase_core::pass::{PassManager, Pipeline, RunReport};
+    let mut world = World::new();
+    let prototype = world.spawn();
+    world.insert(prototype, SourceModel::new(static_arm(0x13, vec![], 1, -1)));
+    world.insert_resource(TexturePayloads(BTreeMap::from([(
+        "a_a".to_owned(),
+        std::sync::Arc::from(vec![7u8; 10].into_boxed_slice()),
+    )])));
+    let material = world.spawn();
+    world.insert(material, layered(None));
+    let run = |world: &mut World, passes: Vec<Box<dyn Pass>>| {
+        let mut report = RunReport::default();
+        PassManager::new(PassRegistry::new())
+            .with_pass_checks(true)
+            .with_settings(primase_core::pass::Settings {
+                threads: primase_core::parallel::Threads::ONE,
+            })
+            .run(world, &Pipeline { passes }, &mut report)
+            .map(|()| report)
+    };
+    let report = run(&mut world, vec![Box::new(release::ReleaseFromSoftSources)]).unwrap();
+    assert!(!world.has::<SourceModel>(prototype));
+    assert!(world.resource::<TexturePayloads>().is_none());
+    let counts = &report.steps[0].log.counts;
+    assert_eq!(counts["stored models released"], 1);
+    assert!(
+        counts["bytes of the stored models' meshes released"] > 0,
+        "{counts:?}"
+    );
+    assert_eq!(counts["texture files released"], 1);
+    assert_eq!(counts["bytes of the texture files released"], 10);
+    let refused = run(
+        &mut world,
+        vec![Box::new(LowerFromSoftMaterials::new(None, WATER))],
+    )
+    .unwrap_err();
+    assert!(
+        refused.to_string().contains("fromsoft.texture_payloads"),
+        "{refused}"
     );
 }

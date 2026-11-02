@@ -176,6 +176,7 @@ fn area(materials: Materials, read_states: bool, sky: bool) -> AreaPreparation {
         resolve_shaders: resolve(),
         lower_materials: lower_materials(materials),
         material_bake: material_bake(true),
+        release_sources: false,
         lights: LowerFromSoftLights {
             candela_per_power: Factor::new(1.).unwrap(),
             spot_blend: Fraction::new(0.15).unwrap(),
@@ -365,9 +366,11 @@ fn the_stated_values_give_the_pass_lists_the_builders_fixed() {
         canonical(&baked_with_sky)
     );
 
+    // the Stormveil example's: the read's stored models and texture files released before the surface bake
     let stormveil = AreaPreparation {
         draw_params: Some(SampleFromSoftDrawParams::new(12.).unwrap()),
         material_bake: material_bake(false),
+        release_sources: true,
         ..elden(true)
     };
     let stormveil_was = texts(&[
@@ -382,6 +385,7 @@ fn the_stated_values_give_the_pass_lists_the_builders_fixed() {
         "lower-elden-ring-reinhard",
         RESOLVE,
         "lower-fromsoft-materials{layers=preserve,water-colour=48,98,122,190}",
+        "release-fromsoft-sources",
         "bake-fromsoft-materials{max-size=2048,sample-time=0,cache=off}",
         LIGHTS,
         "lower-fromsoft-sky",

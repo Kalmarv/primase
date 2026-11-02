@@ -216,8 +216,10 @@ impl Pass for ResolveFromSoftShaders {
     fn options(&self) -> Options {
         Options::from([("unbound-textures".to_owned(), self.unbound.text().to_owned())])
     }
+    /// The read's texture files are an input as its materials are: a world without them (one whose files a program
+    /// released, `release-fromsoft-sources`) is refused, not bound without textures.
     fn requires(&self) -> &[&'static str] {
-        &[Material::NAME]
+        &[Material::NAME, <TexturePayloads as primase_core::Resource>::NAME]
     }
     fn provides(&self) -> &[&'static str] {
         &[

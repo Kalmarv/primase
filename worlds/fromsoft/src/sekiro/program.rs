@@ -37,6 +37,8 @@ use crate::materials::SkipClass;
 const RENDER_GRAPH: &str = "lower-fromsoft-render-graph";
 /// The pass that lowers the sky an area read brought in to core's sky layer and anchors.
 const SKY_PASS: &str = "lower-fromsoft-sky";
+/// The release of the read's stored models and texture files ([`AreaPreparation::release_sources`]).
+const RELEASE_SOURCES: &str = "release-fromsoft-sources";
 /// The pass that keeps the form of a part a read was asked for: the first of a character's preparation.
 const REQUESTED_FORM: &str = "select-fromsoft-requested-form";
 
@@ -94,8 +96,9 @@ pub struct IrradiancePackage {
 /// The order: the render graph (with the environment probes, where the read took them), the map's collision and the
 /// objects' collision, Sekiro's distant backdrop dropped, the rigid skinning, the geometry, the level of detail, the
 /// environment (after the draw-param sample, where there is one), the game's tone mapping, the shader resolution, the
-/// layer bake (Sekiro, where the program bakes), the materials and their surface bake, the lights, the sky (where the
-/// read brought it in), the extras, the map records; then the irradiance, the effects and the entities' names. The
+/// layer bake (Sekiro, where the program bakes), the materials, the release of the read's stored models and texture
+/// files (where the program releases them), the materials' surface bake, the lights, the sky (where the read brought it
+/// in), the extras, the map records; then the irradiance, the effects and the entities' names. The
 /// environment states the hour of the day (`core.time_of_day`) and runs before the first bake: a bake gives a program
 /// that reads the hour the scene's, and refuses the program where the scene states none. The sky is lowered after the
 /// lights, so after the environment, whose sun the moon stands towards, and after the materials, which it orders the
@@ -136,6 +139,11 @@ pub struct AreaPreparation {
     pub lower_materials: LowerFromSoftMaterials,
     /// The surface bake of each resolved program, after the materials are lowered.
     pub material_bake: BakeFromSoftMaterials,
+    /// The read's stored models and texture files released once the lowering has read them
+    /// (`release-fromsoft-sources`, after the materials are lowered and before their surface bake, which reads
+    /// neither): a program that writes what it lowered and lowers nothing again releases them; one that lowers again
+    /// later (a viewer's state switch) keeps them.
+    pub release_sources: bool,
     /// The lights.
     pub lights: LowerFromSoftLights,
     /// The map layout's regions and events.
@@ -189,11 +197,11 @@ impl AreaPreparation {
         {
             texts.push(pass_text(&bake));
         }
-        texts.extend([
-            pass_text(&self.lower_materials),
-            pass_text(&self.material_bake),
-            pass_text(&self.lights),
-        ]);
+        texts.push(pass_text(&self.lower_materials));
+        if self.release_sources {
+            texts.push(RELEASE_SOURCES.to_owned());
+        }
+        texts.extend([pass_text(&self.material_bake), pass_text(&self.lights)]);
         if self.sky {
             texts.push(SKY_PASS.to_owned());
         }

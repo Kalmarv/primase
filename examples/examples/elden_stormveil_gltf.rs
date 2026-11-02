@@ -88,6 +88,8 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 /// - Each material's program is resolved, a texture slot with no texture reading a stated preview colour; the
 ///   materials keep their layers as source data, water without a texture `48,98,122,190` (sRGB bytes, a linear alpha
 ///   byte); the surface bake makes images of at most 2048 pixels at time 0, storing nothing in a memo store.
+/// - The read's stored models and texture files released once the materials are lowered, before the surface bake: the
+///   program writes what it lowered and lowers nothing again.
 /// - The lights at 1 candela per unit of stored power, a spot's inner cone at 0.85 of its outer (the game's spot has
 ///   none), an effect light at its settled brightness, every light reaching at least 0.5 m, the lights of regions that
 ///   start disabled left out.
@@ -125,6 +127,7 @@ fn preparation() -> Result<AreaPreparation, Error> {
         resolve_shaders: ResolveFromSoftShaders::new(Unbound::Preview),
         lower_materials: LowerFromSoftMaterials::new(Some(Layers::Preserve), Srgba8([48, 98, 122, 190])),
         material_bake: BakeFromSoftMaterials::new(PixelCap::new(2048)?, Seconds::new(0.)?).with_cache(false),
+        release_sources: true,
         lights: LowerFromSoftLights {
             candela_per_power: Factor::new(1.)?,
             spot_blend: Fraction::new(0.15)?,
@@ -335,6 +338,7 @@ mod tests {
             "lower-elden-ring-reinhard",
             "resolve-fromsoft-shaders{unbound-textures=preview}",
             "lower-fromsoft-materials{layers=preserve,water-colour=48,98,122,190}",
+            "release-fromsoft-sources",
             "bake-fromsoft-materials{max-size=2048,sample-time=0,cache=off}",
             "lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15,brightness=settled,min-range=0.5,include-disabled=off}",
             "lower-fromsoft-sky",

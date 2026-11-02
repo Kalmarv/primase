@@ -81,8 +81,13 @@ impl Pass for LowerFromSoftMaterials {
         }
         o
     }
+    /// The read's texture files are an input as its materials are: a world without them (one whose files a program
+    /// released, `release-fromsoft-sources`) is refused, not lowered without textures.
     fn requires(&self) -> &[&'static str] {
-        &[Material::NAME]
+        &[
+            Material::NAME,
+            <crate::sekiro::source::TexturePayloads as primase_core::Resource>::NAME,
+        ]
     }
     fn provides(&self) -> &[&'static str] {
         // a material drawn both culled and not is split: its copy has the source material's components; a texture made
@@ -112,7 +117,7 @@ impl Pass for LowerFromSoftMaterials {
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         use crate::sekiro::source::TexturePayloads;
-        // lent read-only (a world without the reader's payloads has no texture file to decode): borrowed, not written
+        // lent read-only (required, so held): borrowed, not written
         let lowered = world.resource_scope::<TexturePayloads, _>(|world, payloads| {
             super::pbr::lower_drawn(
                 world,

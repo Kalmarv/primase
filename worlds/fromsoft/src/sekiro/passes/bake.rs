@@ -83,7 +83,12 @@ impl Pass for BakeFromSoftLayers {
         ])
     }
     fn requires(&self) -> &[&'static str] {
-        &[Material::NAME, LayerInputs::NAME, ShaderBinding::NAME]
+        &[
+            Material::NAME,
+            LayerInputs::NAME,
+            ShaderBinding::NAME,
+            <crate::sekiro::source::TexturePayloads as primase_core::Resource>::NAME,
+        ]
     }
     fn provides(&self) -> &[&'static str] {
         &[
