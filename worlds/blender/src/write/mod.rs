@@ -364,7 +364,7 @@ fn material(
     let (graph, settings) = match world.get::<LayeredMaterial>(m) {
         Some(l) if form.blend => {
             report.blends += 1;
-            layered::graph(sampler, world, l, pbr, form.color0)?
+            layered::graph(sampler, world, m, l, pbr, form.color0)?
         }
         _ => pbr::graph(sampler, pbr, form.color0)?,
     };

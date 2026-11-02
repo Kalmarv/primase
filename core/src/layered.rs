@@ -12,6 +12,9 @@ use crate::{Component, Entity, JsonError, Semantic, World, pbr::TextureRef, pbr:
 use serde::Serialize;
 use serde_json::Value;
 
+mod expression;
+pub use expression::{Expression, ExpressionBuilder, TERM_LIMIT, Term, TermId, lerp, saturate};
+
 /// One ordinary material sampled with this layer's UV set and transform.
 /// Its colour, normal, mask, tint and alpha participate in the blend.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -137,7 +140,8 @@ pub enum Source {
     },
 }
 
-/// One weight channel per pixel, with bounded combinations of sources and no nesting.
+/// One weight channel per pixel: a named form of its sources, or an [`Expression`] of them for what no named form
+/// spells. Every form follows the [numeric rules](expression) and is the operations of its [`Channel::expression`].
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Channel {
@@ -148,7 +152,7 @@ pub enum Channel {
         b: Source,
         t: Source,
     },
-    /// `saturate(k0 + k1 v + k2 m + k3 v m)`.
+    /// `saturate(k0 + k1 v + k2 m + k3 v m)` ([`saturate`]), summed from the left with `k3 v` before its `m`.
     Threshold {
         v: Source,
         m: Source,
@@ -163,6 +167,8 @@ pub enum Channel {
         v: Source,
         exponent: u8,
     },
+    /// Operations on its sources, in its canonical spelling and no named form's ([`Channel::from_expression`]).
+    Expression(Expression),
 }
 
 /// Maximum number of factors in [`Channel::Product`]; products require at least two.
@@ -195,23 +201,26 @@ impl Channel {
             Channel::Threshold { v, m, .. } => vec![v, m],
             Channel::Power { v, .. } => vec![v],
             Channel::Product { sources } => sources.iter().collect(),
+            Channel::Expression(e) => e.sources.iter().collect(),
         }
     }
     /// The channel's value from its sources' values (in [`Channel::sources`] order).
     pub fn evaluate(&self, values: &[f32]) -> f32 {
         match self {
             Channel::Source(_) => values[0],
-            Channel::Lerp { .. } => values[0] + (values[1] - values[0]) * values[2],
+            Channel::Lerp { .. } => lerp(values[0], values[1], values[2]),
             Channel::Threshold { k, .. } => {
                 let (v, m) = (values[0], values[1]);
-                (k[0] + k[1] * v + k[2] * m + k[3] * v * m).clamp(0.0, 1.0)
+                saturate(k[0] + k[1] * v + k[2] * m + k[3] * v * m)
             }
             Channel::Power { exponent, .. } => power(values[0], *exponent),
             Channel::Product { sources } => values[..sources.len()].iter().fold(1., |p, v| p * v),
+            Channel::Expression(e) => e.evaluate(values),
         }
     }
 
-    /// Its own checks (its sources' apart): finite threshold factors, a bounded power exponent or product arity.
+    /// Its own checks (its sources' apart): finite threshold factors, a bounded power exponent or product arity, an
+    /// expression in its canonical spelling and no named form.
     pub fn check(&self) -> Result<(), String> {
         match self {
             Channel::Product { sources } if !(2..=PRODUCT_LIMIT).contains(&sources.len()) => Err(format!(
@@ -224,7 +233,22 @@ impl Channel {
             Channel::Power { exponent, .. } if !(1..=POWER_LIMIT).contains(exponent) => {
                 Err(format!("power exponent {exponent} is not 1 to {POWER_LIMIT}"))
             }
-            _ => Ok(()),
+            Channel::Expression(e) => {
+                e.check()?;
+                match Channel::from_expression(e)? {
+                    Channel::Expression(_) => Ok(()),
+                    named @ (Channel::Source(_)
+                    | Channel::Lerp { .. }
+                    | Channel::Threshold { .. }
+                    | Channel::Product { .. }
+                    | Channel::Power { .. }) => Err(format!("expression is a named form: {named:?}")),
+                }
+            }
+            Channel::Source(_)
+            | Channel::Lerp { .. }
+            | Channel::Threshold { .. }
+            | Channel::Product { .. }
+            | Channel::Power { .. } => Ok(()),
         }
     }
 }
@@ -314,8 +338,8 @@ impl Component for LayeredMaterial {
     const NAME: &'static str = "core.layered";
     const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// 2: per-pixel `channels` and the `composition`; 3: each mask texture's `filters`; 4: the height composition
-    /// and its `heights`; 5: bounded product channels.
-    const VERSION: u32 = 5;
+    /// and its `heights`; 5: bounded product channels; 6: expression channels, and a threshold saturating NaN to 0.
+    const VERSION: u32 = 6;
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.layers.iter().flatten().map(|layer| layer.material));
         out.extend(self.mask_textures().map(|t| t.texture));

@@ -22,7 +22,7 @@ use primase_blender::graph::aov;
 use primase_blender::render::{Camera, Device, Projection, RenderOptions, Rendered, render};
 use primase_blender::save::{Blender, save};
 use primase_blender::{BlenderReport, WriteOptions, write_file};
-use primase_core::layered::{Channel, Composition, Source, height_blend, over_as_sum};
+use primase_core::layered::{Channel, Composition, ExpressionBuilder, Source, height_blend, over_as_sum};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Shading, TextureRef, UvTransform, Wrap};
 use primase_core::{
     ColorSpace, Entity, Layer, LayerWeights, LayeredMaterial, Mesh, Name, Primitive, Semantic, Stream,
@@ -495,6 +495,33 @@ fn at(k: usize) -> f32 {
 }
 
 /// A stream of four channels per corner (top-left, top-right, bottom-right, bottom-left) from the corner's `(u, v)`.
+/// `lerp(c, saturate(1 - 1.4 (2 (1 - c) - m)), 0.6)`: a weight no named form spells.
+fn adjust(c: Source, m: Source) -> Channel {
+    let mut b = ExpressionBuilder::new();
+    let (c, m) = (b.source(c), b.source(m));
+    let (one, two, k, f) = (b.constant(1.0), b.constant(2.0), b.constant(1.4), b.constant(0.6));
+    let rest = b.subtract(one, c);
+    let twice = b.multiply(two, rest);
+    let d = b.subtract(twice, m);
+    let kd = b.multiply(k, d);
+    let x = b.subtract(one, kd);
+    let s = b.saturate(x);
+    let w = b.lerp(c, s, f);
+    let channel = b.channel(w).unwrap();
+    assert!(matches!(channel, Channel::Expression(_)), "{channel:?}");
+    channel
+}
+
+/// `max(min(b, a), 0.3)`.
+fn clamped(a: Source, b: Source) -> Channel {
+    let mut e = ExpressionBuilder::new();
+    let (a, b) = (e.source(a), e.source(b));
+    let low = e.constant(0.3);
+    let m = e.min(b, a);
+    let x = e.max(m, low);
+    e.channel(x).unwrap()
+}
+
 fn corners(f: impl Fn(f32, f32) -> [f32; 4]) -> Stream {
     Stream::F32x4(
         [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
@@ -689,6 +716,30 @@ fn blends(w: &mut World, tex: Entity, data: Entity) -> Vec<Case> {
                 ..Want::base([0.2 + (0.6 - 0.2) * at(j), 0.125, 0.2 * 0.6 * quadrant(i, j)[3]])
             }),
         ),
+        // expressions: red by lerp(c, saturate(1 - 1.4 (2 (1 - c) - m)), 0.6) with c = u and m the data texture's red,
+        // green by max(min(0.5, u), 0.3), summed. Red's slope is at most 0.4 + 0.6 * 2.8 = 2.08 a quad
+        case(
+            "blend expression",
+            LayeredMaterial {
+                layers: vec![layer(red), layer(green)],
+                weights: LayerWeights {
+                    channels: Some(vec![
+                        adjust(c1(0), mask([1.0, 0.0, 0.0, 0.0])),
+                        clamped(c1(0), c1(1)),
+                    ]),
+                    ..LayerWeights::new(Semantic::Color(1), WeightMapping::Identity)
+                },
+            },
+            corners(|u, _| [u, 0.5, 0.0, 0.0]),
+            Box::new(|i, j| {
+                let (c, m) = (at(i), quadrant(i, j)[0]);
+                let s = (1.0 - 1.4 * (2.0 * (1.0 - c) - m)).clamp(0.0, 1.0);
+                Want {
+                    slope: 2.1 / PX as f32,
+                    ..Want::base([c + (s - c) * 0.6, c.clamp(0.3, 0.5), 0.0])
+                }
+            }),
+        ),
         // null slot 0 contributes black: red at 0.4, and alpha 0.4, which the host's mask at 0.3 keeps
         case(
             "blend null slot, host mask",
@@ -733,8 +784,8 @@ fn blends(w: &mut World, tex: Entity, data: Entity) -> Vec<Case> {
             Box::new(|_, _| Want::base([0.1, 0.2, 0.3])),
         ),
     ];
-    out[5].material.alpha_mode = AlphaMode::Mask { cutoff: 0.3 };
-    out[6].material.alpha_mode = AlphaMode::Mask { cutoff: 0.5 };
+    out[6].material.alpha_mode = AlphaMode::Mask { cutoff: 0.3 };
+    out[7].material.alpha_mode = AlphaMode::Mask { cutoff: 0.5 };
     // the layer's UV set 1 (the quad mirrored) scaled by 2 in its transform, before the texture's own (none)
     let mut transformed = case(
         "blend layer set and transform",
@@ -897,7 +948,7 @@ fn each_construct_renders_as_worked_by_hand() {
     // the one filtered colour slot (the bilinear case's) is counted as Cycles filters it, before decoding
     assert_eq!(report.counts.srgb_filtered_encoded, 1);
     // every blend drawn but the one that reads a stream the quad lacks, which is counted
-    assert_eq!(report.blends, 11);
+    assert_eq!(report.blends, 12);
     assert_eq!(
         report.blends_drawn_from_host,
         BTreeMap::from([("reads COLOR_3, which scene.glb does not carry".to_owned(), 1)])

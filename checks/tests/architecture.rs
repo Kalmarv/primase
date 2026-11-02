@@ -38,6 +38,10 @@
 //!   them (a billboard's pivot) is moved wherever they are.
 //! - `component_geometry_hooks`: every component's stated geometry (`const GEOMETRY`) matches the remap hooks it
 //!   implements, in every crate, tests included.
+//! - `closed_forms_are_named`: a consumer of a core vocabulary of forms that grows (`CLOSED_FORMS`: core.layered's
+//!   channels) goes through its evaluation or names each form where it tells them apart: no match over its forms
+//!   with a catch-all arm, no `let` or `matches!` testing one form, so a new form fails to compile wherever forms are
+//!   told apart (laws 3 and 8). The rules are checked on `closed_forms_rules`' fixture.
 //! - `parse_modules_are_checked`: in the crates `architecture.toml` opts in as `parse_crate`, every module that
 //!   decodes bytes (little-endian reads) denies unchecked arithmetic, indexing and truncating casts, so bytes a file
 //!   says are there and are not are its error, never a panic or a wrapped size.
@@ -1226,6 +1230,403 @@ fn parse_modules_are_checked() {
     }
     let excused = entries("parse").into_iter().map(|e| e["file"].clone()).collect();
     assert_reconciled("parse modules", found, excused);
+}
+
+// ---- closed forms ----
+
+/// A core vocabulary of forms that grows (law 3: a meaning no form expresses is added to core for every consumer).
+/// A consumer either goes through the vocabulary's own evaluation (which covers every form) or tells the forms apart
+/// by naming each one, so that a new form fails to compile wherever forms are told apart. A default would let a new
+/// form fall silently into another form's treatment (law 8).
+struct ClosedForms {
+    /// What it is, for messages.
+    what: &'static str,
+    /// The paths that name the enum, re-exports included.
+    paths: &'static [&'static str],
+}
+
+const CLOSED_FORMS: &[ClosedForms] = &[ClosedForms {
+    what: "core.layered channel",
+    paths: &["primase_core::layered::Channel"],
+}];
+
+/// The local names of the enum at `paths` in a file of crate `krate`, module `module`: what its `use` items bring in
+/// (`as` aliases and globs of its module included), and its own name in the module that defines it.
+fn form_names(t: &[Tok], krate: &str, module: &[String], paths: &[&str]) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for u in named(t).0 {
+        for (segs, name) in &u.items {
+            let abs = absolute(segs, krate, module);
+            for p in paths {
+                let (parent, last) = p.rsplit_once("::").unwrap();
+                if (name == "*" && abs == parent) || (name != "*" && abs == *p) {
+                    names.insert(if name == "*" {
+                        last.to_owned()
+                    } else {
+                        name.clone()
+                    });
+                }
+            }
+        }
+    }
+    let here = absolute(&[], krate, module);
+    for p in paths {
+        let (parent, last) = p.rsplit_once("::").unwrap();
+        if parent == here && t.windows(2).any(|w| ident(&w[0], "enum") && ident(&w[1], last)) {
+            names.insert(last.to_owned());
+        }
+    }
+    names
+}
+
+/// One file's view of a closed vocabulary: the enum's local names, and the `impl` blocks of it, where `Self` is it.
+struct FormScope<'a> {
+    names: BTreeSet<String>,
+    impls: Vec<std::ops::Range<usize>>,
+    krate: &'a str,
+    module: &'a [String],
+    paths: &'a [&'a str],
+}
+
+impl FormScope<'_> {
+    fn new<'a>(t: &[Tok], krate: &'a str, module: &'a [String], paths: &'a [&'a str]) -> FormScope<'a> {
+        let names = form_names(t, krate, module, paths);
+        let mut impls = Vec::new();
+        for (k, tok) in t.iter().enumerate() {
+            if !ident(tok, "impl") {
+                continue;
+            }
+            let Some(open) = (k..t.len()).find(|&j| punct(&t[j], '{') || punct(&t[j], ';')) else {
+                continue;
+            };
+            // the self type: the path after the last `for`, else after `impl` and its generics
+            let header = &t[k + 1..open];
+            let mut at = header.iter().rposition(|x| ident(x, "for")).map_or(0, |f| f + 1);
+            if at == 0 && header.first().is_some_and(|x| punct(x, '<')) {
+                let mut depth = 0;
+                while at < header.len() {
+                    depth += i32::from(punct(&header[at], '<')) - i32::from(punct(&header[at], '>'));
+                    at += 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+            }
+            let (segs, _) = path_at(header, at);
+            if punct(&t[open], '{') && segs.last().is_some_and(|s| names.contains(s)) {
+                impls.push(open..block_end(t, open));
+            }
+        }
+        FormScope {
+            names,
+            impls,
+            krate,
+            module,
+            paths,
+        }
+    }
+
+    /// Whether the path at `t[i]` names one of the enum's forms (`Enum::Form`, `Self::Form` in its `impl`).
+    fn names_form(&self, t: &[Tok], i: usize) -> bool {
+        if i > 0 && punct(&t[i - 1], ':') {
+            return false;
+        }
+        let (segs, _) = path_at(t, i);
+        if segs.len() < 2 {
+            return false;
+        }
+        let prefix = &segs[..segs.len() - 1];
+        match prefix {
+            [one] if one == "Self" => self.impls.iter().any(|r| r.contains(&i)),
+            [one] if self.names.contains(one) => true,
+            _ => self
+                .paths
+                .contains(&absolute(prefix, self.krate, self.module).as_str()),
+        }
+    }
+
+    /// Whether `t[r]` names a form anywhere.
+    fn names_form_in(&self, t: &[Tok], r: std::ops::Range<usize>) -> bool {
+        r.into_iter().any(|i| self.names_form(t, i))
+    }
+}
+
+/// The index after the expression starting at `t[i]`, a match arm's body, and its comma; `close` is the match's `}`.
+/// A block-like body (a block, `if`, `match`, `loop`, `while`, `for`, `unsafe`) ends at its block unless a method
+/// call or `?` continues it; any other body at the next comma outside brackets.
+fn arm_body_end(t: &[Tok], mut i: usize, close: usize) -> usize {
+    let next_open = |from: usize| {
+        let mut depth = 0i32;
+        (from..close)
+            .find(|&j| {
+                if depth == 0 && punct(&t[j], '{') {
+                    return true;
+                }
+                depth += i32::from(punct(&t[j], '(') || punct(&t[j], '['));
+                depth -= i32::from(punct(&t[j], ')') || punct(&t[j], ']'));
+                false
+            })
+            .unwrap_or(close)
+    };
+    let block_like = i < close
+        && (punct(&t[i], '{')
+            || ["if", "match", "loop", "while", "for", "unsafe"]
+                .iter()
+                .any(|k| ident(&t[i], k)));
+    if block_like {
+        loop {
+            let is_if = ident(&t[i], "if");
+            i = block_end(t, next_open(i)).min(close);
+            if is_if && i < close && ident(&t[i], "else") {
+                i += 1;
+                if !ident(&t[i], "if") {
+                    i = block_end(t, next_open(i)).min(close);
+                    break;
+                }
+                continue;
+            }
+            break;
+        }
+        if i < close && punct(&t[i], ',') {
+            return i + 1;
+        }
+        if !(i < close && (punct(&t[i], '.') || punct(&t[i], '?') || ident(&t[i], "as"))) {
+            return i;
+        }
+    }
+    let mut depth = 0i32;
+    while i < close {
+        if depth == 0 && punct(&t[i], ',') {
+            return i + 1;
+        }
+        depth += i32::from(punct(&t[i], '(') || punct(&t[i], '[') || punct(&t[i], '{'));
+        depth -= i32::from(punct(&t[i], ')') || punct(&t[i], ']') || punct(&t[i], '}'));
+        i += 1;
+    }
+    close
+}
+
+/// The arms of the match whose block opens at `t[open]`: each one's pattern (guard excluded) and whether it has a guard.
+fn match_arms(t: &[Tok], open: usize) -> Vec<(std::ops::Range<usize>, bool)> {
+    let close = block_end(t, open) - 1;
+    let mut arms = Vec::new();
+    let mut i = open + 1;
+    while i < close {
+        let start = i;
+        let mut depth = 0i32;
+        let mut guard = None;
+        while i < close && !(depth == 0 && punct(&t[i], '=') && t.get(i + 1).is_some_and(|x| punct(x, '>'))) {
+            if depth == 0 && guard.is_none() && ident(&t[i], "if") {
+                guard = Some(i);
+            }
+            depth += i32::from(punct(&t[i], '(') || punct(&t[i], '[') || punct(&t[i], '{'));
+            depth -= i32::from(punct(&t[i], ')') || punct(&t[i], ']') || punct(&t[i], '}'));
+            i += 1;
+        }
+        if i >= close {
+            break;
+        }
+        arms.push((start..guard.unwrap_or(i), guard.is_some()));
+        i = arm_body_end(t, i + 2, close);
+    }
+    arms
+}
+
+/// Whether pattern `t[r]` has a case (between `|`s outside brackets) that matches anything: `_`, or a binding.
+fn catch_all(t: &[Tok], r: std::ops::Range<usize>) -> bool {
+    let mut cases = vec![Vec::new()];
+    let mut depth = 0i32;
+    for tok in &t[r] {
+        if depth == 0 && punct(tok, '|') {
+            cases.push(Vec::new());
+            continue;
+        }
+        depth += i32::from(punct(tok, '(') || punct(tok, '[') || punct(tok, '{'));
+        depth -= i32::from(punct(tok, ')') || punct(tok, ']') || punct(tok, '}'));
+        cases.last_mut().unwrap().push(tok);
+    }
+    cases.iter().any(|case| {
+        let words: Vec<&str> = case
+            .iter()
+            .filter_map(|x| match x {
+                Tok::Ident(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        words.len() == case.len()
+            && words.iter().rev().skip(1).all(|w| matches!(*w, "ref" | "mut"))
+            && words
+                .last()
+                .is_some_and(|w| w.starts_with(|c: char| c == '_' || c.is_lowercase()))
+    })
+}
+
+/// The tests of one form of `scope`'s enum in `t` that let others pass unnamed, each as `<function>: <what>`: a match
+/// whose arms name a form with a catch-all arm (unguarded), and a `let` (`if let`, `while let`, `let ... else`) or
+/// `matches!` whose pattern names a form.
+fn closed_form_breaks(t: &[Tok], scope: &FormScope, what: &str) -> Vec<String> {
+    let function = |i: usize| {
+        (0..i)
+            .rev()
+            .find(|&k| ident(&t[k], "fn"))
+            .and_then(|k| match t.get(k + 1) {
+                Some(Tok::Ident(name)) => Some(name.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "(no function)".to_owned())
+    };
+    let mut out = Vec::new();
+    for (k, tok) in t.iter().enumerate() {
+        if ident(tok, "match") {
+            let Some(open) = (k + 1..t.len()).find(|&j| punct(&t[j], '{')) else {
+                continue;
+            };
+            let arms = match_arms(t, open);
+            if arms.iter().any(|(r, _)| scope.names_form_in(t, r.clone()))
+                && arms
+                    .iter()
+                    .any(|(r, guarded)| !guarded && catch_all(t, r.clone()))
+            {
+                out.push(format!(
+                    "{}: a catch-all arm in a match over the {what}",
+                    function(k)
+                ));
+            }
+        } else if ident(tok, "let") {
+            // the pattern runs to the `=` that assigns (not `==`, `=>`, `<=`, `>=`, `!=`)
+            let end = (k + 1..t.len())
+                .find(|&j| {
+                    punct(&t[j], ';')
+                        || (punct(&t[j], '=')
+                            && !t.get(j + 1).is_some_and(|x| punct(x, '=') || punct(x, '>'))
+                            && !matches!(&t[j - 1], Tok::Punct('=' | '<' | '>' | '!')))
+                })
+                .unwrap_or(t.len());
+            if scope.names_form_in(t, k + 1..end) {
+                out.push(format!("{}: a let testing one form of the {what}", function(k)));
+            }
+        } else if ident(tok, "matches")
+            && t.get(k + 1).is_some_and(|x| punct(x, '!'))
+            && t.get(k + 2).is_some_and(|x| punct(x, '('))
+        {
+            let mut depth = 0i32;
+            let mut comma = None;
+            let mut end = t.len();
+            for (j, x) in t.iter().enumerate().skip(k + 2) {
+                depth += i32::from(punct(x, '(') || punct(x, '[') || punct(x, '{'));
+                depth -= i32::from(punct(x, ')') || punct(x, ']') || punct(x, '}'));
+                if depth == 1 && comma.is_none() && punct(x, ',') {
+                    comma = Some(j);
+                }
+                if depth == 0 {
+                    end = j;
+                    break;
+                }
+            }
+            if let Some(c) = comma
+                && scope.names_form_in(t, c + 1..end)
+            {
+                out.push(format!(
+                    "{}: matches! testing one form of the {what}",
+                    function(k)
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// Every consumer of a closed vocabulary ([`CLOSED_FORMS`]) in the workspace's library and program sources (tests
+/// aside) names each form where it tells them apart.
+#[test]
+fn closed_forms_are_named() {
+    let mut found = BTreeSet::new();
+    for m in members() {
+        let krate = m.name.replace('-', "_");
+        let src = format!("{}/src/", m.path);
+        for file in rust_files(&root().join(&m.path).join("src")) {
+            let module = module_of(&file[src.len()..]);
+            let t = code(&file);
+            for forms in CLOSED_FORMS {
+                let scope = FormScope::new(&t, &krate, &module, forms.paths);
+                for b in closed_form_breaks(&t, &scope, forms.what) {
+                    found.insert(format!("{file}: {b}"));
+                }
+            }
+        }
+    }
+    let excused = entries("closed_forms")
+        .into_iter()
+        .map(|e| format!("{}: {}: {}", e["file"], e["function"], e["what"]))
+        .collect();
+    assert_reconciled("closed forms", found, excused);
+}
+
+/// The closed-forms rule on a fixture: what is a break, and what is not.
+#[test]
+fn closed_forms_rules() {
+    let src = r#"
+use primase_core::layered::{Channel as C, Source};
+use primase_core::layered;
+fn whole(c: &C) -> u8 {
+    match c {
+        C::Source(_) | C::Lerp { .. } => if true { 1 } else { 2 }
+        C::Threshold { k, .. } if k[0] > 0.0 => { 3 }
+        layered::Channel::Threshold { .. } => match 1 { _ => 4 },
+        C::Product { .. } | C::Power { .. } | C::Expression(_) => 5,
+    }
+}
+fn defaulted(c: &C) -> u8 {
+    match c {
+        C::Source(_) => 1,
+        other => 2,
+    }
+}
+fn guarded_default(c: &C) -> u8 {
+    match c {
+        _ if c.check().is_ok() => 1,
+        C::Source(_) => 2,
+        C::Lerp { .. } | C::Threshold { .. } | C::Product { .. } | C::Power { .. } | C::Expression(_) => 3,
+    }
+}
+fn other_enum(s: &Source) -> u8 {
+    match s {
+        Source::Mask { .. } => 1,
+        _ => 2,
+    }
+}
+fn tested(c: &C) -> bool {
+    if let C::Source(_) = c { return true; }
+    let Some(primase_core::layered::Channel::Lerp { .. }) = Some(c) else { return false };
+    matches!(c, C::Power { exponent, .. } if *exponent > 2)
+}
+fn evaluated(c: &C) -> f32 {
+    let x: C = c.clone();
+    x.evaluate(&[])
+}
+impl C {
+    fn mine(&self) -> u8 {
+        match self {
+            Self::Source(_) => 1,
+            _ => 2,
+        }
+    }
+}
+"#;
+    let t = without_tests(lex(src));
+    let module = vec!["x".to_owned()];
+    let scope = FormScope::new(&t, "primase_lab", &module, CLOSED_FORMS[0].paths);
+    let breaks = closed_form_breaks(&t, &scope, "channel");
+    assert_eq!(
+        breaks,
+        [
+            "defaulted: a catch-all arm in a match over the channel",
+            "tested: a let testing one form of the channel",
+            "tested: a let testing one form of the channel",
+            "tested: matches! testing one form of the channel",
+            "mine: a catch-all arm in a match over the channel",
+        ]
+    );
 }
 
 // ---- game and engine names ----

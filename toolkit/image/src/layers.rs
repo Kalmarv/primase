@@ -171,7 +171,13 @@ fn without_layer_alpha(w: &World, l: &LayeredMaterial) -> Option<(Vec<Channel>, 
                     Channel::Product { sources: rest }
                 };
             }
-            _ => continue,
+            // the alpha is no lone factor of the channel: it stays in the weight, evaluated at the vertices
+            Channel::Source(_)
+            | Channel::Product { .. }
+            | Channel::Lerp { .. }
+            | Channel::Threshold { .. }
+            | Channel::Power { .. }
+            | Channel::Expression(_) => continue,
         }
         left.push(k);
     }

@@ -5,8 +5,9 @@
 //! - **Sources**: a vertex source is its interpolated attribute: `COLOR_<n>` (the save stage's float copy, RGBA), or
 //!   a UV set as `(u, v, 0, 1)` in core's frame (Blender's `v` flipped back). A mask source is its texture sampled as
 //!   stored values (`Non-Color`) with its own UV set, wrap, transform and filters, `dot(rgba, channels) + bias`.
-//! - **Channels**: lerp, threshold (clamped to 0 to 1), power (by squaring for a power of two, else multiplying `v` in
-//!   from the left: core's order) and product, as core evaluates them; without channels, the attribute's own four.
+//! - **Channels**: every channel, named form or expression, as the operations of its expression in their order
+//!   (`Channel::expression`): add, subtract, multiply, min and max as Math nodes, saturate as a Clamp to 0 to 1;
+//!   without channels, the attribute's own four.
 //! - **Mapping and composition**: identity or `rgb_product_4`; sum, over (`w_i prod_{j>i}(1 - w_j)`, slot 0 at full
 //!   weight) and height (`u_i / sum u`, Cycles' division giving 0 where the sum is 0: the blend has no weight there
 //!   and draws black, this writer's statement of core's open case).
@@ -21,15 +22,15 @@
 //! stream and UV set it reads in the primitive as `scene.glb` carries it, and every mask texture sampled. Elsewhere the
 //! host is drawn alone, as core states for a target that does not draw the blend, counted by the reason.
 
-use primase_core::layered::{Channel, Composition, Source};
+use primase_core::layered::{Channel, Composition, Source, Term};
 use primase_core::pbr::PbrMaterial;
-use primase_core::{LayeredMaterial, Semantic, VertexColor, WeightMapping, World};
+use primase_core::{Entity, LayeredMaterial, Semantic, VertexColor, WeightMapping, World};
 use serde_json::json;
 
 use super::pbr::{self, Surface};
 use super::texture::{Coordinates, Reading, Sampler};
 use super::{Float, Graph, Settings, Socket, Vec3};
-use crate::Result;
+use crate::{Error, Result};
 
 /// Why a blend is not drawn for a primitive: its host is drawn instead.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -173,48 +174,45 @@ fn vertex(g: &mut Graph, semantic: Semantic) -> [Float; 4] {
     }
 }
 
-/// A channel's value per pixel.
-fn channel(s: &mut Sampler, g: &mut Graph, c: &Channel) -> Result<Float> {
-    let v: Vec<Float> = c
-        .sources()
-        .into_iter()
+/// A channel's value per pixel: the operations of its expression ([`Channel::expression`]), so a named form is drawn
+/// as core evaluates it and an expression alike.
+fn channel(s: &mut Sampler, g: &mut Graph, entity: Entity, c: &Channel) -> Result<Float> {
+    let e = c.expression().map_err(|e| Error::World {
+        entity,
+        detail: format!("core.layered weight channel: {e}"),
+    })?;
+    let v: Vec<Float> = e
+        .sources
+        .iter()
         .map(|src| source(s, g, src))
         .collect::<Result<_>>()?;
-    Ok(match c {
-        Channel::Source(_) => v[0],
-        Channel::Lerp { .. } => {
-            let d = g.sub(v[1], v[0]);
-            let t = g.mul(d, v[2]);
-            g.add(v[0], t)
-        }
-        Channel::Threshold { k, .. } => {
-            let (a, m) = (v[0], v[1]);
-            let am = g.mul(a, m);
-            let mut x = Float::Const(k[0]);
-            for (term, f) in [(a, k[1]), (m, k[2]), (am, k[3])] {
-                let t = g.mul(term, Float::Const(f));
-                x = g.add(x, t);
-            }
-            g.clamp01(x)
-        }
-        Channel::Power { exponent, .. } => {
-            let e = *exponent;
-            if e.is_power_of_two() {
-                (0..e.trailing_zeros()).fold(v[0], |x, _| g.mul(x, x))
-            } else {
-                (1..e).fold(v[0], |x, _| g.mul(x, v[0]))
-            }
-        }
-        Channel::Product { sources } => v[1..sources.len()].iter().fold(v[0], |p, x| g.mul(p, *x)),
-    })
+    let mut t: Vec<Float> = Vec::with_capacity(e.terms.len());
+    for term in &e.terms {
+        let at = |k: &u8| t[usize::from(*k)];
+        let x = match term {
+            Term::Constant(x) => Float::Const(*x),
+            Term::Source(i) => v[usize::from(*i)],
+            Term::Add([a, b]) => g.add(at(a), at(b)),
+            Term::Subtract([a, b]) => g.sub(at(a), at(b)),
+            Term::Multiply([a, b]) => g.mul(at(a), at(b)),
+            Term::Min([a, b]) => g.math("MINIMUM", &[at(a), at(b)]),
+            Term::Max([a, b]) => g.math("MAXIMUM", &[at(a), at(b)]),
+            Term::Saturate(a) => g.clamp01(at(a)),
+        };
+        t.push(x);
+    }
+    Ok(*t.last().expect("a canonical expression has terms"))
 }
 
 /// The slot weights per pixel, one per slot.
-fn weights(s: &mut Sampler, g: &mut Graph, l: &LayeredMaterial) -> Result<Vec<Float>> {
+fn weights(s: &mut Sampler, g: &mut Graph, entity: Entity, l: &LayeredMaterial) -> Result<Vec<Float>> {
     let slots = l.layers.len();
     let inputs = l.weights.mapping.inputs(slots);
     let raw: Vec<Float> = match &l.weights.channels {
-        Some(channels) => channels.iter().map(|c| channel(s, g, c)).collect::<Result<_>>()?,
+        Some(channels) => channels
+            .iter()
+            .map(|c| channel(s, g, entity, c))
+            .collect::<Result<_>>()?,
         None => vertex(g, l.weights.attribute)[..inputs.min(4)].to_vec(),
     };
     let one = Float::Const(1.0);
@@ -265,16 +263,18 @@ fn weights(s: &mut Sampler, g: &mut Graph, l: &LayeredMaterial) -> Result<Vec<Fl
     Ok(w)
 }
 
-/// The graph of layered material `l` with host `host`, on a primitive that carries `COLOR_0` where `color0`.
+/// The graph of layered material `l` (entity `entity`) with host `host`, on a primitive that carries `COLOR_0` where
+/// `color0`.
 pub fn graph(
     s: &mut Sampler,
     world: &World,
+    entity: Entity,
     l: &LayeredMaterial,
     host: &PbrMaterial,
     color0: bool,
 ) -> Result<(Graph, Settings)> {
     let mut g = Graph::new();
-    let w = weights(s, &mut g, l)?;
+    let w = weights(s, &mut g, entity, l)?;
     let weights_read_color0 = l.reads(Semantic::Color(0));
     let mut sum = Blend::default();
     let normal = Vec3::Out(g.input_node("ShaderNodeNewGeometry", "Normal"));
