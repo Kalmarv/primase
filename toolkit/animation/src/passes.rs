@@ -216,6 +216,10 @@ impl Pass for EvaluateClip {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PoseSkin;
 
+/// Primitives whose positions their morph targets moved while their point streams ([`primase_core::Semantic::Point`])
+/// stayed: a target states position deltas only, none for a point.
+pub const MORPHED_POINTS: &str = "primitives whose morph targets moved their positions and left their point streams (targets state position deltas only)";
+
 impl Pass for PoseSkin {
     fn name(&self) -> &'static str {
         "pose-skin"
@@ -290,7 +294,12 @@ impl Pass for PoseSkin {
             for (i, mut p) in posed.primitives_mut().enumerate() {
                 let mut v = Vertices::of(&p).map_err(|x| format!("{drawn:?} primitive {i}: {}", x.0))?;
                 if let Some(m) = &morphs {
-                    v = apply_morphs(&v, i, m, &weights).map_err(|x| x.0)?;
+                    let morphed = apply_morphs(&v, i, m, &weights).map_err(|x| x.0)?;
+                    // a target states position deltas only: a point stream (a pivot) stays where it was
+                    if !v.points.is_empty() && morphed.positions != v.positions {
+                        log.approximate(MORPHED_POINTS, 1);
+                    }
+                    v = morphed;
                 }
                 if let Some((skin, binding, model)) = &skinning
                     && let (Some(Some(how)), Some(Some(palette))) =
