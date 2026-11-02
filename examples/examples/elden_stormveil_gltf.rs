@@ -122,7 +122,7 @@ fn preparation() -> Result<AreaPreparation, Error> {
             blocker_cards: Cards::Record,
             speedtree_frame: SpeedTreeFrame::Program,
         },
-        lod: SelectLod { choice: LodChoice::Finest },
+        lod: Some(SelectLod { choice: LodChoice::Finest }),
         environment: LowerFromSoftEnvironment::new(Factor::new(1.)?),
         resolve_shaders: ResolveFromSoftShaders::new(Unbound::Preview),
         lower_materials: LowerFromSoftMaterials::new(Some(Layers::Preserve), Srgba8([48, 98, 122, 190])),

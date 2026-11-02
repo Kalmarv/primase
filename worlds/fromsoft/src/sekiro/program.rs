@@ -133,8 +133,9 @@ pub struct AreaPreparation {
     pub object_collision: LowerFromSoftObjectCollision,
     /// The geometry. Its `uv-tiling` must be `keep`: the surface bake reads the authored UVs.
     pub geometry: LowerFromSoftGeometry,
-    /// The level of detail each prototype keeps.
-    pub lod: SelectLod,
+    /// The level of detail each prototype keeps. None: every form stays (`core.lods`), for a program that draws the
+    /// forms itself and chooses among them as it views them.
+    pub lod: Option<SelectLod>,
     /// The draw-param environment.
     pub environment: LowerFromSoftEnvironment,
     /// Each material's game program bound, before the first pass that consumes the source materials: the bakes read
@@ -185,8 +186,8 @@ impl AreaPreparation {
         texts.extend([
             "fromsoft-apply-rigid-skinning".to_owned(),
             pass_text(&self.geometry),
-            pass_text(&self.lod),
         ]);
+        texts.extend(self.lod.as_ref().map(|lod| pass_text(lod)));
         if let Some(sample) = &self.draw_params {
             texts.push(pass_text(sample));
         }

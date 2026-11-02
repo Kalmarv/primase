@@ -171,9 +171,9 @@ fn area(materials: Materials, read_states: bool, sky: bool) -> AreaPreparation {
             reach: Some(metres(50.)),
         },
         geometry: area_geometry(leave_out),
-        lod: SelectLod {
+        lod: Some(SelectLod {
             choice: LodChoice::Finest,
-        },
+        }),
         environment: LowerFromSoftEnvironment::new(Factor::new(1.).unwrap()),
         resolve_shaders: resolve(),
         lower_materials: lower_materials(materials),
@@ -441,6 +441,18 @@ fn the_stated_values_give_the_pass_lists_the_builders_fixed() {
         "name-fromsoft-entities{game=elden}",
     ]);
     assert_eq!(canonical(&clip.texts()), canonical(&clip_was));
+}
+
+#[test]
+fn an_area_that_keeps_every_level_of_detail_selects_none() {
+    let mut every = elden(false);
+    every.lod = None;
+    let texts = every.texts().unwrap();
+    assert!(!texts.iter().any(|t| t.starts_with("select-lod")), "{texts:?}");
+    let mut one = elden(false).texts().unwrap();
+    one.retain(|t| t != "select-lod{form=finest}");
+    assert_eq!(texts, one);
+    parses_and_orders(&texts);
 }
 
 #[test]
