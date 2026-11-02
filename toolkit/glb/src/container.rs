@@ -5,6 +5,8 @@
     clippy::cast_possible_truncation
 )]
 
+use std::io::Write;
+
 use crate::{Error, Result};
 
 const MAGIC: u32 = 0x4654_6C67; // "glTF"
@@ -116,37 +118,94 @@ pub(crate) fn json_chunk_length(head: &[u8; 20]) -> Result<u32> {
 /// Assemble a GLB from the JSON text and the binary buffer, padding the JSON with spaces and the buffer with zeros
 /// to 4 bytes. An empty `bin` writes no BIN chunk.
 pub fn assemble(json: &[u8], bin: &[u8]) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    write_glb(&mut out, json, bin.len(), |out| -> Result<()> {
+        out.write_all(bin).map_err(|source| Error::Stream { source })
+    })?;
+    Ok(out)
+}
+
+/// [`assemble`]'s bytes written to `out`, the binary buffer's `bin_len` bytes written by `bin` when the BIN chunk's
+/// data is due, so a writer that streams a file never holds the GLB whole. `bin` writes exactly `bin_len` bytes (an
+/// [`Error::Glb`] otherwise, the file then not a GLB); the padding is written here. Returns the GLB's length.
+pub fn write_glb<E: From<Error>>(
+    out: &mut dyn Write,
+    json: &[u8],
+    bin_len: usize,
+    bin: impl FnOnce(&mut dyn Write) -> std::result::Result<(), E>,
+) -> std::result::Result<u64, E> {
     let json_len = json.len().next_multiple_of(4);
-    let bin_len = bin.len().next_multiple_of(4);
+    let padded_bin = bin_len.next_multiple_of(4);
     // the header, the JSON chunk's header and its data, the BIN chunk's when there is one
     let parts = [
         20,
         json_len,
-        if bin.is_empty() {
+        if bin_len == 0 {
             0
         } else {
-            bin_len.saturating_add(8)
+            padded_bin.saturating_add(8)
         },
     ];
     let total = parts.iter().fold(0u64, |t, &p| t.saturating_add(p as u64));
     let too_large = || Error::TooLarge { bytes: total };
     let header = |n: usize| u32::try_from(n).map_err(|_| too_large());
     let total32 = u32::try_from(total).map_err(|_| too_large())?;
-    let mut out = Vec::with_capacity(total32 as usize);
+    let io = |source: std::io::Error| Error::Stream { source };
+    let mut head = Vec::with_capacity(20);
     for v in [MAGIC, 2, total32, header(json_len)?, CHUNK_JSON] {
-        out.extend_from_slice(&v.to_le_bytes());
+        head.extend_from_slice(&v.to_le_bytes());
     }
-    // the headers before each chunk's data are 4-byte multiples, so padding the file pads the chunk
-    out.extend_from_slice(json);
-    out.resize(out.len().next_multiple_of(4), b' ');
-    if !bin.is_empty() {
-        out.extend_from_slice(&header(bin_len)?.to_le_bytes());
-        out.extend_from_slice(&CHUNK_BIN.to_le_bytes());
-        out.extend_from_slice(bin);
-        out.resize(out.len().next_multiple_of(4), 0);
+    out.write_all(&head).map_err(io)?;
+    // the headers before each chunk's data are 4-byte multiples, so padding a chunk's data pads the file
+    out.write_all(json).map_err(io)?;
+    out.write_all(&vec![b' '; json_len.saturating_sub(json.len())])
+        .map_err(io)?;
+    if bin_len > 0 {
+        let mut head = header(padded_bin)?.to_le_bytes().to_vec();
+        head.extend_from_slice(&CHUNK_BIN.to_le_bytes());
+        out.write_all(&head).map_err(io)?;
+        let mut counted = Counted::new(&mut *out);
+        bin(&mut counted)?;
+        if counted.written() != bin_len as u64 {
+            return Err(Error::Glb {
+                offset: 28_usize.saturating_add(json_len),
+                detail: format!(
+                    "the binary chunk's data is {} bytes, not the {bin_len} stated",
+                    counted.written()
+                ),
+            }
+            .into());
+        }
+        out.write_all(&vec![0; padded_bin.saturating_sub(bin_len)])
+            .map_err(io)?;
     }
-    debug_assert_eq!(out.len() as u64, total);
-    Ok(out)
+    Ok(total)
+}
+
+/// A writer that counts the bytes it passes on.
+pub(crate) struct Counted<'a> {
+    out: &'a mut dyn Write,
+    written: u64,
+}
+
+impl<'a> Counted<'a> {
+    pub(crate) fn new(out: &'a mut dyn Write) -> Self {
+        Counted { out, written: 0 }
+    }
+    pub(crate) fn written(&self) -> u64 {
+        self.written
+    }
+}
+
+impl Write for Counted<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.out.write(buf)?;
+        self.written = self.written.saturating_add(n as u64);
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.out.flush()
+    }
 }
 
 /// A GLB held as its two parts, to be changed by several stages and assembled once: the JSON document and the
@@ -222,6 +281,47 @@ mod tests {
         cut[8..12].copy_from_slice(&n.to_le_bytes());
         let e = parse(&cut).unwrap_err().to_string();
         assert!(e.contains("truncated chunk header"), "{e}");
+    }
+
+    /// A buffer whose views' bytes are written with it streams as the GLB of the same views held: the same views and
+    /// the same bytes. A deferred view written short is refused, and the held bytes of a buffer with one are not given.
+    #[test]
+    fn deferred_views_stream_as_the_glb_of_the_views_held() {
+        let parts: [(&[u8], bool); 4] = [
+            (&[1, 2, 3], false),
+            (&[4; 5], true),
+            (&[7; 6], false),
+            (&[8, 9], true),
+        ];
+        let (mut held, mut streamed) = (crate::Buffers::default(), crate::Buffers::default());
+        for (bytes, defer) in parts {
+            held.view(bytes, None);
+            match defer {
+                true => streamed.deferred_view(bytes.len(), None),
+                false => streamed.view(bytes, None),
+            };
+        }
+        assert_eq!(streamed.views, held.views);
+        assert_eq!(streamed.len(), held.len());
+        assert!(streamed.bytes().is_err());
+        let deferred: Vec<&[u8]> = parts.iter().filter(|(_, d)| *d).map(|(b, _)| *b).collect();
+        let json = br#"{"asset":{"version":"2.0"}}"#;
+        let mut out = Vec::new();
+        let n = write_glb(&mut out, json, streamed.len(), |out| {
+            streamed.write_bin(out, |i, out| -> Result<()> {
+                out.write_all(deferred[i])
+                    .map_err(|source| Error::Stream { source })
+            })
+        })
+        .unwrap();
+        assert_eq!(out, assemble(json, held.bytes().unwrap()).unwrap());
+        assert_eq!(n, out.len() as u64);
+        let short = write_glb(&mut Vec::new(), json, streamed.len(), |out| {
+            streamed.write_bin(out, |_, out| -> Result<()> {
+                out.write_all(&[0]).map_err(|source| Error::Stream { source })
+            })
+        });
+        assert!(short.unwrap_err().to_string().contains("deferred view 0"));
     }
 
     /// The first 20 bytes give the JSON chunk's length; anything but a GLB whose first chunk is JSON is refused.

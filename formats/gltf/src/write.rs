@@ -108,7 +108,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use primase_core::json::f32s_value;
-use primase_glb::{Buffers, Document, ElementType, PrimitiveAccessors};
+use primase_glb::{Buffers, ElementType, PrimitiveAccessors};
 
 use crate::{Error, Result};
 
@@ -138,8 +138,9 @@ pub struct WriteOptions {
     /// ([`Drawn::variants`]).
     pub all_variants: bool,
     /// How many threads encode the images ([`primase_core::parallel`]): with more than one, every image a material
-    /// binds is encoded up front, at most this many at once, the same bytes in the same order as one at a time.
-    /// Default one.
+    /// binds is encoded up front, this many at once, twice as many in hand, each PNG spooled as it is made (to a file
+    /// beside the one [`write_file`] writes) until the binary chunk takes it: the same bytes in the same order as one
+    /// at a time. Default one.
     pub threads: primase_foundations::parallel::Threads,
     /// The caller has verified the world's components ([`World::verify_components`]) and left it unchanged since: the
     /// writer does not verify them again. By default it does, at its entry: it indexes by what the verifiers state
@@ -410,6 +411,61 @@ const EXPRESSED_TEXTURE: &[&str] = &[Name::NAME, TextureFile::NAME, Texture::NAM
 
 /// Write the world as GLB bytes.
 pub fn write(world: &World, options: &WriteOptions) -> Result<(Vec<u8>, WriteReport)> {
+    let mut bytes = Vec::new();
+    let report = write_glb(world, options, &mut bytes, &mut std::io::Cursor::new(Vec::new()))?;
+    Ok((bytes, report))
+}
+
+/// Where each image's PNG waits, from its one encoding until the binary chunk takes it: a file beside the GLB a
+/// [`write_file`] writes, memory for [`write`]'s bytes.
+trait Spool: std::io::Read + std::io::Write + std::io::Seek {}
+impl<T: std::io::Read + std::io::Write + std::io::Seek> Spool for T {}
+
+/// An image's PNG in the spool: where it starts, its length (the document's view of it) and its hash (which images
+/// are the same).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Spooled {
+    at: u64,
+    len: usize,
+    hash: [u8; 32],
+}
+
+/// Append `png` to the spool.
+fn spool_png(spool: &mut dyn Spool, png: &[u8]) -> Result<Spooled> {
+    let stream = |source| primase_glb::Error::Stream { source };
+    let at = spool.seek(std::io::SeekFrom::End(0)).map_err(stream)?;
+    spool.write_all(png).map_err(stream)?;
+    Ok(Spooled {
+        at,
+        len: png.len(),
+        hash: Sha256::digest(png).into(),
+    })
+}
+
+/// Copy a spooled PNG to `out`.
+fn copy_spooled(spool: &mut dyn Spool, image: Spooled, out: &mut dyn std::io::Write) -> Result<()> {
+    let stream = |source| primase_glb::Error::Stream { source };
+    spool.seek(std::io::SeekFrom::Start(image.at)).map_err(stream)?;
+    let mut buffer = vec![0; image.len.min(1 << 20)];
+    let mut left = image.len;
+    while left > 0 {
+        let chunk = buffer.get_mut(..left.min(1 << 20)).unwrap_or_default();
+        spool.read_exact(chunk).map_err(stream)?;
+        out.write_all(chunk).map_err(stream)?;
+        left -= chunk.len();
+    }
+    Ok(())
+}
+
+/// The GLB of `world` written to `out` as it is made: the document, then the binary chunk, each image's PNG copied
+/// in from `spool`, where its one encoding put it, so the writer never holds the GLB whole nor, writing a file, its
+/// images together.
+fn write_glb(
+    world: &World,
+    options: &WriteOptions,
+    out: &mut dyn std::io::Write,
+    spool: &mut dyn Spool,
+) -> Result<WriteReport> {
     if !options.verified
         && let Some((name, entity, detail)) = world.verify_components().into_iter().next()
     {
@@ -451,24 +507,43 @@ pub fn write(world: &World, options: &WriteOptions) -> Result<(Vec<u8>, WriteRep
         morph_targets: BTreeMap::new(),
         animations: Vec::new(),
         drawn: BTreeMap::new(),
-        encoded: BTreeMap::new(),
+        spool,
+        spooled: BTreeMap::new(),
+        deferred: Vec::new(),
     };
-    let json = w.document()?;
-    let bytes = Document::new(json, std::mem::take(&mut w.buffers.bin)).to_glb()?;
-    w.report.glb_bytes = bytes.len() as u64;
-    Ok((bytes, w.report))
+    let json = serde_json::to_vec(&w.document()?).map_err(primase_glb::Error::from)?;
+    let Writer {
+        buffers,
+        spool,
+        deferred,
+        mut report,
+        ..
+    } = w;
+    report.glb_bytes = primase_glb::write_glb(out, &json, buffers.len(), |out| {
+        buffers.write_bin(out, |n, out| {
+            let image = *deferred.get(n).ok_or_else(|| Error::Invalid {
+                item: format!("image {n}"),
+                detail: "a deferred view with no image".into(),
+            })?;
+            copy_spooled(&mut *spool, image, out)
+        })
+    })?;
+    Ok(report)
 }
 
 /// With threads: every texture that a material reached from `places` (the placements written,
-/// [`World::closure`]) binds in a `pbr.material`'s slots, and that the writer could embed,
-/// encoded (or the encoder's error) on the stated threads, for [`Writer::image`] to take instead of encoding it then.
-fn preencode(
+/// [`World::closure`]) binds in a `pbr.material`'s slots, and that the writer could embed, encoded (or the encoder's
+/// error) on the stated threads, twice as many at a time, each PNG spooled as it is made, for [`Writer::image`] to
+/// take instead of encoding it then.
+fn prespool(
     world: &World,
     options: &WriteOptions,
     places: &[Place],
-) -> BTreeMap<Entity, std::result::Result<Vec<u8>, String>> {
+    spool: &mut dyn Spool,
+) -> Result<BTreeMap<Entity, std::result::Result<Spooled, String>>> {
+    let mut spooled = BTreeMap::new();
     if options.threads.get() < 2 {
-        return BTreeMap::new();
+        return Ok(spooled);
     }
     let reached = world.closure(places.iter().map(|p| p.entity));
     let mut bound = BTreeSet::new();
@@ -488,28 +563,63 @@ fn preencode(
         .collect();
     // the largest first, so the longest encodings do not start last; each image's bytes are its own either way
     todo.sort_by_key(|(e, t)| (std::cmp::Reverse(u64::from(t.width) * u64::from(t.height)), *e));
-    match primase_foundations::parallel::map(options.threads, &todo, |_, (_, t)| {
-        primase_image::texture_level_png(t, 0).map_err(|e| e.to_string())
-    }) {
-        Ok(done) => todo.iter().map(|(e, _)| *e).zip(done).collect(),
-        // a panicking encoder: each image is encoded when it is reached instead, where the error is its own
-        Err(_) => BTreeMap::new(),
+    for window in todo.chunks(2 * options.threads.get()) {
+        let Ok(done) = primase_foundations::parallel::map(options.threads, window, |_, (_, t)| {
+            primase_image::texture_level_png(t, 0).map_err(|e| e.to_string())
+        }) else {
+            // a panicking encoder: each image left is encoded when it is reached instead, where the error is its own
+            return Ok(spooled);
+        };
+        for ((e, _), png) in window.iter().zip(done) {
+            let image = match png {
+                Ok(png) => Ok(spool_png(spool, &png)?),
+                Err(detail) => Err(detail),
+            };
+            spooled.insert(*e, image);
+        }
     }
+    Ok(spooled)
 }
 
-/// Write the world to a GLB file.
+/// Write the world to a GLB file. Its images' PNGs wait in a file beside it (`<file>.spool`, removed when the writer
+/// returns) until the binary chunk takes them.
 #[allow(
     clippy::disallowed_methods,
     clippy::disallowed_types,
-    reason = "writer I/O: writes the GLB file"
+    reason = "writer I/O: writes the GLB file and its spool"
 )]
 pub fn write_file(world: &World, options: &WriteOptions, path: &Path) -> Result<WriteReport> {
-    let (bytes, report) = write(world, options)?;
-    std::fs::write(path, bytes).map_err(|source| Error::Io {
-        path: path.to_owned(),
-        source,
-    })?;
-    Ok(report)
+    let io = |at: &Path| {
+        let at = at.to_owned();
+        move |source| Error::Io { path: at, source }
+    };
+    let mut spool_name = path.file_name().unwrap_or_default().to_owned();
+    spool_name.push(".spool");
+    let spool_path = path.with_file_name(spool_name);
+    let mut spool = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&spool_path)
+        .map_err(io(&spool_path))?;
+    let written = std::fs::File::create(path).map_err(io(path)).and_then(|file| {
+        let mut file = std::io::BufWriter::new(file);
+        let report = write_glb(world, options, &mut file, &mut spool)?;
+        use std::io::Write;
+        file.flush().map_err(io(path))?;
+        Ok(report)
+    });
+    drop(spool);
+    let _ = std::fs::remove_file(&spool_path);
+    if written.is_err() {
+        // what was written is no GLB: the file is not left as one
+        let _ = std::fs::remove_file(path);
+    }
+    written.map_err(|e| match e {
+        Error::Glb(primase_glb::Error::Stream { source }) => io(path)(source),
+        e => e,
+    })
 }
 
 /// A placement to write as one node.
@@ -545,9 +655,13 @@ enum GroupKey {
 
 struct Writer<'w> {
     world: &'w World,
+    /// Where each image's PNG waits from its encoding until the binary chunk takes it.
+    spool: &'w mut dyn Spool,
     options: &'w WriteOptions,
-    /// The images encoded up front ([`preencode`]), taken as they are reached.
-    encoded: BTreeMap<Entity, std::result::Result<Vec<u8>, String>>,
+    /// The images encoded and spooled up front ([`prespool`]), taken as they are reached.
+    spooled: BTreeMap<Entity, std::result::Result<Spooled, String>>,
+    /// The images the binary chunk holds, in the order of their (deferred) views: copied in from the spool.
+    deferred: Vec<Spooled>,
     report: WriteReport,
     /// The binary buffer, its views and accessors.
     buffers: Buffers,
@@ -607,7 +721,7 @@ struct MorphAccessors {
 impl Writer<'_> {
     fn document(&mut self) -> Result<Value> {
         let places = self.places()?;
-        self.encoded = preencode(self.world, self.options, &places);
+        self.spooled = prespool(self.world, self.options, &places, &mut *self.spool)?;
         let mut nodes: Vec<Value> = Vec::new();
         let mut groups: BTreeMap<GroupKey, Vec<usize>> = BTreeMap::new();
         let mut roots: Vec<usize> = Vec::new();
@@ -782,8 +896,8 @@ impl Writer<'_> {
                 root.insert(key.into(), Value::Array(list));
             }
         }
-        if !self.buffers.bin.is_empty() {
-            root.insert("buffers".into(), json!([{"byteLength": self.buffers.bin.len()}]));
+        if !self.buffers.is_empty() {
+            root.insert("buffers".into(), json!([{"byteLength": self.buffers.len()}]));
         }
         Ok(Value::Object(root))
     }
@@ -1416,7 +1530,7 @@ impl Writer<'_> {
             w.image_of_entity.insert(e, None);
             Ok(None)
         };
-        let (bytes, image_name) = if let Some(texture) = self.world.get::<Texture>(e) {
+        let (png, image_name) = if let Some(texture) = self.world.get::<Texture>(e) {
             if texture.role == primase_core::TexRole::Normal
                 && texture.normal != Some(primase_core::NormalConvention::GLTF)
             {
@@ -1437,14 +1551,17 @@ impl Writer<'_> {
                 self.image_of_entity.insert(e, None);
                 return Ok(None);
             }
-            let bytes = match self.encoded.remove(&e) {
-                Some(encoded) => encoded.map_err(|detail| Error::World { entity: e, detail })?,
-                None => primase_image::texture_level_png(texture, 0).map_err(|error| Error::World {
-                    entity: e,
-                    detail: error.to_string(),
-                })?,
+            let spooled = match self.spooled.remove(&e) {
+                Some(spooled) => spooled.map_err(|detail| Error::World { entity: e, detail })?,
+                None => {
+                    let png = primase_image::texture_level_png(texture, 0).map_err(|error| Error::World {
+                        entity: e,
+                        detail: error.to_string(),
+                    })?;
+                    spool_png(&mut *self.spool, &png)?
+                }
             };
-            (bytes, self.name_of(e, "image"))
+            (spooled, self.name_of(e, "image"))
         } else if self.world.has::<TextureFile>(e) {
             // a reader's load step makes the pixels (primase_image::load_textures); the writer reads no file
             return skip(self, "texture files not loaded");
@@ -1454,21 +1571,21 @@ impl Writer<'_> {
                 detail: "texture entity with neither core.texture_file nor core.texture".into(),
             });
         };
-        let hash: [u8; 32] = Sha256::digest(&bytes).into();
         let data = self
             .world
             .get::<Texture>(e)
             .is_some_and(|t| t.role == primase_core::TexRole::Data);
-        let index = match self.image_by_hash.get(&(hash, data)) {
+        let index = match self.image_by_hash.get(&(png.hash, data)) {
             Some(&i) => i,
             None => {
-                let view = self.buffers.view(&bytes, None);
+                let view = self.buffers.deferred_view(png.len, None);
+                self.deferred.push(png);
                 self.images
                     .push(json!({"name": image_name, "mimeType": "image/png", "bufferView": view}));
                 self.report.images += 1;
-                self.report.image_bytes += bytes.len() as u64;
+                self.report.image_bytes += png.len as u64;
                 let i = self.images.len() - 1;
-                self.image_by_hash.insert((hash, data), i);
+                self.image_by_hash.insert((png.hash, data), i);
                 i
             }
         };

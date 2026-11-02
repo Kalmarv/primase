@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use primase_core::Entity;
 
-pub use container::{Chunks, Document, assemble, parse};
+pub use container::{Chunks, Document, assemble, parse, write_glb};
 pub use encode::{Buffers, EncodedMesh, PrimitiveAccessors, encode_mesh};
 pub use json::Extensions;
 pub use load::{LoadReport, load_mesh_files, mesh_file_box};
@@ -60,6 +60,9 @@ pub enum Error {
     /// primitives).
     #[error("entity {entity:?}: {detail}")]
     World { entity: Entity, detail: String },
+    /// The GLB could not be written to its destination ([`write_glb`]).
+    #[error("writing the GLB: {source}")]
+    Stream { source: std::io::Error },
     /// Over glTF's 4 GiB GLB limit.
     #[error("GLB would be {bytes} bytes, over the 4 GiB limit")]
     TooLarge { bytes: u64 },

@@ -22,15 +22,29 @@ const ARRAY_BUFFER: u32 = 34962;
 const ELEMENT_ARRAY_BUFFER: u32 = 34963;
 
 /// A document's binary buffer as it is built: the bytes, their buffer views and the accessors over them, each list
-/// in the order things were added, so the same additions give the same bytes.
+/// in the order things were added, so the same additions give the same bytes. A view's bytes are held from when it is
+/// added ([`Buffers::view`]), or stated by their length and written when the buffer is ([`Buffers::deferred_view`],
+/// [`Buffers::write_bin`]), so a writer streaming a large buffer need not hold its largest parts (encoded images)
+/// together.
 #[derive(Clone, Debug, Default)]
 pub struct Buffers {
-    /// Buffer 0's bytes (each view starts 4-byte aligned).
-    pub bin: Vec<u8>,
+    /// Buffer 0's bytes but the deferred views' (each view starts 4-byte aligned).
+    bin: Vec<u8>,
+    /// The deferred views, in the order they were added: where in `bin` each one's bytes go, and how many there are.
+    deferred: Vec<Deferred>,
+    /// The deferred views' bytes, together.
+    deferred_len: usize,
     /// The document's `bufferViews`.
     pub views: Vec<Value>,
     /// The document's `accessors`.
     pub accessors: Vec<Value>,
+}
+
+/// A view whose bytes are written with the buffer: `len` of them, before `bin[at]`.
+#[derive(Clone, Copy, Debug)]
+struct Deferred {
+    at: usize,
+    len: usize,
 }
 
 /// The accessors of one encoded primitive.
@@ -48,19 +62,91 @@ pub struct PrimitiveAccessors {
 }
 
 impl Buffers {
+    /// The buffer's length, the deferred views' bytes included.
+    pub fn len(&self) -> usize {
+        self.bin.len() + self.deferred_len
+    }
+
+    /// Whether the buffer holds no byte.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// A buffer view over `bytes`, appended 4-byte aligned; `target` is its `target` (vertex or index data), if any.
     pub fn view(&mut self, bytes: &[u8], target: Option<u32>) -> usize {
-        self.bin.resize(self.bin.len().next_multiple_of(4), 0);
+        let index = self.view_of(bytes.len(), target);
+        self.bin.extend_from_slice(bytes);
+        index
+    }
+
+    /// A buffer view of `len` bytes appended as [`Buffers::view`] appends one, whose bytes are not held: the `n`th
+    /// deferred view (from 0, in the order they were added) is written by [`Buffers::write_bin`]'s `fill(n)`.
+    pub fn deferred_view(&mut self, len: usize, target: Option<u32>) -> usize {
+        let index = self.view_of(len, target);
+        self.deferred.push(Deferred {
+            at: self.bin.len(),
+            len,
+        });
+        self.deferred_len += len;
+        index
+    }
+
+    /// The view of the next `len` bytes, 4-byte aligned: its padding added to `bin`.
+    fn view_of(&mut self, len: usize, target: Option<u32>) -> usize {
+        let aligned = self.len().next_multiple_of(4);
+        self.bin.resize(aligned - self.deferred_len, 0);
         let mut v = Map::new();
         v.insert("buffer".into(), json!(0));
-        v.insert("byteOffset".into(), json!(self.bin.len()));
-        v.insert("byteLength".into(), json!(bytes.len()));
+        v.insert("byteOffset".into(), json!(aligned));
+        v.insert("byteLength".into(), json!(len));
         if let Some(t) = target {
             v.insert("target".into(), json!(t));
         }
-        self.bin.extend_from_slice(bytes);
         self.views.push(Value::Object(v));
         self.views.len() - 1
+    }
+
+    /// The buffer's bytes, where no view is deferred (an [`Error::Invalid`] otherwise: they are written, not held).
+    pub fn bytes(&self) -> Result<&[u8]> {
+        match self.deferred.len() {
+            0 => Ok(&self.bin),
+            n => Err(Error::Invalid {
+                item: "buffers[0]".into(),
+                detail: format!("{n} views are written with the buffer (write_bin), not held"),
+            }),
+        }
+    }
+
+    /// [`Buffers::bytes`], taken.
+    pub fn into_bytes(self) -> Result<Vec<u8>> {
+        self.bytes()?;
+        Ok(self.bin)
+    }
+
+    /// Write the buffer's bytes to `out` in order, `fill(n, out)` writing the `n`th deferred view's bytes where they
+    /// go: exactly the length it was added with (an [`Error::Invalid`] naming the view otherwise).
+    pub fn write_bin<E: From<Error>>(
+        &self,
+        out: &mut dyn std::io::Write,
+        mut fill: impl FnMut(usize, &mut dyn std::io::Write) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(), E> {
+        let io = |source: std::io::Error| Error::Stream { source };
+        let mut from = 0;
+        for (n, d) in self.deferred.iter().enumerate() {
+            out.write_all(&self.bin[from..d.at]).map_err(io)?;
+            let mut counted = crate::container::Counted::new(&mut *out);
+            fill(n, &mut counted)?;
+            if counted.written() != d.len as u64 {
+                return Err(Error::Invalid {
+                    item: format!("buffers[0] deferred view {n}"),
+                    detail: format!("{} bytes written, {} stated", counted.written(), d.len),
+                }
+                .into());
+            }
+            from = d.at;
+        }
+        out.write_all(&self.bin[from..]).map_err(io)?;
+        Ok(())
     }
 
     /// Every stream and the indices of a primitive as accessors, after checking it is one glTF can hold: a float
@@ -347,10 +433,16 @@ pub fn encode_mesh(name: &str, mesh: &Mesh) -> Result<EncodedMesh> {
         ]),
     );
     root.insert("meshes".into(), json!([{"name": name, "primitives": primitives}]));
-    root.insert("accessors".into(), Value::Array(buffers.accessors));
-    root.insert("bufferViews".into(), Value::Array(buffers.views));
-    root.insert("buffers".into(), json!([{"byteLength": buffers.bin.len()}]));
-    let glb = Document::new(Value::Object(root), buffers.bin).to_glb()?;
+    root.insert(
+        "accessors".into(),
+        Value::Array(std::mem::take(&mut buffers.accessors)),
+    );
+    root.insert(
+        "bufferViews".into(),
+        Value::Array(std::mem::take(&mut buffers.views)),
+    );
+    root.insert("buffers".into(), json!([{"byteLength": buffers.len()}]));
+    let glb = Document::new(Value::Object(root), buffers.into_bytes()?).to_glb()?;
     Ok(EncodedMesh { glb, skipped })
 }
 

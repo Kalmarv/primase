@@ -790,6 +790,21 @@ fn memory_textures_embed_exact_pixels_and_require_normal_conversion() {
         .0;
         assert!(many == one, "{n} threads");
     }
+    // streamed to a file, each image encoded once and spooled beside it until the binary chunk takes it: the bytes
+    // `write` returns, on one thread or several, and no spool left behind
+    let file = scratch("memory-textures-streamed").join("streamed.glb");
+    for n in [1, 2, 8] {
+        let options = WriteOptions {
+            threads: primase_foundations::parallel::Threads::new(n).unwrap(),
+            ..options()
+        };
+        primase_gltf::write_file(&distinct, &options, &file).unwrap();
+        assert!(std::fs::read(&file).unwrap() == one, "{n} threads, streamed");
+        assert!(
+            !file.with_file_name("streamed.glb.spool").exists(),
+            "{n} threads, spool removed"
+        );
+    }
     let n = b.world.get_mut::<Texture>(b.tex_normal).unwrap();
     n.role = TexRole::Normal;
     n.normal = Some(NormalConvention {

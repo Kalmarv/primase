@@ -175,7 +175,7 @@ pub fn write(name: &str, prims: &[GlbPrim]) -> crate::Result<Vec<u8>> {
             mat,
         });
     }
-    let byte_length = buffers.bin.len().next_multiple_of(4);
+    let byte_length = buffers.len().next_multiple_of(4);
     let gltf = GltfJson {
         asset: Asset {
             version: "2.0",
@@ -202,10 +202,10 @@ pub fn write(name: &str, prims: &[GlbPrim]) -> crate::Result<Vec<u8>> {
                 })
                 .collect(),
         }],
-        accessors: buffers.accessors,
-        buffer_views: buffers.views,
+        accessors: std::mem::take(&mut buffers.accessors),
+        buffer_views: std::mem::take(&mut buffers.views),
         buffers: [Buffer { byte_length }],
     };
     let js = crate::json_bytes(&format!("{name}.glb"), &gltf, false)?;
-    Ok(primase_glb::assemble(&js, &buffers.bin)?)
+    Ok(primase_glb::assemble(&js, buffers.bytes()?)?)
 }
