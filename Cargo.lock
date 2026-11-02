@@ -1687,7 +1687,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 [[package]]
 name = "rage-engine-formats"
 version = "0.2.0"
-source = "git+https://github.com/Kalmarv/rage-engine-formats?rev=9fe86c00c30a77febe50ed05d9a70349f30444fb#9fe86c00c30a77febe50ed05d9a70349f30444fb"
+source = "git+https://github.com/Kalmarv/rage-engine-formats?rev=b3705f7bb24c2151ae7df827f6cf9dae8be1d703#b3705f7bb24c2151ae7df827f6cf9dae8be1d703"
 dependencies = [
  "aes",
  "indexmap",
