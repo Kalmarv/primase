@@ -266,6 +266,76 @@ fn terrain_is_mapped_by_position_and_its_world_normal_becomes_a_planar_tangent_o
     assert_eq!(log.approximations["noise blend left out"], 1);
     assert!(!log.approximations.contains_key("snow left out"));
     assert_eq!(log.counts["terr_mega materials lowered"], 1);
+    // the near-field clipmap is not read: named, for terr_mega only
+    assert_eq!(
+        log.approximations["near-field ground (the clipmap of per-cell splat maps and megatexture layers) not read: the far-field colour everywhere"],
+        1
+    );
+}
+
+/// A colour map smaller than its alpha map: the albedo follows the alpha map's texels (where the markings are) and
+/// reads the colour between its own.
+#[test]
+fn terrain_albedo_follows_the_larger_map() {
+    let mut world = World::new();
+    // a 2 x 1 colour map of alpha 255 and 128: the albedo texels are the colour at full and at (128/255)^2
+    let shade = world.spawn();
+    world.insert(
+        shade,
+        Texture {
+            width: 2,
+            height: 1,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![vec![191, 64, 0, 255, 191, 64, 0, 128]],
+            color_space: ColorSpace::Linear,
+            role: TexRole::Other,
+            normal: None,
+        },
+    );
+    let albedo = texture(&mut world, "albedo", ColorSpace::Srgb, [200, 100, 50, 255]);
+    let gloss = texture(&mut world, "gloss", ColorSpace::Linear, [186, 0, 0, 255]);
+    let e = world.spawn();
+    world.insert(
+        e,
+        material(
+            "terr_distant",
+            "Default",
+            vec![
+                tex("TerrainColourTexture", 1),
+                tex("TerrainNormalTexture", 2),
+                tex("TerrainGlossTexture", 3),
+                parameter("BlendMapScale", 10, Value::Vector([0.001, -0.002, 0.0, 0.0])),
+            ],
+        ),
+    );
+    world.insert(
+        e,
+        MaterialTextures(vec![
+            bound(1, Some(shade)),
+            bound(2, Some(albedo)),
+            bound(3, Some(gloss)),
+        ]),
+    );
+    let mut log = PassLog::default();
+    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    let pbr = world.get::<PbrMaterial>(e).unwrap();
+    let lit = world
+        .get::<Texture>(pbr.base_color_texture.unwrap().texture)
+        .unwrap();
+    assert_eq!((lit.width, lit.height), (2, 1));
+    for (got, want) in lit.levels[0].iter().zip([200u8, 100, 50, 255, 106, 50, 22, 255]) {
+        assert!(got.abs_diff(want) <= 1, "{:?}", lit.levels[0]);
+    }
+    assert_eq!(
+        log.counts["terrain albedo textures baked at the alpha map's size, the colour map read between its texels"],
+        1
+    );
+    // terr_distant has no near-field ring
+    assert!(
+        !log.approximations
+            .keys()
+            .any(|k| k.starts_with("near-field ground"))
+    );
 }
 
 #[test]

@@ -22,13 +22,20 @@
 //! transform the family's `BlendMapScale` and `BlendMapOffset`); the albedo `TerrainNormalTexture.rgb` times
 //! `TerrainColourTexture.a` squared, baked into one base colour map (the squared alpha is a factor of the shader's
 //! albedo, not an occlusion term of its own: it has no scene constant, so it is not carried by the occlusion slot,
-//! which a consumer may draw as ambient occlusion or not at all), the roughness `r / 0.93` and no metal, and the normal as a
+//! which a consumer may draw as ambient occlusion or not at all; the bake follows the map with more texels, because the
+//! road markings are in the colour map's alpha: over the Shibuya box's pair the alpha holds the zebra crossings, lane
+//! lines and painted text at 2,048 texels (0.25 m) where the colour map has 1,024, and the colour is read between its
+//! texels), the roughness `r / 0.93` and no metal, and the normal as a
 //! tangent-space map over the planar coordinates (see [`Derived::WorldNormalXz`]: red `x`, green `-z`). A glTF
 //! consumer rebuilds the tangent frame from those coordinates, so the normal agrees with the shader's world-space one
 //! where the terrain faces up and tilts with the surface elsewhere (named). Left out by name: the skirt, deformable
 //! tracks, the custom surfaces, snow, noise and parallax permutations' switches; wetness, snow, sand lighting and the
 //! twinkle are run-time state.
-use super::uber_roaddecal::{decoded_levels, texel_of};
+//!
+//! `terr_mega` draws the ground near the camera from a clipmap of rings (the per-cell splat maps and the megatexture's
+//! layers) and blends the far-field colour above into its outermost ring; this lowering reads no near-field data, so the
+//! far-field colour is drawn everywhere, named per `terr_mega` material and triangle (`terr_distant` has no ring).
+use super::uber_roaddecal::{Level, decoded_levels, texel_of};
 use super::{Binding, Derived, Lowering, PLANAR_TEXCOORD, Params, approximate, left_out, seen};
 use crate::components::{ForzaMaterial, MaterialTextures, PlanarUv};
 use primase_core::pass::PassLog;
@@ -36,6 +43,43 @@ use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
 use primase_core::{ColorSpace, Entity, Name, TexRole, Texture, World};
 use primase_foundations::color::linear_to_srgb8;
 use primase_image::{TextureMetadata, map_rgba8_levels};
+
+/// What a baked terrain albedo is: sRGB colour.
+fn albedo_metadata() -> TextureMetadata {
+    TextureMetadata {
+        color_space: ColorSpace::Srgb,
+        role: TexRole::Color,
+        normal: None,
+    }
+}
+
+/// The linear colour of `level` at the texture coordinates `(u, v)` (0 to 1, the texel centres at half steps): the four
+/// nearest texels weighted by their distance, decoded from `space` first, the edge texels held beyond the edge.
+fn bilinear_linear(level: &Level, space: ColorSpace, u: f64, v: f64) -> [f64; 3] {
+    let (x, y) = (
+        u * f64::from(level.width) - 0.5,
+        v * f64::from(level.height) - 0.5,
+    );
+    let (x0, y0) = (x.floor(), y.floor());
+    let (fx, fy) = (x - x0, y - y0);
+    let at = |xi: f64, yi: f64| {
+        let cx = (xi.max(0.0) as usize).min(level.width as usize - 1);
+        let cy = (yi.max(0.0) as usize).min(level.height as usize - 1);
+        let i = (cy * level.width as usize + cx) * 4;
+        std::array::from_fn::<f64, 3, _>(|k| seen(space, level.texels.get(i + k).copied().unwrap_or(0)))
+    };
+    let (a, b, c, d) = (
+        at(x0, y0),
+        at(x0 + 1.0, y0),
+        at(x0, y0 + 1.0),
+        at(x0 + 1.0, y0 + 1.0),
+    );
+    std::array::from_fn(|k| {
+        let top = a[k] * (1.0 - fx) + b[k] * fx;
+        let bottom = c[k] * (1.0 - fx) + d[k] * fx;
+        top * (1.0 - fy) + bottom * fy
+    })
+}
 
 /// The key of a terrain albedo among the baked textures.
 const TERRAIN_ALBEDO: u32 = 0x7e44_a1b0;
@@ -73,22 +117,20 @@ impl Lowering {
             log.count("terrain albedo maps left out: no pixels", 1);
             return Ok(None);
         };
-        let shade_levels = decoded_levels(s).map_err(|e| format!("decoding a terrain colour source: {e}"))?;
-        if shade_levels.is_empty() || c.levels.is_empty() {
-            log.count("terrain albedo maps left out: no level", 1);
-            return Ok(None);
-        }
+        // the map with more texels is the one the bake follows, the other is read where it stands: the markings are in the
+        // alpha, so a larger alpha map keeps them, and the colour is read between its texels
+        let colour_first =
+            u64::from(c.width) * u64::from(c.height) >= u64::from(s.width) * u64::from(s.height);
         let resampled = (s.width, s.height) != (c.width, c.height);
         let space = c.color_space;
-        let texture = map_rgba8_levels(
-            c,
-            0..c.levels.len(),
-            TextureMetadata {
-                color_space: ColorSpace::Srgb,
-                role: TexRole::Color,
-                normal: None,
-            },
-            |texel| {
+        let texture = if colour_first {
+            let shade_levels =
+                decoded_levels(s).map_err(|e| format!("decoding a terrain colour source: {e}"))?;
+            if shade_levels.is_empty() {
+                log.count("terrain albedo maps left out: no level", 1);
+                return Ok(None);
+            }
+            map_rgba8_levels(c, 0..c.levels.len(), albedo_metadata(), |texel| {
                 let [r, g, b, _] = texel.rgba;
                 let alpha = texel_of(
                     &shade_levels,
@@ -101,8 +143,33 @@ impl Lowering {
                 let a2 = (f64::from(alpha[3]) / 255.0).powi(2);
                 let lit = |x: u8| linear_to_srgb8(seen(space, x) * a2);
                 Ok([lit(r), lit(g), lit(b), 255])
-            },
-        )
+            })
+        } else {
+            let colour_levels =
+                decoded_levels(c).map_err(|e| format!("decoding a terrain albedo source: {e}"))?;
+            if colour_levels.is_empty() {
+                log.count("terrain albedo maps left out: no level", 1);
+                return Ok(None);
+            }
+            map_rgba8_levels(s, 0..s.levels.len(), albedo_metadata(), |texel| {
+                let a2 = (f64::from(texel.rgba[3]) / 255.0).powi(2);
+                let level = colour_levels.get(texel.level).or(colour_levels.last());
+                let rgb = level.map_or([0.0; 3], |l| {
+                    bilinear_linear(
+                        l,
+                        space,
+                        (f64::from(texel.x) + 0.5) / f64::from(texel.width),
+                        (f64::from(texel.y) + 0.5) / f64::from(texel.height),
+                    )
+                });
+                Ok([
+                    linear_to_srgb8(rgb[0] * a2),
+                    linear_to_srgb8(rgb[1] * a2),
+                    linear_to_srgb8(rgb[2] * a2),
+                    255,
+                ])
+            })
+        }
         .map_err(|e| format!("baking a terrain albedo: {e}"))?;
         let name = w.get::<Name>(colour).map(|n| n.0.clone()).unwrap_or_default();
         let e = w.spawn();
@@ -114,7 +181,11 @@ impl Lowering {
         );
         if resampled {
             log.count(
-                "terrain albedo textures whose alpha map was read at the nearest texel of another size",
+                if colour_first {
+                    "terrain albedo textures baked at the colour map's size, the alpha map read at the nearest texel"
+                } else {
+                    "terrain albedo textures baked at the alpha map's size, the colour map read between its texels"
+                },
                 1,
             );
         }
@@ -220,6 +291,16 @@ impl Lowering {
             "world-space normal read as a tangent-space map over the planar coordinates",
             triangles,
         );
+        if m.shader.as_ref().is_some_and(|s| s.family == "terr_mega") {
+            // the shader blends the far-field colour into rings of a near-field clipmap (the per-cell splat maps and the
+            // megatexture's layers) around the camera, which this lowering does not read
+            approximate(
+                log,
+                e,
+                "near-field ground (the clipmap of per-cell splat maps and megatexture layers) not read: the far-field colour everywhere",
+                triangles,
+            );
+        }
         w.insert(
             e,
             PlanarUv {

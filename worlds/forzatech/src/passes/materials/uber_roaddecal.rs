@@ -77,9 +77,9 @@ fn overlay(a: f64, b: f64) -> f64 {
 
 /// One decoded level of a map: its size and its RGBA8 texels, row by row.
 pub(super) struct Level {
-    width: u32,
-    height: u32,
-    texels: Vec<u8>,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) texels: Vec<u8>,
 }
 
 /// The levels of `t` decoded to RGBA8 as stored (no colour transfer).
