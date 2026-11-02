@@ -922,12 +922,16 @@ pub struct Refraction {
     pub size: [Value; 3],
     pub uniform: bool,
     pub size_variance: [f32; 3],
-    /// Strength of the push (a function of the age); for a stir its speed in degrees per second; the fraction of the sheet's
-    /// inscribed ellipse the effect covers.
+    /// How far the picture behind is moved at the sheet's centre, in hundredths of the view (of its width across, of its
+    /// height up and down), falling to nothing at `radius` along the sheet's own coordinates: a stir and a push move it so
+    /// far, a twist turns it about the sheet's centre by so many hundredths of a radian in the view's coordinates (0 to 1
+    /// across and down). A stir's speed of turning in degrees per second. How far out the effect reaches, as a share of
+    /// the ellipse the sheet inscribes (1 is that ellipse). Each a function of the age.
     pub intensity: Value,
     pub stir_speed: Value,
     pub radius: Value,
-    /// The normal map's texture offset, scroll speed (per second) and scale along u and v.
+    /// The normal map's texture offset, scroll speed (per second) and scale along u and v: the map is read at the sheet's
+    /// coordinates plus the offset and the scroll so far, scaled about the sheet's centre.
     pub normal_offset: [Value; 2],
     pub normal_scroll: [Value; 2],
     pub normal_scale: [Value; 2],
@@ -940,9 +944,9 @@ pub struct Refraction {
 /// How a refraction sheet bends what is behind it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum RefractionMode {
-    /// Swirls the picture, turning at `stir_speed`.
+    /// Moves the picture along a direction that turns at `stir_speed`.
     Stir,
-    /// Pushes it by the normal map.
+    /// Moves it by the normal map: its x across the view and its y down it, each from -1 to 1.
     Push,
     /// Twists it about the sheet's centre while its edge stays.
     Twist,

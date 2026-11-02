@@ -873,6 +873,12 @@ impl Cx<'_> {
         let offset = self.offset3(&d.offset_x, &d.offset_y, &d.offset_z);
         let size = self.size3(&d.size_x, &d.size_y, &d.size_z, d.uniform_scale);
         let intensity = self.age(&d.intensity);
+        // core's intensity is the displacement in hundredths of the view, which is what the game's distortion programs
+        // move the picture by per unit of their strength (`g_waveStrength`, times 0.01 in uv); that the game sets the
+        // strength to the file's intensity unscaled is not read
+        self.notes.approximate(
+            "a distortion's intensity as its programs' strength (hundredths of the view; the game's scale is not read)",
+        );
         // the file stores the stir speed in radians per second; the project shows degrees
         let stir = self.age(&d.stir_speed);
         let stir_speed = value::scaled(stir, 180.0 / std::f32::consts::PI);
