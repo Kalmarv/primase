@@ -28,7 +28,10 @@ The rest of this page explains and applies these. Review checks every change aga
    library: a program lives with the project that uses it, pins primase and may register its own passes (the SkateBIRD
    conversion keeps its rail choice in its own repository). Primase takes what more than one program shares; nothing
    is forced into it. primase-lab is not such a project: it is the neutral platform that renders primase's output to
-   prove core works, so it states options and holds no reader, pass, selection or policy logic of its own.
+   prove core works, so it states options and holds no reader, pass, selection or policy logic of its own. What it
+   states to prepare a game's data is a recipe: one Rust file per recipe in `src/sources/<game>/recipes/`, which writes
+   out its passes and every value (game values included), whose arguments only fill values, and which decides nothing
+   from what it is given. Something specific is another recipe; recipes stating the same pass share its code.
 7. **Every crate keeps its role.** Core: shared meanings and machinery, no game, destination or tool names. Toolkit:
    shared mechanisms. Formats: formats that are not one game's or destination's. Worlds: one game, engine or
    destination each. Names and namespaces are owned.
