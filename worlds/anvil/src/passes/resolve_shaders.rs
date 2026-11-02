@@ -83,7 +83,7 @@ use primase_core::shader::{
     ObjectMatrix, ObjectParameter, Occluded, OutputBinding, OutputRole, ScalarEncoding, VariantKey,
     ViewParameter,
 };
-use primase_core::shader::{MaterialPrograms, ProgramFacts, bind_surface_input_fallbacks};
+use primase_core::shader::{MaterialPrograms, ProgramFacts, ProgramFrame, bind_surface_input_fallbacks};
 use primase_core::{ColorSpace, Component, Entity, MaterialVariants, Mesh, Name, Semantic, Texture, World};
 use primase_core::{
     shader::Shader, shader::ShaderBinding, shader::StageBinding, shader::TextureBinding,
@@ -691,12 +691,28 @@ impl Pass for ResolveAnvilShaders {
             Texture::NAME,
             primase_core::TextureLayers::NAME,
             Name::NAME,
+            <ProgramFrame as primase_core::Resource>::NAME,
         ]
     }
     fn approximates(&self) -> &'static str {
         "a texture binding with no texture reads white (unset-textures=white)"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let mut frames: Vec<primase_core::frame::SourceFrame> = Vec::new();
+        for (_, mesh) in world.iter::<AnvilMesh>() {
+            if !frames.contains(&mesh.frame) {
+                frames.push(mesh.frame);
+            }
+        }
+        ProgramFrame::NotConverted {
+            why: format!(
+                "Anvil: the reader converts the world out of the frame the program gives it (AnvilOptions::frame; the \
+                 format notes say x east, y north, z up, metres), here {frames:?}, so the programs compute in that \
+                 frame exactly; feeding them in it is not checked against a render, so they are fed the world's \
+                 values unconverted"
+            ),
+        }
+        .state(world)?;
         let materials: Vec<(Entity, AnvilMaterial)> = world
             .iter::<AnvilMaterial>()
             .map(|(e, m)| (e, m.clone()))

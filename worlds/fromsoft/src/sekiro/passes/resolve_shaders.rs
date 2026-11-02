@@ -18,8 +18,9 @@ use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::render_graph::{DrawBucket, RenderGraph, SceneMembers};
 use primase_core::shader::bind_output_uses;
 use primase_core::shader::{
-    FallbackCoordinates, InputFallback, InputFallbackValue, InputRole, LiftedShader, ShaderSpecialisations,
-    SpecialisationCache, StageBinding, bind_fallback_uv_copies, bind_surface_input_fallbacks,
+    FallbackCoordinates, InputFallback, InputFallbackValue, InputRole, LiftedShader, ProgramFrame,
+    ShaderSpecialisations, SpecialisationCache, StageBinding, bind_fallback_uv_copies,
+    bind_surface_input_fallbacks,
 };
 use primase_core::{
     ColorSpace, Component, DrawLayer, DrawOrder, Entity, Instance, MaterialVariants, Mesh, Name, Semantic,
@@ -238,12 +239,15 @@ impl Pass for ResolveFromSoftShaders {
             Texture::NAME,
             primase_core::TextureForms::NAME,
             Name::NAME,
+            <ProgramFrame as primase_core::Resource>::NAME,
         ]
     }
     fn approximates(&self) -> &'static str {
         "a texture slot with no texture gets a preview colour for its role (unbound-textures=preview)"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
+        // the programs compute in the game's frame, which the reader converted the world out of
+        ProgramFrame::Source(crate::pose::FRAME).state(world)?;
         let none = BTreeMap::new();
         world.resource_scope::<ShaderPrograms, _>(|world, programs| {
             world.resource_scope::<TexturePayloads, _>(|world, payloads| {

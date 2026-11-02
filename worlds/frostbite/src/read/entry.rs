@@ -6,7 +6,8 @@
 //! also names where it came from ([`FrostbiteEntry`]). An entry of any other kind or form is refused, named: nothing
 //! is guessed.
 
-use primase_core::shader::Shader;
+use primase_core::frame::SourceFrame;
+use primase_core::shader::{ProgramFrame, Shader};
 use primase_core::{
     ColorSpace, Entity, Name, TexFormat, TexRole, Texture, TextureLayers, TextureShape, World,
 };
@@ -203,6 +204,14 @@ pub fn read_entry(src: &Source<'_>, bundle: &Bundle, entry: &Listed, w: &mut Wor
             vec![e]
         }
         Read::Bytecode(programs) => {
+            // the reader converts nothing (positions are kept as stored: model space, Y up, metres, by the MeshSet
+            // bounding boxes, crate::geometry), and skate.'s frame is core's: a map's positions read back in the game
+            // in metres, +Y up, forward -Z with no axis negated, which ReSkate maps to Blender's by a rotation,
+            // (x, -z, y), so it is right-handed (engine wiki engines/frostbite/mod-loading/reskate, observed on one
+            // map). So the programs compute in the world's own frame
+            ProgramFrame::Source(SourceFrame::WORLD)
+                .state(w)
+                .map_err(Error::Unsupported)?;
             let several = programs.len() > 1;
             (programs.into_iter().enumerate())
                 .map(|(i, (shader, c))| {

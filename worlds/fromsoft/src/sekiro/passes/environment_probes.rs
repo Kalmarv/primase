@@ -377,8 +377,7 @@ impl Pass for BindFromSoftEnvironmentProbes {
         "direct two-cube blending for all environment regions; native partial preblend schedule and region exclusion masks not reproduced; reflection luminance correction omitted"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
-        use primase_core::render_graph::{LightingFrame, LightingPort, RenderGraph};
-        use primase_core::shader::NormalEncoding;
+        use primase_core::render_graph::RenderGraph;
         let mut render = world.resource::<RenderGraph>().ok_or("no source graph")?.clone();
         let index = graph::select(&mut render, world)?.ok_or("no core environment probe regions")?;
         let mut pipeline = render
@@ -388,20 +387,6 @@ impl Pass for BindFromSoftEnvironmentProbes {
         pipeline.passes.push(index);
         pipeline.passes.sort_unstable();
         pipeline.passes.dedup();
-        let normal = pipeline
-            .imports
-            .iter()
-            .find_map(|(p, v)| (*p == LightingPort::GBuffer(0)).then_some(*v))
-            .ok_or("environment has no world-normal import")?;
-        pipeline.frame = Some(LightingFrame {
-            world_from_lighting: [[1., 0., 0.], [0., 1., 0.], [0., 0., -1.]],
-            normal_inputs: vec![(
-                normal,
-                NormalEncoding::XyzBiased {
-                    bias_bits: 0x3f00_2008,
-                },
-            )],
-        });
         // the region step reads and draws over what the recorded graph drew before it
         super::render_graph::account(&render, &mut pipeline, log)?;
         for notice in [graph::DIRECT, graph::LUMINANCE, graph::MASKS] {

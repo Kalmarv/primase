@@ -352,6 +352,10 @@ pub(crate) fn read(
     report.targets = graph.targets.len();
     report.buffers = graph.buffers.len();
     world.insert_resource(graph);
+    // the programs compute in the game's frame, which the reader converts the world out of
+    primase_core::shader::ProgramFrame::Source(crate::pose::FRAME)
+        .state(world)
+        .map_err(|e| invalid(FORMAT, 0, e))?;
     Ok(())
 }
 

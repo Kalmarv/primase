@@ -43,6 +43,22 @@ impl ProgramFrame {
             ProgramFrame::NotConverted { .. } => None,
         }
     }
+
+    /// State this as the world's program frame, from a reader or pass that keeps the source's programs: inserted where
+    /// the world has none, kept where it has the same, refused where it has another (two producers of one world's
+    /// programs disagreeing on the frame they compute in).
+    pub fn state(self, world: &mut World) -> Result<(), String> {
+        match world.resource::<ProgramFrame>() {
+            None => {
+                world.insert_resource(self);
+                Ok(())
+            }
+            Some(stated) if *stated == self => Ok(()),
+            Some(stated) => Err(format!(
+                "the world's programs are already stated to compute in {stated:?}, not {self:?}"
+            )),
+        }
+    }
 }
 
 impl Resource for ProgramFrame {
@@ -397,6 +413,20 @@ mod tests {
         assert!(none.verify(&w).unwrap_err().contains("why"));
         let json = ProgramFrame::Source(MIRROR).to_json().unwrap().unwrap();
         assert_eq!(json["source"]["axes"], json!(["PosX", "PosY", "NegZ"]));
+    }
+
+    /// Every producer of a world's programs states the frame; a second statement agrees or is refused.
+    #[test]
+    fn a_world_states_one_frame() {
+        let mut w = World::new();
+        ProgramFrame::Source(MIRROR).state(&mut w).unwrap();
+        ProgramFrame::Source(MIRROR).state(&mut w).unwrap();
+        assert_eq!(w.resource::<ProgramFrame>(), Some(&ProgramFrame::Source(MIRROR)));
+        let other = ProgramFrame::NotConverted {
+            why: "a world".into(),
+        };
+        assert!(other.state(&mut w).unwrap_err().contains("already stated"));
+        assert_eq!(w.resource::<ProgramFrame>(), Some(&ProgramFrame::Source(MIRROR)));
     }
 
     /// The table on the roles whose kind decides where a drawn surface lands and faces: positions and their

@@ -301,7 +301,15 @@ fn all_stormveil_boxes_resolve_and_captured_payload_fingerprints_match()
         .expect("frame graph");
     primase_core::Resource::verify(graph, &drawn)?;
     let pipeline = graph.lighting.as_ref().expect("lighting pipeline");
-    assert!(pipeline.frame.is_some());
+    // the lighting programs compute in the game's frame, as the reader converted the world out of it
+    use primase_core::frame::{Axis, SourceFrame};
+    assert_eq!(
+        drawn.resource::<primase_core::shader::ProgramFrame>(),
+        Some(&primase_core::shader::ProgramFrame::Source(SourceFrame::new(
+            [Axis::PosX, Axis::PosY, Axis::NegZ],
+            1.
+        )))
+    );
     let group = pipeline
         .passes
         .iter()

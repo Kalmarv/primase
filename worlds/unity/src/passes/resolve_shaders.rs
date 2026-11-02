@@ -69,6 +69,7 @@ use iridia_interface::{
     TargetState,
 };
 use primase_core::pass::{Choice, Given, OptionSpec, PassSpec};
+use primase_core::shader::ProgramFrame;
 use primase_core::shader::{
     ConstantBinding, ConstantRole, FrameParameter, FrameTexture, InputBinding, InputRole, ObjectParameter,
     OutputBinding, OutputRole, ViewParameter,
@@ -901,9 +902,21 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
         &[UnityMaterial::NAME, UnityPrograms::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[Shader::NAME, ShaderBinding::NAME, Name::NAME]
+        &[
+            Shader::NAME,
+            ShaderBinding::NAME,
+            Name::NAME,
+            <ProgramFrame as primase_core::Resource>::NAME,
+        ]
     }
     fn run(&self, world: &mut World, log: &mut primase_core::pass::PassLog) -> Result<(), String> {
+        ProgramFrame::NotConverted {
+            why: "Unity: the reader converts the world out of Unity's frame, x, y, -z (left-handed, +Y up, +Z \
+                  forward, metres: crate::components::UNITY), so the programs compute in that frame exactly; feeding \
+                  them in it is not checked against a render, so they are fed the world's values unconverted"
+                .into(),
+        }
+        .state(world)?;
         let (tier, colour_space) = self.settings(world, log)?;
         let materials: Vec<(Entity, UnityMaterial, UnityPrograms)> = world
             .iter::<UnityMaterial>()

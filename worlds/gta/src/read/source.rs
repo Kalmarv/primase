@@ -10,6 +10,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use primase_core::shader::ProgramFrame;
 use primase_core::{Entity, Instance, World};
 
 use crate::Result;
@@ -110,6 +111,7 @@ impl GtaSource {
     /// `fxdb` folder, found by the listing; an install with none, or with several, is an error. Reads and lifts the
     /// interface of about 11,000 programs: call it once per world.
     pub fn add_shader_database(&self, w: &mut World) -> Result<(ShaderTable, EffectJoin)> {
+        program_frame(w)?;
         let bytes = self.shader_database_bytes()?;
         let db = rage_engine_formats::sgd2::parse(&bytes)?;
         let table = add_shader_database(w, &db);
@@ -126,6 +128,7 @@ impl GtaSource {
         w: &mut World,
         database: &[u8],
     ) -> Result<(ShaderTable, EffectJoin)> {
+        program_frame(w)?;
         let db = rage_engine_formats::sgd2::parse(database)?;
         let table = add_used_shader_effects(w, &db);
         let join = join_materials(w, &table.effects);
@@ -270,4 +273,20 @@ pub fn prototype_box(world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> 
     let (lo, hi) = (a.bb_min.map(f64::from), a.bb_max.map(f64::from));
     // GTA (x, y, z) is core (x, z, -y)
     Some([[lo[0], lo[2], -hi[1]], [hi[0], hi[2], -lo[1]]])
+}
+
+/// The frame the programs of a GTA V world compute in: not converted, and why.
+fn program_frame(w: &mut World) -> Result<()> {
+    ProgramFrame::NotConverted {
+        why: "GTA V: the reader converts the world out of x east, y north, z up, metres (crate::components::GTA, \
+              SourceFrame::ENU), so the programs compute in that frame exactly; feeding them in it is not checked \
+              against a render, so they are fed the world's values unconverted"
+            .into(),
+    }
+    .state(w)
+    .map_err(|detail| rage_engine_formats::Error::Invalid {
+        format: "core.program_frame",
+        offset: 0,
+        detail,
+    })
 }

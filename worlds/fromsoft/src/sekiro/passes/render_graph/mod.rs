@@ -310,7 +310,6 @@ fn describe(
         None => notices.push("the recorded graph has no directional lighting step: no sun light".into()),
     }
     let mut pipeline = LightingPipeline {
-        frame: None,
         imports,
         buffers,
         passes,

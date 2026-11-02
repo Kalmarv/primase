@@ -451,9 +451,18 @@ impl Pass for ResolveStuntboostShaders {
             MaterialPrograms::NAME,
             ProgramFacts::NAME,
             Name::NAME,
+            <ProgramFrame as primase_core::Resource>::NAME,
         ]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        ProgramFrame::NotConverted {
+            why: "STUNTBOOST: the reader keeps glTF's axes, which are core's, and scales positions by the unit the \
+                  program states (crate::read::read_level's metres_per_unit), so the programs compute in x, y, z times \
+                  that unit exactly; feeding them in it is not checked against a render (the fog lengths are bound \
+                  in metres instead), so they are fed the world's values unconverted"
+                .into(),
+        }
+        .state(w)?;
         if self
             .gamma
             .is_some_and(|v| !v.is_finite() || v <= 0. || !v.recip().is_finite())

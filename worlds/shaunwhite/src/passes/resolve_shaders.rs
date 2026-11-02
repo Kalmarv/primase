@@ -440,9 +440,17 @@ impl Pass for ResolveShaunwhiteShaders {
             ShaderPasses::NAME,
             ShaderInputs::NAME,
             Name::NAME,
+            ProgramFrame::NAME,
         ]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        ProgramFrame::NotConverted {
+            why: "Shaun White Skateboarding: the reader converts the level out of x east, y north, z up, metres \
+                  (SourceFrame::ENU, crate::read::level), so the programs compute in that frame exactly; feeding them \
+                  in it is not checked against a render, so they are fed the world's values unconverted"
+                .into(),
+        }
+        .state(w)?;
         let db = w
             .resource::<ShaderLibrary>()
             .ok_or("shader library not read")?

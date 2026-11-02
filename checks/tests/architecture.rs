@@ -1568,6 +1568,88 @@ fn closed_forms_are_named() {
     assert_reconciled("closed forms", found, excused);
 }
 
+/// Every worlds crate whose library code makes a `core.shader` states the frame its programs compute in
+/// (`primase_core::shader::ProgramFrame`, one form or the other), and the enum has no default to fall back on (no
+/// derived or written `Default`, no `From`). The counts are printed per crate, so what each world leaves unconverted
+/// stays counted.
+#[test]
+fn program_frames_are_stated() {
+    const SHADER: &str = "primase_core::shader::Shader";
+    const FRAME: &[&str] = &["primase_core::shader::ProgramFrame"];
+    let mut found = BTreeSet::new();
+    for m in members() {
+        let krate = m.name.replace('-', "_");
+        let src = format!("{}/src/", m.path);
+        let (mut shaders, mut source, mut not_converted) = (0, 0, 0);
+        for file in rust_files(&root().join(&m.path).join("src")) {
+            let module = module_of(&file[src.len()..]);
+            let t = code(&file);
+            let shader = form_names(&t, &krate, &module, &[SHADER]);
+            let frame = FormScope::new(&t, &krate, &module, FRAME);
+            for i in 0..t.len() {
+                if i > 0 && punct(&t[i - 1], ':') {
+                    continue;
+                }
+                if t[i..].len() >= 3
+                    && (ident(&t[i], "Default") || ident(&t[i], "From"))
+                    && frame.names.iter().any(|n| {
+                        (i + 2..t.len().min(i + 8)).any(|k| ident(&t[k - 1], "for") && ident(&t[k], n))
+                    })
+                {
+                    found.insert(format!("{file}: a default or conversion into ProgramFrame"));
+                }
+                let (segs, j) = path_at(&t, i);
+                let names_shader = match segs.as_slice() {
+                    [] => false,
+                    [one] => shader.contains(one),
+                    _ => absolute(&segs, &krate, &module) == SHADER,
+                };
+                if names_shader
+                    && t.get(j).is_some_and(|x| punct(x, '{'))
+                    && !(i > 0 && (ident(&t[i - 1], "struct") || ident(&t[i - 1], "impl")))
+                {
+                    shaders += 1;
+                }
+                if frame.names_form(&t, i) {
+                    match segs.last().map(String::as_str) {
+                        Some("Source") => source += 1,
+                        Some("NotConverted") => not_converted += 1,
+                        _ => {}
+                    }
+                }
+            }
+            if let Some(at) = t
+                .windows(2)
+                .position(|w| ident(&w[0], "enum") && frame.names.iter().any(|n| ident(&w[1], n)))
+            {
+                let attributes = t[..at]
+                    .iter()
+                    .rposition(|x| punct(x, '}') || punct(x, ';'))
+                    .map_or(0, |k| k + 1);
+                if t[attributes..at].iter().any(|x| ident(x, "Default")) {
+                    found.insert(format!("{file}: ProgramFrame derives Default"));
+                }
+            }
+        }
+        if !m.path.starts_with("worlds/") {
+            continue;
+        }
+        if shaders + source + not_converted > 0 {
+            println!(
+                "{}: core.shader made in {shaders} places; program frame stated as Source in {source}, NotConverted in                  {not_converted}",
+                m.name
+            );
+        }
+        if shaders > 0 && source + not_converted == 0 {
+            found.insert(format!(
+                "{}: makes core.shader ({shaders} places) and states no program frame",
+                m.name
+            ));
+        }
+    }
+    assert!(found.is_empty(), "{found:#?}");
+}
+
 /// The closed-forms rule on a fixture: what is a break, and what is not.
 #[test]
 fn closed_forms_rules() {

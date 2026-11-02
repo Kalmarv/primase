@@ -18,7 +18,7 @@
 //! [`RenderGraph::left_out`].
 
 mod lighting;
-pub use lighting::{GeometryStencil, LightingBuffer, LightingFrame, LightingPipeline, LightingPort};
+pub use lighting::{GeometryStencil, LightingBuffer, LightingPipeline, LightingPort};
 
 use serde::Serialize;
 use serde_json::Value;
