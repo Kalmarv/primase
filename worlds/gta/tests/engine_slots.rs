@@ -26,6 +26,8 @@ fn legion_missing_slots_retain_their_stored_table_identity() {
         .unwrap();
     let (mut world, _): (World, _) = source.load_all(&read).unwrap();
     source.add_shader_database(&mut world).unwrap();
+    // resolve-gta-shaders analyses its programs on the threads the configuration lets a heavy test use
+    world.insert_resource(primase_core::parallel::Threads(inputs::threads()));
     let options = Options::from([
         ("technique".into(), "deferred_draw".into()),
         ("unset-textures".into(), "white".into()),

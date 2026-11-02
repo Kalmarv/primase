@@ -198,6 +198,8 @@ fn gta_vespucci() {
     let (mut world, _): (World, _) = source.load_all(&read).unwrap();
     let materials = world.iter::<GtaShader>().count();
     source.add_shader_database(&mut world).unwrap();
+    // resolve-gta-shaders analyses its programs on the threads the configuration lets a heavy test use
+    world.insert_resource(primase_core::parallel::Threads(inputs::threads()));
     let technique = "deferred_draw";
     {
         let options = Options::from([

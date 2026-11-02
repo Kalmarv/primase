@@ -63,10 +63,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use iridia_interface::{
     Blend, BlendEquation, BlendFactor, BlendOp, Compare, Cull, D3dClass, DepthState, Fill, Interface,
-    RenderState, ResourceId, ResourceKind, SamplerState, Stage, Stencil, StencilFace, StencilOp, SystemValue,
-    TargetState,
+    MatrixLines, RenderState, ResourceId, ResourceKind, SamplerState, Stage, Stencil, StencilFace, StencilOp,
+    SystemValue, TargetState,
 };
-use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec, Setting};
 use primase_core::shader::{
     ConstantBinding, ConstantRole, FrameParameter, InputBinding, InputRole, NormalEncoding, NormalSpace,
     ObjectMatrix, ObjectParameter, Occluded, OutputBinding, OutputRole, ScalarEncoding, ViewParameter,
@@ -324,6 +324,96 @@ struct Chosen {
     /// The technique the pass was selected from, where it is not the one asked for: what the engine draws a material with
     /// whose effect has no such pass, and why that one.
     fallback: Option<&'static str>,
+}
+
+/// The lines of the matrices the programs read, by program and the matrix's buffer, offset and size: a program's matrix
+/// is the same whichever material binds it, and many materials bind each program.
+type MatrixLinesSeen = BTreeMap<(Entity, ResourceId, u32, u32), MatrixLines>;
+
+/// The pass an effect's materials are drawn with and its programs, before the programs are analysed.
+struct Selected<'w> {
+    techniques: &'w GtaEffectTechniques,
+    pass: &'w GtaPass,
+    vertex: Entity,
+    /// None for a depth-only pass.
+    pixel: Option<SelectedPixel>,
+    fallback: Option<&'static str>,
+}
+
+/// The pixel program of a [`Selected`] pass, by its family.
+#[derive(Clone, Copy)]
+struct SelectedPixel {
+    entity: Entity,
+    /// Its family has a G-buffer layout, whose roles are read from the program's own stores.
+    gbuffer: bool,
+    /// One of the forward-lit programs, whose one target is the finished colour.
+    forward: bool,
+}
+
+/// The pass of `effect_entity`'s technique `technique` and its programs, or why there are none; `fallback` is why the
+/// technique is not the one asked for, where it is not.
+fn select<'w>(
+    world: &'w World,
+    effect_entity: Entity,
+    technique: &str,
+    fallback: Option<&'static str>,
+) -> Result<Selected<'w>, String> {
+    let effect = world
+        .get::<GtaEffect>(effect_entity)
+        .ok_or_else(|| "a material's effect entity without its effect".to_owned())?;
+    let techniques = world
+        .get::<GtaEffectTechniques>(effect_entity)
+        .ok_or_else(|| format!("the effect has no technique table ({})", effect.name))?;
+    let pass = select_pass(techniques, technique).map_err(|why| format!("{why} ({})", effect.name))?;
+    let vertex = pass
+        .vertex
+        .as_ref()
+        .and_then(|p| p.shader)
+        .ok_or_else(|| format!("the vertex program has no interface ({})", effect.name))?;
+    let pixel = match &pass.pixel {
+        None => None,
+        Some(p) => {
+            let stem = split_program_name(&p.name).map(|(stem, _)| stem);
+            Some(SelectedPixel {
+                entity: p.shader.ok_or_else(|| {
+                    format!("the pixel program {} has no interface ({})", p.name, effect.name)
+                })?,
+                gbuffer: stem.is_some_and(|s| s.starts_with(GBUFFER_FAMILY)),
+                forward: stem.is_some_and(|s| FORWARD_PROGRAMS.contains(&s)),
+            })
+        }
+    };
+    Ok(Selected {
+        techniques,
+        pass,
+        vertex,
+        pixel,
+        fallback,
+    })
+}
+
+impl Selected<'_> {
+    /// The programs chosen, given every program's analysis.
+    fn chosen(&self, analyses: &BTreeMap<Entity, ProgramAnalysis>) -> Chosen {
+        // the G-buffer's roles are read from the program's own stores
+        let writes = self.pixel.filter(|p| p.gbuffer).map(|p| {
+            analyses
+                .get(&p.entity)
+                .ok_or_else(|| "a pixel program without its shader".to_owned())
+                .and_then(|a| a.writes.clone())
+        });
+        let mut notes = Vec::new();
+        let state = render_state(self.techniques, self.pass, &mut notes);
+        Chosen {
+            state,
+            notes,
+            pixel: self.pixel.map(|p| p.entity),
+            vertex: self.vertex,
+            writes,
+            forward: self.pixel.is_some_and(|p| p.forward),
+            fallback: self.fallback,
+        }
+    }
 }
 
 /// What a texture parameter with no texture becomes.
@@ -618,7 +708,8 @@ impl ResolveGtaShaders {
         vertex_bound: bool,
         writes: Option<&Result<GBufferWrites, String>>,
         forward: bool,
-        analyses: &mut BTreeMap<Entity, ProgramAnalysis>,
+        analyses: &BTreeMap<Entity, ProgramAnalysis>,
+        matrix_lines: &mut MatrixLinesSeen,
         counts: &mut Counts,
     ) -> Result<StageBinding, String> {
         let program = world
@@ -631,14 +722,9 @@ impl ResolveGtaShaders {
         let interface = &program.interface;
         let mut constants = Vec::new();
         let mut textures = Vec::new();
-        let analysis = analyses.entry(shader).or_insert_with(|| {
-            analyse(
-                program,
-                world
-                    .get::<primase_core::Name>(shader)
-                    .map_or("", |name| name.0.as_str()),
-            )
-        });
+        let analysis = analyses
+            .get(&shader)
+            .ok_or("a program of the selected pass that was not analysed")?;
         let uses = &analysis.samples;
         let graph = &analysis.graph;
         let reads = graph.as_ref().map(|graph| &graph.reads);
@@ -766,7 +852,10 @@ impl ResolveGtaShaders {
             .collect();
         let graph = graph.as_ref().map_err(String::as_str);
         let unshown = state_lines(&mut constants, |c| {
-            lines_at(graph, interface, c.resource, c.offset, c.size)
+            matrix_lines
+                .entry((shader, c.resource, c.offset, c.size))
+                .or_insert_with(|| lines_at(graph, interface, c.resource, c.offset, c.size))
+                .clone()
         });
         counts.add_by(
             "matrices whose lines the program does not show (a consumer writing a non-symmetric matrix cannot bind them)",
@@ -1327,6 +1416,9 @@ impl Pass for ResolveGtaShaders {
     fn provides(&self) -> &[&'static str] {
         &[ShaderBinding::NAME, MaterialPrograms::NAME]
     }
+    fn settings(&self) -> &[Setting] {
+        &[primase_core::parallel::THREADS]
+    }
     fn approximates(&self) -> &'static str {
         "a texture parameter with no texture reads white (unset-textures=white); a static sampler has the state its constant's name states"
     }
@@ -1335,86 +1427,65 @@ impl Pass for ResolveGtaShaders {
             .iter::<GtaMaterialEffect>()
             .filter_map(|(e, l)| Some((e, world.get::<GtaShader>(e)?.clone(), l.effect)))
             .collect();
-        let mut counts = Counts::default();
-        // per effect: the programs chosen, or why not
-        let mut chosen: BTreeMap<(Entity, String), Result<Chosen, String>> = BTreeMap::new();
-        let mut bound: Vec<(Entity, ShaderBinding)> = Vec::new();
-        let mut analyses: BTreeMap<Entity, ProgramAnalysis> = BTreeMap::new();
-        for (material, shader, effect_entity) in materials {
-            // the technique asked for, or where the effect has none of that name the one its material is drawn with
-            let (technique, fallback) = match world.get::<GtaEffectTechniques>(effect_entity) {
-                Some(t) if !t.techniques.iter().any(|t| t.name == self.technique) => {
-                    match fallback_technique(t, &self.technique, shader.render_bucket) {
-                        Some((name, why)) => (name, Some(why)),
-                        None => (self.technique.clone(), None),
-                    }
-                }
-                _ => (self.technique.clone(), None),
-            };
-            let picked = chosen
-                .entry((effect_entity, technique.clone()))
-                .or_insert_with(|| {
-                    let effect = world
-                        .get::<GtaEffect>(effect_entity)
-                        .ok_or_else(|| "a material's effect entity without its effect".to_owned())?;
-                    let techniques = world
-                        .get::<GtaEffectTechniques>(effect_entity)
-                        .ok_or_else(|| format!("the effect has no technique table ({})", effect.name))?;
-                    let pass = select_pass(techniques, &technique)
-                        .map_err(|why| format!("{why} ({})", effect.name))?;
-                    let vertex =
-                        pass.vertex.as_ref().and_then(|p| p.shader).ok_or_else(|| {
-                            format!("the vertex program has no interface ({})", effect.name)
-                        })?;
-                    let pixel = match &pass.pixel {
-                        None => None,
-                        Some(p) => {
-                            let stem = split_program_name(&p.name).map(|(stem, _)| stem);
-                            Some((
-                                p.shader.ok_or_else(|| {
-                                    format!("the pixel program {} has no interface ({})", p.name, effect.name)
-                                })?,
-                                stem.is_some_and(|s| s.starts_with(GBUFFER_FAMILY)),
-                                stem.is_some_and(|s| FORWARD_PROGRAMS.contains(&s)),
-                            ))
+        // the technique each material is drawn with: the one asked for, or where the effect has none of that name the
+        // one its material is drawn with
+        let materials: Vec<_> = materials
+            .into_iter()
+            .map(|(material, shader, effect_entity)| {
+                let (technique, fallback) = match world.get::<GtaEffectTechniques>(effect_entity) {
+                    Some(t) if !t.techniques.iter().any(|t| t.name == self.technique) => {
+                        match fallback_technique(t, &self.technique, shader.render_bucket) {
+                            Some((name, why)) => (name, Some(why)),
+                            None => (self.technique.clone(), None),
                         }
-                    };
-                    let forward = pixel.is_some_and(|(_, _, forward)| forward);
-                    // the G-buffer's roles are read from the program's own stores
-                    let writes = pixel.and_then(|(entity, gbuffer_family, _)| {
-                        gbuffer_family.then(|| {
-                            world
-                                .get::<Shader>(entity)
-                                .ok_or_else(|| "a pixel program without its shader".to_owned())
-                                .and_then(|s| {
-                                    analyses
-                                        .entry(entity)
-                                        .or_insert_with(|| {
-                                            analyse(
-                                                s,
-                                                world
-                                                    .get::<primase_core::Name>(entity)
-                                                    .map_or("", |name| name.0.as_str()),
-                                            )
-                                        })
-                                        .writes
-                                        .clone()
-                                })
-                        })
-                    });
-                    let mut notes = Vec::new();
-                    let state = render_state(techniques, pass, &mut notes);
-                    Ok(Chosen {
-                        state,
-                        notes,
-                        pixel: pixel.map(|(entity, _, _)| entity),
-                        vertex,
-                        writes,
-                        forward,
-                        fallback,
-                    })
-                })
-                .clone();
+                    }
+                    _ => (self.technique.clone(), None),
+                };
+                (material, shader, effect_entity, technique, fallback)
+            })
+            .collect();
+        // per effect and technique: the pass's programs, or why there are none (the fallback's reason is the first
+        // material's)
+        let mut selected: BTreeMap<(Entity, String), Result<Selected<'_>, String>> = BTreeMap::new();
+        for (_, _, effect_entity, technique, fallback) in &materials {
+            selected
+                .entry((*effect_entity, technique.clone()))
+                .or_insert_with(|| select(world, *effect_entity, technique, *fallback));
+        }
+        // every program a selected pass runs, analysed once, on the world's threads
+        let programs: BTreeSet<Entity> = selected
+            .values()
+            .flatten()
+            .flat_map(|s| [Some(s.vertex), s.pixel.map(|p| p.entity)])
+            .flatten()
+            .collect();
+        let programs: Vec<(Entity, &Shader, &str)> = programs
+            .into_iter()
+            .filter_map(|e| {
+                let name = world
+                    .get::<primase_core::Name>(e)
+                    .map_or("", |name| name.0.as_str());
+                Some((e, world.get::<Shader>(e)?, name))
+            })
+            .collect();
+        let analysed = primase_foundations::parallel::map(
+            primase_core::parallel::threads(world).map_err(|e| e.to_string())?,
+            &programs,
+            |_, &(_, shader, name)| analyse(shader, name),
+        )
+        .map_err(|p| p.to_string())?;
+        let analyses: BTreeMap<Entity, ProgramAnalysis> =
+            programs.iter().map(|&(e, _, _)| e).zip(analysed).collect();
+        let mut counts = Counts::default();
+        // per effect and technique: the programs chosen, or why not
+        let chosen: BTreeMap<(Entity, String), Result<Chosen, String>> = selected
+            .into_iter()
+            .map(|(key, s)| (key, s.map(|s| s.chosen(&analyses))))
+            .collect();
+        let mut bound: Vec<(Entity, ShaderBinding)> = Vec::new();
+        let mut matrix_lines = MatrixLinesSeen::new();
+        for (material, shader, effect_entity, technique, _) in materials {
+            let picked = chosen[&(effect_entity, technique.clone())].clone();
             let Chosen {
                 state,
                 notes,
@@ -1463,7 +1534,8 @@ impl Pass for ResolveGtaShaders {
                     true,
                     writes.as_ref(),
                     forward,
-                    &mut analyses,
+                    &analyses,
+                    &mut matrix_lines,
                     &mut counts,
                 ) {
                     Ok(s) => stages.push(s),

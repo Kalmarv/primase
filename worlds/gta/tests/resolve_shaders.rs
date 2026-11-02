@@ -92,6 +92,8 @@ fn a_regions_materials_are_bound_or_left_with_a_reason() {
         .read([region[0], region[1], region[2], region[3]], 600.0)
         .unwrap();
     let (mut world, _): (World, _) = source.load_all(&read).unwrap();
+    // the pass analyses its programs on the threads the configuration lets a heavy test use
+    world.insert_resource(primase_core::parallel::Threads(inputs::threads()));
     let materials = world.iter::<GtaShader>().count();
     let (table, join) = source.add_shader_database(&mut world).unwrap();
     println!(

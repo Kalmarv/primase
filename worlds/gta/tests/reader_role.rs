@@ -149,6 +149,7 @@ fn the_reader_reads_the_shader_database_with_the_load_when_asked() {
         ("technique".to_owned(), "deferred_draw".to_owned()),
         ("unset-textures".to_owned(), "white".to_owned()),
     ]);
+    w.insert_resource(primase_core::parallel::Threads(inputs::threads()));
     RESOLVE_GTA_SHADERS
         .instance(&o)
         .unwrap()
