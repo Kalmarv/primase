@@ -122,6 +122,8 @@ pub mod texformat;
 mod texture_layers;
 pub use texture_layers::{TextureLayers, TextureShape};
 pub mod translate;
+mod unreferenced;
+pub use unreferenced::{DROP_UNREFERENCED_TEXTURES, DropUnreferencedTextures};
 pub mod vector;
 pub mod world;
 
@@ -138,7 +140,7 @@ pub use world::{
 /// Register core's generic passes by their declarations, as every crate registers its own: a program builds its
 /// registry from these. What each takes: [`pass::PassRegistry::describe`], or the declaration ([`SELECT_LOD`],
 /// [`SELECT_TEXTURE_FORM`],
-/// [`DROP_OPTIONAL`], [`PLACE_SPAWN`], [`PLACE_ASSETS`], [`SELECT_ASSETS`], [`PARTITION_BY_ASSET`],
+/// [`DROP_OPTIONAL`], [`DROP_UNREFERENCED_TEXTURES`], [`PLACE_SPAWN`], [`PLACE_ASSETS`], [`SELECT_ASSETS`], [`PARTITION_BY_ASSET`],
 /// [`state::RESOLVE_STATE`], [`state::SELECT_OUTFIT`], [`shader::SELECT_VARIANT`],
 /// [`translate::TRANSLATE_WORLD`]).
 pub fn register(reg: &mut pass::PassRegistry) {
@@ -146,6 +148,7 @@ pub fn register(reg: &mut pass::PassRegistry) {
         &SELECT_LOD,
         &SELECT_TEXTURE_FORM,
         &DROP_OPTIONAL,
+        &DROP_UNREFERENCED_TEXTURES,
         &PLACE_SPAWN,
         &PLACE_ASSETS,
         &SELECT_ASSETS,
@@ -170,6 +173,7 @@ mod tests {
         super::register(&mut reg);
         let names = [
             "drop-optional",
+            "drop-unreferenced-textures",
             "partition-by-asset",
             "place-assets",
             "place-spawn",
