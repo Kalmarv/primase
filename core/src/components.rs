@@ -6,7 +6,8 @@
 //! - a **placement** has a [`Transform`] and an [`Instance`] pointing at its prototype;
 //! - a **material** has the material components of some dialect (`pbr.material`, a destination's `material`, ...);
 //!   a [`Primitive`] refers to it by entity;
-//! - a **texture** has a [`Texture`] (or only a [`TextureFile`] until a pass loads it);
+//! - a **texture** has a [`Texture`] (or only a [`TextureFile`] until a pass loads it); an entity with a
+//!   [`TextureAbsent`] stands for a texture the source names that the read could not give;
 //! - a prototype whose geometry is still in a file has a [`MeshFile`] (a pass loads it into a [`Mesh`]), and
 //!   [`MaterialVariants`] when placements pick materials per variant.
 //!
@@ -1378,6 +1379,23 @@ pub struct TextureFile {
 }
 impl Component for TextureFile {
     const NAME: &'static str = "core.texture_file";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
+    }
+}
+
+/// A texture the source names that the read could not give: no file it searched holds it, or its file does not decode.
+/// The entity stands where the texture would, so what refers to it (a particle's map, a material's texture) still says
+/// a texture belongs there, and a viewer shows the absence instead of drawing as if the source named none. It holds no
+/// [`Texture`], [`crate::TextureLayers`] or [`TextureFile`], so no count of textures counts it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TextureAbsent {
+    /// Why the read could not give it, in the read's words.
+    pub reason: String,
+}
+impl Component for TextureAbsent {
+    const NAME: &'static str = "core.texture_absent";
     const GEOMETRY: crate::Geometry = crate::Geometry::None;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)

@@ -112,10 +112,25 @@ fn the_effects_of_three_areas_are_placed_with_their_files_and_lowered() -> Resul
             let t = world.get::<Transform>(*e).ok_or("an effect without a place")?;
             assert!(t.cols.iter().flatten().all(|x| x.is_finite()));
         }
-        // the textures the effects name are core textures, one per kind and number
+        // the textures the effects name, one entity per kind and number: a core texture each that the read gave, a
+        // core.texture_absent each that it could not (counted in the report's missing)
         let resources: Vec<_> = world.iter::<EffectResource>().map(|(e, r)| (e, *r)).collect();
-        assert_eq!(resources.len(), r.textures, "{map}: textures");
-        assert!(resources.iter().all(|(e, _)| world.has::<Texture>(*e)));
+        let read = resources.iter().filter(|(e, _)| world.has::<Texture>(*e)).count();
+        let absent = resources
+            .iter()
+            .filter(|(e, _)| world.has::<primase_core::TextureAbsent>(*e))
+            .count();
+        assert_eq!(read, r.textures, "{map}: textures");
+        assert_eq!(
+            absent,
+            r.missing.values().sum::<usize>(),
+            "{map}: absent textures"
+        );
+        assert_eq!(
+            read + absent,
+            resources.len(),
+            "{map}: each resource a texture or absent, not both"
+        );
         let distinct: BTreeSet<_> = resources.iter().map(|(_, r)| (r.kind, r.id)).collect();
         assert_eq!(distinct.len(), resources.len(), "{map}: a texture twice");
 

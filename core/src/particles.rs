@@ -542,7 +542,8 @@ pub enum Orientation {
 /// A texture applied to a draw: the texture entity and what an atlas is cut into.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Map {
-    /// A `core.texture` or `core.texture_file` entity.
+    /// A `core.texture` or `core.texture_file` entity, or a `core.texture_absent` one: a texture the source names that the
+    /// read could not give ([`crate::TextureAbsent`]), which a viewer shows as missing.
     pub texture: Entity,
 }
 

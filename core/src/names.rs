@@ -12,7 +12,7 @@ use crate::clip_identity::{ClipKey, ClipLength};
 use crate::collider::{Collider, Heightfield};
 use crate::components::{
     Collision, Instance, Light, MaterialVariants, Mesh, MeshFile, Name, Shadows, Source, Surfaces, Texture,
-    TextureFile, Tile, Transform,
+    TextureAbsent, TextureFile, Tile, Transform,
 };
 use crate::content::{ContentNote, DisplayName, Record};
 use crate::controller::{Controller, ControllerBinding};
@@ -84,7 +84,7 @@ macro_rules! declared {
 
 declared! {
     components: Collider, Heightfield, Name, Source, Transform, Instance, Shadows, Mesh, Texture, Light, Collision,
-        TextureFile, MeshFile, MaterialVariants, Tile, DrawOrder, LayeredMaterial, Lods, TextureForms, TextureSwitch, Marker, Curve, MaterialUsage,
+        TextureFile, TextureAbsent, MeshFile, MaterialVariants, Tile, DrawOrder, LayeredMaterial, Lods, TextureForms, TextureSwitch, Marker, Curve, MaterialUsage,
         PbrMaterial, DetailedMaterial, Priority, Provenance, StateAxis, Condition, PrimitiveCondition, StateOverride, VertexColor, Skeleton, AssemblyReference, Skin, Morphs, RigInstance,
         RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding, LiftedShader, ShaderSpecialisations, ShaderDerivation,
         TextureLayers, MaterialPrograms, ProgramFacts, ClipKey, ClipLength, IncomingTransition, ClipEvents, ClipEffects, Controller, ControllerBinding,

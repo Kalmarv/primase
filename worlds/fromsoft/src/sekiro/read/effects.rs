@@ -43,8 +43,9 @@ pub struct Report {
     pub parts_without_row: usize,
     /// Parts with a row that are not placed, by reason.
     pub parts_not_placed: BTreeMap<String, usize>,
-    /// Effect files read (the placed ones and the ones they spawn), textures read into the world, and the numbers a file named
-    /// that no binder searched held (by kind), and models and animations named (not read).
+    /// Effect files read (the placed ones and the ones they spawn), textures read into the world, and the textures a file named
+    /// that the read could not give, by kind and why (no binder searched holds it, or its file does not decode: each kept as a
+    /// `core.texture_absent`), and models and animations named (not read).
     pub files: usize,
     pub textures: usize,
     pub missing: BTreeMap<String, usize>,
@@ -237,26 +238,32 @@ impl<'a> EffectLibrary<'a> {
         Ok(result)
     }
 
-    /// The decoded image of the texture of `kind` and number `id` in the first binder that holds it.
+    /// The decoded image of the texture of `kind` and number `id` in the first binder that holds it: `Ok(None)` where none
+    /// does, `Err` with the reason where its file does not decode (an archive that does not read is the outer error).
     pub fn texture(
         &mut self,
         kind: fxr::resources::TextureKind,
         id: i32,
-    ) -> Result<Option<primase_core::Texture>> {
+    ) -> Result<std::result::Result<Option<primase_core::Texture>, String>> {
         for i in 0..self.paths.len() {
             let game = self.game;
             let decoder = self.decoder;
             let loaded = self.load(i)?;
             if let Some(k) = loaded.resources.texture(game, kind, id) {
-                let bytes = decoder.decode_if_dcx(&loaded.binder.files[k].bytes)?;
-                let package = Package::read(&bytes)?;
-                let Some(texture) = package.textures.first() else {
-                    continue;
+                let image = || -> Result<Option<primase_core::Texture>> {
+                    let bytes = decoder.decode_if_dcx(&loaded.binder.files[k].bytes)?;
+                    let package = Package::read(&bytes)?;
+                    package.textures.first().map(tpf_image).transpose()
                 };
-                return tpf_image(texture).map(Some);
+                match image() {
+                    Ok(Some(texture)) => return Ok(Ok(Some(texture))),
+                    // a package with no texture: the next binder may hold it
+                    Ok(None) => continue,
+                    Err(why) => return Ok(Err(why.to_string())),
+                }
             }
         }
-        Ok(None)
+        Ok(Ok(None))
     }
 }
 
@@ -347,24 +354,34 @@ pub fn read_files(
             .map_err(|e| crate::invalid("effect file", 0, format!("effect {}: {e}", fx.id)))?;
         resources_of(&tree, &mut named);
     }
+    // a texture the read cannot give is kept as a core.texture_absent, so what names it still says one belongs there
     for (kind, id) in named {
         match kind.texture() {
-            Some(texture_kind) => match library.texture(texture_kind, id)? {
-                Some(texture) => {
-                    let e = world.spawn();
-                    entities.push(e);
-                    world.insert(e, texture);
-                    world.insert(e, EffectResource { kind, id });
-                    world.insert(e, Name(format!("sfx texture {id} ({kind:?})")));
-                    report.textures += 1;
-                }
-                None => {
-                    *report
-                        .missing
-                        .entry(format!("{kind:?} not in the binders searched"))
-                        .or_default() += 1
-                }
-            },
+            Some(texture_kind) => {
+                let found = library.texture(texture_kind, id)?;
+                let e = world.spawn();
+                entities.push(e);
+                world.insert(e, EffectResource { kind, id });
+                let (counted, reason) = match found {
+                    Ok(Some(texture)) => {
+                        world.insert(e, texture);
+                        world.insert(e, Name(format!("sfx texture {id} ({kind:?})")));
+                        report.textures += 1;
+                        continue;
+                    }
+                    Ok(None) => (
+                        "not in the binders searched",
+                        "not in the effect binders searched".to_owned(),
+                    ),
+                    Err(why) => (
+                        "whose file does not decode",
+                        format!("its file does not decode: {why}"),
+                    ),
+                };
+                world.insert(e, primase_core::TextureAbsent { reason });
+                world.insert(e, Name(format!("sfx texture {id} ({kind:?}), absent")));
+                *report.missing.entry(format!("{kind:?} {counted}")).or_default() += 1;
+            }
             None if kind == ResourceKind::Model => report.models_named += 1,
             None => report.animations_named += 1,
         }
