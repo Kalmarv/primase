@@ -24,6 +24,7 @@ use primase_forzatech::passes::{BakeForzaEmissionProduct, LowerForzaMaterials, S
 use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
 use primase_forzatech::read::placements::Scope;
+use primase_forzatech::read::textures::TextureScope;
 use primase_image::{Beyond, CapMode, CapTextures, NormalDownscale, RebaseTexcoordSet};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -48,6 +49,7 @@ fn shibuya_altuv_emission() {
     let scope = Scope {
         area: Area::new(-1550.0, -5000.0, -1100.0, -13_700.0 / 3.0),
         season: Season::Summer,
+        textures: TextureScope::All,
     };
     let mut reader = ForzaReader::new(Track::open(folder).unwrap(), scope);
     let (world, _) = reader.read().unwrap();
