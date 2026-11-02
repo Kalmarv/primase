@@ -28,7 +28,7 @@ use primase_core::Entity;
 pub use write::{BlenderReport, WriteOptions, write_file};
 
 /// The schema `materials.json` is written in.
-pub const MATERIALS_SCHEMA: &str = "primase-blender-materials/1";
+pub const MATERIALS_SCHEMA: &str = "primase-blender-materials/2";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

@@ -87,11 +87,13 @@ pub struct Sample {
 }
 
 /// Where a slot reads its coordinates when a layer samples it: the layer's UV set in place of the slot's own, and the
-/// layer's transform before the slot's.
+/// layer's transform before the slot's; and, for a slot that moves (a water body's wave), how far its coordinates move
+/// per second after the slot's transform, in core's frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Coordinates {
     pub texcoord: Option<u8>,
     pub before: Option<UvTransform>,
+    pub scroll: Option<[f32; 2]>,
 }
 
 /// The graphs' shared state: the world, the images sampled and what is counted.
@@ -144,6 +146,11 @@ impl<'w> Sampler<'w> {
             if t != UvTransform::IDENTITY {
                 v = mapping(g, v, t);
             }
+        }
+        // core's v grows down, Blender's up: a movement of (u, v) is (u, -v)
+        if let Some([du, dv]) = at.scroll {
+            let moved = g.per_second([du, -dv]);
+            v = g.vadd(v, moved);
         }
         let [wu, wv] = r.wrap;
         let extension = if wu == wv {

@@ -287,6 +287,7 @@ pub fn graph(
         let at = Coordinates {
             texcoord: Some(layer.texcoord.unwrap_or(0)),
             before: layer.transform,
+            scroll: None,
         };
         let surface = pbr::surface(s, &mut g, m, at, takes)?;
         sum.add(&mut g, &surface, w, normal);

@@ -30,13 +30,15 @@ use std::path::Path;
 
 use primase_core::detail::DetailedMaterial;
 use primase_core::pbr::PbrMaterial;
-use primase_core::{Component, Entity, LayeredMaterial, Mesh, Name, Semantic, Texture, VertexColor, World};
+use primase_core::{
+    Component, Entity, LayeredMaterial, Mesh, Name, Semantic, Texture, VertexColor, WaterBody, World,
+};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::graph::texture::{Counts, Reading, Sampler};
-use crate::graph::{Graph, PASS_ALPHA_THRESHOLD, Settings, aov, layered, pbr};
+use crate::graph::{Graph, PASS_ALPHA_THRESHOLD, Settings, aov, layered, pbr, water};
 use crate::{Error, MATERIALS_SCHEMA, Result};
 
 /// Writer options.
@@ -73,6 +75,10 @@ pub struct BlenderReport {
     /// Material entities drawn from their host `pbr.material` that also state a live form this writer does not draw
     /// yet (`pbr.detail`), by the form's component.
     pub live_forms_drawn_from_host: BTreeMap<String, u64>,
+    /// Blender materials drawing a `core.water_body` ([`crate::graph::water`]).
+    pub water_bodies: u64,
+    /// What those water bodies state that Cycles is not given, by what it is, counted once per material entity.
+    pub water_unwritten: BTreeMap<String, u64>,
     /// Images the graphs sample (a texture read as colour and as data is two).
     pub images: u64,
     /// PNG files written, and their bytes.
@@ -108,6 +114,7 @@ impl fmt::Display for BlenderReport {
                 &self.live_forms_drawn_from_host,
             ),
             ("texture slots not sampled", &self.counts.slots_unsampled),
+            ("water not drawn as stated", &self.water_unwritten),
         ];
         for (what, map) in maps {
             if !map.is_empty() {
@@ -137,6 +144,8 @@ struct MaterialsFile<'a> {
     pass_alpha_threshold: f32,
     /// The passes every material writes: name and Blender's AOV type.
     aovs: [(&'static str, &'static str); 3],
+    /// The frames a second the graphs' drivers take ([`crate::graph::FPS`]).
+    fps: u32,
     images: Vec<ImageEntry>,
     materials: &'a [MaterialEntry],
     /// For each glTF mesh, by index, each primitive's material (its index in `materials`), or none.
@@ -297,6 +306,7 @@ pub fn write_file(world: &World, options: &WriteOptions, dir: &Path) -> Result<B
             (aov::EMISSION, "COLOR"),
             (aov::COVERAGE, "VALUE"),
         ],
+        fps: crate::graph::FPS,
         images,
         materials: &materials,
         meshes,
@@ -361,10 +371,20 @@ fn material(
             .entry(DetailedMaterial::NAME.to_owned())
             .or_default() += 1;
     }
-    let (graph, settings) = match world.get::<LayeredMaterial>(m) {
-        Some(l) if form.blend => {
+    let (graph, settings) = match (world.get::<LayeredMaterial>(m), world.get::<WaterBody>(m)) {
+        (Some(l), _) if form.blend => {
             report.blends += 1;
             layered::graph(sampler, world, m, l, pbr, form.color0)?
+        }
+        (_, Some(w)) => {
+            report.water_bodies += 1;
+            let (graph, settings, unwritten) = water::graph(sampler, pbr, w)?;
+            if first {
+                for what in unwritten {
+                    *report.water_unwritten.entry(what.to_owned()).or_default() += 1;
+                }
+            }
+            (graph, settings)
         }
         _ => pbr::graph(sampler, pbr, form.color0)?,
     };

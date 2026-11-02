@@ -10,10 +10,18 @@
 //! - [`texture`]: a texture slot sampled as core states it (UV set, transforms, wrap, filters).
 //! - [`pbr`]: a `pbr.material`'s surface, alpha and sidedness, and the material's outputs.
 //! - [`layered`]: a `core.layered` blend of `pbr.material` layers, drawn with its host's alpha and sidedness.
+//! - [`water`]: a `core.water_body` under a `pbr.material`'s surface.
+//!
+//! What moves with time is driven by the frame: an input's driver is an expression of Blender's `frame`, the scene
+//! running at [`FPS`] frames a second from frame 0 at time 0 (the save stage sets the rate).
 
 pub mod layered;
 pub mod pbr;
 pub mod texture;
+pub mod water;
+
+/// The frames a second the saved scene runs at: frame `f` is `f / FPS` seconds.
+pub const FPS: u32 = 24;
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -79,6 +87,10 @@ pub struct Node {
     /// For an image texture node: its image, by its index in the scene's image list.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<usize>,
+    /// Inputs driven by the frame, by identifier: a driver expression of Blender's `frame` (one Blender evaluates
+    /// without Python, a simple expression).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub drivers: Vec<(&'static str, String)>,
 }
 
 /// A link from a node's output to another's input.
@@ -140,6 +152,7 @@ impl Graph {
             props: props.to_vec(),
             inputs: Vec::new(),
             image: None,
+            drivers: Vec::new(),
         });
         self.nodes.len() - 1
     }
@@ -414,8 +427,33 @@ impl Graph {
 
     /// The material output drawing `surface` in every engine.
     pub(crate) fn output(&mut self, surface: Socket) {
+        self.output_with_volume(surface, None);
+    }
+
+    /// The material output drawing `surface`, and `volume` inside the surface where stated.
+    pub(crate) fn output_with_volume(&mut self, surface: Socket, volume: Option<Socket>) {
         let n = self.node("ShaderNodeOutputMaterial", &[("target", json!("ALL"))]);
         self.link(surface, n, "Surface");
+        if let Some(v) = volume {
+            self.link(v, n, "Volume");
+        }
+    }
+
+    /// The vector `rate` per second times the time ([`FPS`]): a Combine XYZ whose X and Y are driven by the frame,
+    /// Z 0; the constant 0 where `rate` is 0.
+    pub(crate) fn per_second(&mut self, rate: [f32; 2]) -> Vec3 {
+        if rate == [0.0; 2] {
+            return Vec3::Const([0.0; 3]);
+        }
+        let n = self.node("ShaderNodeCombineXYZ", &[]);
+        for (id, r) in ["X", "Y"].into_iter().zip(rate) {
+            self.nodes[n].drivers.push((id, format!("{r:?} * frame / {FPS}")));
+        }
+        self.float_in(n, "Z", Float::Const(0.0));
+        Vec3::Out(Socket {
+            node: n,
+            output: "Vector",
+        })
     }
 }
 

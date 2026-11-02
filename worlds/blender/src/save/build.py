@@ -32,7 +32,7 @@ import sys
 import bpy
 import numpy as np
 
-SCHEMA = "primase-blender-materials/1"
+SCHEMA = "primase-blender-materials/2"
 
 COMPONENT = {5126: np.float32, 5121: np.uint8, 5123: np.uint16}
 WIDTH = {"VEC3": 3, "VEC4": 4}
@@ -210,6 +210,12 @@ def build(material, entry, images):
             node.image = images[spec["image"]]
         for identifier, value in spec.get("inputs", []):
             socket(node.inputs, identifier, node).default_value = value
+        for identifier, expression in spec.get("drivers", []):
+            curve = socket(node.inputs, identifier, node).driver_add("default_value")
+            curve.driver.type = "SCRIPTED"
+            curve.driver.expression = expression
+            # evaluated without Python (no auto-run needed), and in a background render
+            assert curve.driver.is_simple_expression, "driver %r is not a simple expression" % (expression,)
         nodes.append(node)
     for link in entry["graph"]["links"]:
         a, b = nodes[link["from"]], nodes[link["to"]]
@@ -255,6 +261,9 @@ def main():
         built["links"] += l
     scene = bpy.context.scene
     scene.render.engine = "CYCLES"
+    # the graphs' drivers take frame f as f / fps seconds
+    scene.render.fps = spec["fps"]
+    scene.render.fps_base = 1.0
     layer = scene.view_layers[0]
     layer.pass_alpha_threshold = spec["pass_alpha_threshold"]
     for name, kind in spec["aovs"]:
