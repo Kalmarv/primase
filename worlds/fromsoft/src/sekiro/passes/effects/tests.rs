@@ -203,6 +203,44 @@ fn a_distortion_sheet_blends_by_its_alpha_whatever_its_files_blend_mode() {
     }
 }
 
+/// The normal map of a distortion scrolls where the game's program moves it: `GXFfxdistortionBump` adds its first scroll
+/// distance to the sheet's u and takes its second from v, so core's offset and scroll (added to both) carry the file's V
+/// negated and its U as stored.
+#[test]
+fn a_distortion_normal_map_moves_back_along_v_as_the_games_program_moves_it() {
+    let mut config = torch();
+    config.actions.retain(|a| a.id != 600);
+    // blendMode, offset xyz, size xyz, color, the word after it, intensity, the word after it, stirSpeed, radius, then
+    // normalMapOffsetU and V and normalMapSpeedU and V
+    let mut properties = vec![constant(2.0)];
+    properties.extend((1..13).map(|_| constant(1.0)));
+    properties.extend([constant(0.2), constant(0.3), constant(0.1), constant(0.25)]);
+    config.actions.push(with(action(607), properties, vec![]));
+    let effect = fx(
+        300,
+        1,
+        node(
+            2000,
+            vec![],
+            vec![],
+            vec![node(2200, vec![map(&[0])], vec![config], vec![])],
+        ),
+    );
+    let l = lower(&effect, Game::EldenRing, 1, &mut NoFiles).unwrap();
+    let Some(primase_core::particles::Draw::Refraction(r)) = &l.system.emitters[0].draw else {
+        panic!("{:?}", l.system.emitters[0].draw);
+    };
+    let at = |v: &primase_core::particles::Value| v.curve.value_at(0.0)[0];
+    assert_eq!(r.normal_offset.each_ref().map(at), [0.2, -0.3]);
+    assert_eq!(r.normal_scroll.each_ref().map(at), [0.1, -0.25]);
+    assert_eq!(
+        l.notes.approximated.get(
+            "a distortion's normal-map offset and speed as its program's scroll distances (u forward, v back; which file field feeds which is not read)"
+        ),
+        Some(&1)
+    );
+}
+
 #[test]
 fn a_node_with_two_configs_is_two_emitters_by_state() {
     let second = Config {

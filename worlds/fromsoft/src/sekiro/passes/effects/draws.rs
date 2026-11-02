@@ -891,11 +891,23 @@ impl Cx<'_> {
         let stir = self.age(&d.stir_speed);
         let stir_speed = value::scaled(stir, 180.0 / std::f32::consts::PI);
         let radius = self.age(&d.radius);
+        // the game's normal-map program (`GXFfxdistortionBump`) reads the map at the sheet's coordinates moved by its two
+        // scroll distances, the first added to u and the second taken from v (`g_vNormalMapScrollDistance` and
+        // `g_hNormalMapScrollDistance`: its disassembly), where core adds both. The sign is that program's own, not a v
+        // axis the files run the other way: the reader passes texture coordinates and the billboards' scrolls through
+        // unchanged. The file's U and V offset and speed are taken as the two distances (which field feeds which is not
+        // read), so V's are negated
+        self.notes.approximate(
+            "a distortion's normal-map offset and speed as its program's scroll distances (u forward, v back; which file field feeds which is not read)",
+        );
         let normal_offset = [
             self.fixed(&d.normal_map_offset_u),
-            self.fixed(&d.normal_map_offset_v),
+            value::negated(self.fixed(&d.normal_map_offset_v)),
         ];
-        let normal_scroll = [self.age(&d.normal_map_speed_u), self.age(&d.normal_map_speed_v)];
+        let normal_scroll = [
+            self.age(&d.normal_map_speed_u),
+            value::negated(self.age(&d.normal_map_speed_v)),
+        ];
         let normal_scale = [
             self.fixed(&d.normal_map_scale_u),
             self.fixed(&d.normal_map_scale_v),
