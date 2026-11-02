@@ -29,8 +29,13 @@ fn program() -> Program {
     iridia_dxbc::lift(include_bytes!("fixtures/blend.dxbc")).unwrap()
 }
 
-/// The resource of `class` register `register`.
-fn resource(p: &Program, class: D3dClass, register: u32) -> ResourceId {
+/// `fixtures/single.hlsl`: one texture, laid over nothing.
+fn single() -> Program {
+    iridia_dxbc::lift(include_bytes!("fixtures/single.dxbc")).unwrap()
+}
+
+/// The resource of `class` register `register`, where the program declares it.
+fn declared(p: &Program, class: D3dClass, register: u32) -> Option<ResourceId> {
     p.interface
         .resources
         .iter()
@@ -39,8 +44,12 @@ fn resource(p: &Program, class: D3dClass, register: u32) -> ResourceId {
                 .d3d
                 .is_some_and(|d| d.class == class && d.register == register)
         })
-        .unwrap()
-        .id
+        .map(|r| r.id)
+}
+
+/// The resource of `class` register `register`.
+fn resource(p: &Program, class: D3dClass, register: u32) -> ResourceId {
+    declared(p, class, register).unwrap()
 }
 
 /// The material's constants: `tile`, `adjust`, `tint`, `gain` (the weight's gain, then the mask coordinate's
@@ -84,15 +93,18 @@ fn binding(p: &Program, m: &Material, t: &Textures) -> StageBinding {
         wrap: [Some(AddressMode::Repeat); 3],
         ..SamplerState::default()
     };
+    // the textures the program declares
     stage.textures = [(0, t.base), (1, t.layer), (2, t.mask)]
         .into_iter()
-        .map(|(register, texture)| TextureBinding {
-            resource: resource(p, D3dClass::ShaderResource, register),
-            sampler: None,
-            source: TextureSource::Texture {
-                texture,
-                sampler: state,
-            },
+        .filter_map(|(register, texture)| {
+            Some(TextureBinding {
+                resource: declared(p, D3dClass::ShaderResource, register)?,
+                sampler: None,
+                source: TextureSource::Texture {
+                    texture,
+                    sampler: state,
+                },
+            })
         })
         .collect();
     stage.constants = vec![
@@ -462,4 +474,94 @@ fn a_palette_row_that_is_not_white_is_refused_as_a_factor() {
     unknown.inputs.remove(&("NORMAL".into(), 0));
     let refused = read_layered_albedo(&p, &stage, &unknown).unwrap_err();
     assert_eq!(refused.kind, "factor", "{refused:?}");
+}
+
+/// One texture with no interpolation over it reads as one layer: the texture at its scaled and offset UV, its colour
+/// the sample times the tint (a factor, past one in red), the colour saturated; and what core.layered computes from that
+/// reading is the program's albedo bit for bit, across texels and tints past one. The controls: a reading without the
+/// saturation, or with the tint one ulp off in red, differs.
+#[test]
+fn a_single_texture_reads_as_one_layer_bit_for_bit() {
+    let p = single();
+    let mut world = World::default();
+    let t = Textures {
+        shader: world.spawn(),
+        base: world.spawn(),
+        layer: world.spawn(),
+        mask: world.spawn(),
+    };
+    let materials = [
+        Material {
+            tile: [3., 2., -1., 0.5],
+            adjust: [0.; 4],
+            tint: [1.47, 1., 0.5, 1.],
+            gain: [0.; 4],
+            slot: 0.,
+        },
+        Material {
+            tile: [1., 1., 0., 0.],
+            adjust: [0.; 4],
+            tint: [0.75, 0.5, 0.25, 1.],
+            gain: [0.; 4],
+            slot: 2.,
+        },
+    ];
+    let texels = [
+        [0.25, 0.5, 0.75, 1.],
+        [1., 1., 1., 1.],
+        [0., 0., 0., 0.],
+        [0.9, 0.1, 0.4, 0.5],
+        [1.5, 3., 0.2, 1.],
+        [-0.5, 0.7, 2., 1.],
+    ];
+    let shader = ProgramShader::new(p.clone()).unwrap();
+    let (mut cases, mut unsaturated_differs, mut nudged_differs) = (0, 0, 0);
+    for m in &materials {
+        let stage = binding(&p, m, &t);
+        assert_eq!(stage.textures.len(), 1);
+        for record in [0., 1.] {
+            let read = read_layered_albedo(&p, &stage, &freeze(&p, &white(), record)).unwrap();
+            assert_eq!(read.layers.len(), 1);
+            assert_eq!(read.weights.len(), 1);
+            assert!(read.weights[0].sources().is_empty());
+            assert!(read.saturate);
+            let layer = &read.layers[0];
+            assert_eq!((layer.texture.texture, layer.texture.texcoord), (t.base, 0));
+            let transform = (m.tile != [1., 1., 0., 0.]).then_some(UvTransform {
+                offset: [m.tile[2], m.tile[3]],
+                scale: [m.tile[0], m.tile[1]],
+                rotation: 0.,
+            });
+            assert_eq!(layer.texture.transform, transform);
+            assert_eq!(
+                (layer.factor, layer.color.is_none()),
+                ([m.tint[0], m.tint[1], m.tint[2]], true)
+            );
+            let unsaturated = LayeredAlbedo {
+                saturate: false,
+                ..read.clone()
+            };
+            let mut nudged = read.clone();
+            nudged.layers[0].factor[0] = f32::from_bits(nudged.layers[0].factor[0].to_bits() + 1);
+            for base in texels {
+                let lanes = [0.; 4];
+                let ran = run(&shader, m, &white(), record, [base, base, base], lanes);
+                let texel = |_: Entity| base;
+                assert_eq!(
+                    blended(&read, texel, lanes),
+                    ran,
+                    "material {:?} record {record} base {base:?}",
+                    m.tint
+                );
+                unsaturated_differs += usize::from(blended(&unsaturated, texel, lanes) != ran);
+                nudged_differs += usize::from(blended(&nudged, texel, lanes) != ran);
+                cases += 1;
+            }
+        }
+    }
+    assert_eq!(cases, 2 * 2 * 6);
+    assert!(
+        unsaturated_differs > 0 && nudged_differs > 0,
+        "{unsaturated_differs} {nudged_differs}"
+    );
 }

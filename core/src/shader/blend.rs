@@ -8,7 +8,9 @@
 //! constants. A value the chain is laid over by a constant weight towards a constant colour, directly above the bottom
 //! layer, is the bottom layer's colour (`lerp(texel, white, 0.3)`, a colour moved part of the way to a constant).
 //! Outside the chain the lane may be saturated and multiplied by factors; each factor must be exactly 1 where the host
-//! freezes what it reads ([`Freeze`]): a factor that is not is refused, never dropped.
+//! freezes what it reads ([`Freeze`]): a factor that is not is refused, never dropped. A lane with no interpolation
+//! under it is one layer laid over nothing: its colour is the lane under a saturate and factors of exactly 1, and a
+//! product by any other constant is the colour's own (a single texture times its factor).
 //!
 //! What the program reads besides the texture samples is answered by the binding's own words
 //! ([`StageBinding::known_words`]) and the host's freeze: constant words of runtime roles the host holds still, and what
@@ -97,8 +99,8 @@ pub struct LayeredAlbedo {
 /// counts by) and the details.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Refusal {
-    /// The kind of what was refused: `no albedo`, `no blend`, a node's kind (`input`, `texel load`, `op`, ...) or a
-    /// form (`factor`, `coordinate`, `per-lane weight`).
+    /// The kind of what was refused: `no albedo`, a node's kind (`input`, `texel load`, `op`, ...) or a form
+    /// (`factor`, `coordinate`, `per-lane weight`, `layer sample`).
     pub kind: String,
     /// What was refused, in words.
     pub why: String,
@@ -521,25 +523,41 @@ pub fn read_layered_albedo(
     let mut columns: [Vec<LaneColour>; 3] = Default::default();
     let mut weights: Option<Vec<NodeId>> = None;
     for (k, &lane) in lanes.iter().enumerate() {
-        let over = Over::under(&values, lane)
-            .ok_or_else(|| refuse("no blend", format!("albedo lane {k} is no blend of layers")))?;
-        let top = over.layers.last().map_or(over.base, |l| l.node);
-        saturate = Some(outside(&mut reader, lane, top, k, saturate)?);
-        // the bottom layer's colour: the base, or a constant blend over it directly above it
-        let mut bottom = over.base;
-        let mut rest = over.layers.as_slice();
-        while let [first, more @ ..] = rest
-            && constant(&mut reader, first.weight)?
-            && constant(&mut reader, first.value)?
-        {
-            bottom = first.node;
-            rest = more;
-        }
-        let mut lane_weights = Vec::with_capacity(rest.len());
-        let mut lane_colours = vec![colour(&mut reader, bottom, k)?];
-        for layer in rest {
-            lane_weights.push(layer.weight);
-            lane_colours.push(colour(&mut reader, layer.value, k)?);
+        let (saturated, lane_weights, lane_colours) = match Over::under(&values, lane) {
+            Some(over) => {
+                let top = over.layers.last().map_or(over.base, |l| l.node);
+                let saturated = outside(&mut reader, lane, top, k)?;
+                // the bottom layer's colour: the base, or a constant blend over it directly above it
+                let mut bottom = over.base;
+                let mut rest = over.layers.as_slice();
+                while let [first, more @ ..] = rest
+                    && constant(&mut reader, first.weight)?
+                    && constant(&mut reader, first.value)?
+                {
+                    bottom = first.node;
+                    rest = more;
+                }
+                let mut lane_weights = Vec::with_capacity(rest.len());
+                let mut lane_colours = vec![colour(&mut reader, bottom, k)?];
+                for layer in rest {
+                    lane_weights.push(layer.weight);
+                    lane_colours.push(colour(&mut reader, layer.value, k)?);
+                }
+                (saturated, lane_weights, lane_colours)
+            }
+            // no interpolation: one layer, laid over nothing
+            None => {
+                let (scalar, leaves) = reader.read(lane, &BTreeSet::new())?;
+                let (saturated, top) = unblended(&scalar, &leaves);
+                let colour = colour_of(&below(&scalar, top), &leaves, k)?;
+                (saturated, Vec::new(), vec![colour])
+            }
+        };
+        match saturate {
+            Some(before) if before != saturated => {
+                return Err(refuse("outside", "the albedo's lanes saturate differently"));
+            }
+            _ => saturate = Some(saturated),
         }
         match &weights {
             None => weights = Some(lane_weights),
@@ -639,8 +657,16 @@ fn colour<L: FnMut(NodeId, &Node, &[u32]) -> Option<u32>>(
     k: usize,
 ) -> Result<LaneColour, Refusal> {
     let (scalar, leaves) = r.read(node, &BTreeSet::new())?;
+    colour_of(&scalar, &leaves, k)
+}
+
+/// A layer's colour in lane `k`: `scalar` (its leaves as `leaves` takes them) as an expression of one sample's lanes.
+fn colour_of(scalar: &Scalar, leaves: &BTreeMap<NodeId, Leaf>, k: usize) -> Result<LaneColour, Refusal> {
     let mut sample = None;
-    for leaf in leaves.values() {
+    for id in scalar.leaves() {
+        let leaf = leaves
+            .get(&id)
+            .ok_or_else(|| refuse("term", format!("leaf {id:?} not read")))?;
         match leaf {
             Leaf::Texel(s, _) if sample.is_none() => sample = Some(s.clone()),
             Leaf::Texel(s, _) if sample.as_ref() == Some(s) => {}
@@ -665,13 +691,97 @@ fn colour<L: FnMut(NodeId, &Node, &[u32]) -> Option<u32>>(
             format!("a layer's colour in lane {k} reads no texture"),
         )
     })?;
-    let expression = expression(&scalar, &leaves, |leaf| {
+    let expression = expression(scalar, leaves, |leaf| {
         Ok(match leaf {
             Leaf::Texel(_, lane) => Some(ColorLane(*lane)),
             Leaf::Stream(..) | Leaf::Constant(_) => None,
         })
     })?;
     Ok(LaneColour { sample, expression })
+}
+
+/// An albedo lane with no interpolation under it (`scalar`, its leaves as `leaves` takes them): one layer's colour
+/// under what lies outside it, as [`outside`] takes a blend's: whether a saturate is, and the term the colour is.
+/// Outside are a saturate, once, and products by a factor of exactly 1 where the freeze holds it; the colour is the
+/// first term that is neither, so a product by any other constant is the colour's own (a texture times its factor).
+fn unblended(scalar: &Scalar, leaves: &BTreeMap<NodeId, Leaf>) -> (bool, usize) {
+    let terms = &scalar.terms;
+    let one = |i: usize| {
+        let c = match terms.get(i) {
+            Some(Op::Constant(c)) => Some(*c),
+            Some(Op::Leaf(n)) => match leaves.get(n) {
+                Some(Leaf::Constant(c)) => Some(*c),
+                _ => None,
+            },
+            _ => None,
+        };
+        c.is_some_and(|c| c.to_bits() == 1.0f32.to_bits())
+    };
+    let mut at = terms.len().saturating_sub(1);
+    let mut saturate = false;
+    loop {
+        match terms.get(at) {
+            Some(Op::Saturate(x)) if !saturate => {
+                saturate = true;
+                at = *x;
+            }
+            Some(Op::Multiply([a, b])) if one(*a) => at = *b,
+            Some(Op::Multiply([a, b])) if one(*b) => at = *a,
+            _ => return (saturate, at),
+        }
+    }
+}
+
+/// The value of term `t` of `scalar` as a scalar of its own: the terms it is made of, in their order.
+fn below(scalar: &Scalar, t: usize) -> Scalar {
+    let terms = &scalar.terms[..=t.min(scalar.terms.len().saturating_sub(1))];
+    let operands = |term: &Op| -> Vec<usize> {
+        match *term {
+            Op::Add([a, b])
+            | Op::Subtract([a, b])
+            | Op::Multiply([a, b])
+            | Op::Min([a, b])
+            | Op::Max([a, b]) => {
+                vec![a, b]
+            }
+            Op::Saturate(a) => vec![a],
+            Op::Leaf(_) | Op::Constant(_) => Vec::new(),
+        }
+    };
+    // operands come before their terms: one pass down from the top marks every term it is made of
+    let mut used = vec![false; terms.len()];
+    if let Some(top) = used.last_mut() {
+        *top = true;
+    }
+    for i in (0..terms.len()).rev() {
+        if used[i] {
+            for o in operands(&terms[i]) {
+                if let Some(u) = used.get_mut(o) {
+                    *u = true;
+                }
+            }
+        }
+    }
+    let mut index = vec![0; terms.len()];
+    let mut out = Vec::new();
+    for (i, term) in terms.iter().enumerate() {
+        if !used[i] {
+            continue;
+        }
+        let at = |o: usize| index.get(o).copied().unwrap_or(usize::MAX);
+        let renumbered = match *term {
+            Op::Add([a, b]) => Op::Add([at(a), at(b)]),
+            Op::Subtract([a, b]) => Op::Subtract([at(a), at(b)]),
+            Op::Multiply([a, b]) => Op::Multiply([at(a), at(b)]),
+            Op::Min([a, b]) => Op::Min([at(a), at(b)]),
+            Op::Max([a, b]) => Op::Max([at(a), at(b)]),
+            Op::Saturate(a) => Op::Saturate(at(a)),
+            leaf @ (Op::Leaf(_) | Op::Constant(_)) => leaf,
+        };
+        index[i] = out.len();
+        out.push(renumbered);
+    }
+    Scalar { terms: out }
 }
 
 /// Each lane its own sample lane times a constant (1 for the lane itself): those constants.
@@ -693,13 +803,12 @@ fn factor(lanes: &[Expression<ColorLane>; 3]) -> Option<[f32; 3]> {
 }
 
 /// What albedo lane `k` (`lane`) makes of the blend `top` under it: whether it saturates it. Every factor outside the
-/// blend must be exactly 1 and `saturate` the same in each lane (`before`, the earlier lanes').
+/// blend must be exactly 1.
 fn outside<L: FnMut(NodeId, &Node, &[u32]) -> Option<u32>>(
     r: &mut Reader<'_, L>,
     lane: NodeId,
     top: NodeId,
     k: usize,
-    before: Option<bool>,
 ) -> Result<bool, Refusal> {
     let stop = BTreeSet::from([top]);
     let scalar = Scalar::of(r.values, lane, &stop);
@@ -769,8 +878,5 @@ fn outside<L: FnMut(NodeId, &Node, &[u32]) -> Option<u32>>(
             }
         }
     }
-    match before {
-        Some(b) if b != saturate => Err(refuse("outside", "the albedo's lanes saturate differently")),
-        _ => Ok(saturate),
-    }
+    Ok(saturate)
 }
