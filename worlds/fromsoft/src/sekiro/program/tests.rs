@@ -314,6 +314,7 @@ fn the_stated_values_give_the_pass_lists_the_builders_fixed() {
         "resolve-state",
         "resolve-state",
         "lower-fromsoft-render-graph",
+        "place-fromsoft-far-tile-environment",
         "lower-fromsoft-environment-probes",
         "bind-fromsoft-environment-probes",
         COLLISION,

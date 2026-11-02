@@ -1333,6 +1333,12 @@ instructions and undecidable branches are errors. This does not guess the player
 With `Options::irradiance`, the Elden Ring reader records every supported installed
 environment package's tier, state and member headers in `fromsoft.environment_catalog`,
 and every box's authored data and available packages in `fromsoft.environment_region`.
+On a far tile (`m60_X_Z_02`, `_12`) the packages also hold groups that no box names (0900 to 0959, a second one on
+high ground); the reader records each as it is stored, in `fromsoft.far_tile_environment_group`, placed nowhere. The
+registered `place-fromsoft-far-tile-environment` pass gives each a `fromsoft.environment_region`: a box over the tile
+fitted to the volumes against the collision (1,024 m across, 84 rows of 13.25 m from -105 m), a tile's groups stacked
+in group order, with stand-in fields; both are approximations it reports per group, the game's placement being
+untraced. The lowering refuses a far-tile group no pass has placed.
 It inspects one binder at a time and retains no DDS payloads or selected core probes.
 The registered `select-fromsoft-environment{state-a=5,state-b=6,factor=0.35333335,tier=high}`
 pass requires all four choices (`high`, `middle` or `low`; a finite factor in `[0,1]`),

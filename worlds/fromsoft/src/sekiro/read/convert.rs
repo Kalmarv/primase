@@ -27,6 +27,7 @@ pub const EMITTED_NAMES: &[&str] = &[
     "core.instance",
     "fromsoft.environment_catalog",
     "fromsoft.environment_region",
+    "fromsoft.far_tile_environment_group",
     "fromsoft.environment_payloads",
     "core.texture_layers",
     "core.name",
@@ -82,6 +83,7 @@ pub fn emitted_names(options: &Options) -> Vec<&'static str> {
                     | "fromsoft.irradiance_region"
                     | "fromsoft.environment_catalog"
                     | "fromsoft.environment_region"
+                    | "fromsoft.far_tile_environment_group"
                     | "fromsoft.environment_payloads"
             ) || options.irradiance
         })

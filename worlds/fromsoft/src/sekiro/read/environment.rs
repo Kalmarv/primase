@@ -3,13 +3,14 @@ use crate::{
     invalid,
     sekiro::environment_data::{
         EnvironmentCatalog, EnvironmentGroup, EnvironmentLoadRequest, EnvironmentPayload,
-        EnvironmentPayloads, EnvironmentRegion,
+        EnvironmentPayloads, EnvironmentRegion, FarTileEnvironmentGroup, Placement,
     },
 };
 pub use fromsoft_formats::envmap::Tier;
 use fromsoft_formats::{
     Archive, Binder, Result,
     dcx::Decoder,
+    mapid::MapId,
     msb::{MapLayout, Region},
     tpf::{Package, TextureKind},
 };
@@ -22,6 +23,8 @@ pub struct Report {
     pub packages: usize,
     pub textures: usize,
     pub boxes: usize,
+    /// A far tile's groups that no box names, attached as [`FarTileEnvironmentGroup`]s for a placement pass.
+    pub far_tile_groups: usize,
     pub groups: usize,
     /// Diagnostic timing for the offline measurement; excluded from deterministic conversion reports.
     #[serde(skip)]
@@ -41,6 +44,11 @@ pub fn group_for(region: &Region, fields: &fromsoft_formats::envmap::BoxFields) 
             "negative group override other than -1",
         )),
     }
+}
+
+/// Whether `area` is an overworld far tile (`mAA_X_Z_02`, or its alternate `_12`).
+fn is_far_tile(area: &str) -> bool {
+    MapId::from_name(area).is_some_and(|id| matches!(id.area, 60 | 61) && id.variant & 15 == 2)
 }
 
 /// Describe every authored box and available package. No environment texture is decoded or attached here; one binder at a time supplies names/headers only.
@@ -108,7 +116,7 @@ pub fn read(
             entity,
             EnvironmentRegion {
                 area: area.into(),
-                region,
+                placement: Placement::Authored(region),
                 fields,
                 group,
                 available_packages,
@@ -117,6 +125,34 @@ pub fn read(
         );
         report.boxes += 1;
         groups.insert(group);
+    }
+    // a far tile's own groups, which no box names: the source places them nowhere
+    if is_far_tile(area) {
+        let unnamed: BTreeSet<u32> = packages
+            .iter()
+            .flat_map(|p| p.members.iter().map(|m| m.identity.group))
+            .filter(|g| !groups.contains(g))
+            .collect();
+        for group in unnamed {
+            let available_packages: Vec<_> = packages
+                .iter()
+                .filter(|p| p.members.iter().any(|m| m.identity.group == group))
+                .map(|p| p.package.path.clone())
+                .collect();
+            let entity = world.spawn();
+            world.insert(entity, Name(format!("{area}:far tile group {group:04}")));
+            world.insert(entity, Source(format!("{area}:far-tile:probe:{group:04}")));
+            world.insert(
+                entity,
+                FarTileEnvironmentGroup {
+                    area: area.into(),
+                    group,
+                    available_packages,
+                },
+            );
+            report.far_tile_groups += 1;
+            groups.insert(group);
+        }
     }
     report.groups = groups.len();
     world.insert_resource(EnvironmentCatalog {

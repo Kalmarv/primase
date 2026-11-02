@@ -765,6 +765,7 @@ fn the_fromsoft_passes_register_by_name() {
         "lower-sekiro-reinhard",
         "materialize-fromsoft-catalog",
         "name-fromsoft-entities",
+        "place-fromsoft-far-tile-environment",
         "preserve-fromsoft-display-masks",
         "raise-fromsoft-display-masks",
         "release-fromsoft-sources",
@@ -790,6 +791,7 @@ fn the_fromsoft_passes_register_by_name() {
     let free = [
         "bind-fromsoft-environment-probes",
         "lower-fromsoft-environment-probes",
+        "place-fromsoft-far-tile-environment",
         "materialize-fromsoft-catalog",
         "lower-fromsoft-render-graph",
         "lower-elden-ring-reinhard",

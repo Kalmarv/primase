@@ -21,17 +21,68 @@ impl Resource for EnvironmentCatalog {
     }
 }
 
-/// The complete authored box, its parsed fields and its source reflection-point association.
+/// One environment region: where its box comes from, its fields, its probe group and its reflection origin.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct EnvironmentRegion {
     pub area: String,
-    pub region: Region,
+    pub placement: Placement,
+    /// The authored box's fields; a far tile's are the stand-ins its placement pass states.
     pub fields: BoxFields,
     pub group: u32,
     pub available_packages: Vec<String>,
     /// Core coordinate frame; the reader's frame conversion does not select any state.
     pub reflection_origin: [f32; 3],
 }
+impl EnvironmentRegion {
+    /// The region's name: the authored box's, or the far tile's group.
+    pub fn name(&self) -> String {
+        match &self.placement {
+            Placement::Authored(region) => region.name.clone(),
+            Placement::FarTile { layer, .. } => format!("far tile group {:04} (layer {layer})", self.group),
+        }
+    }
+}
+
+/// Where an environment region's box comes from.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub enum Placement {
+    /// An `EnvironmentMapEffectBox` of the layout, its shape and pose as stored.
+    Authored(Region),
+    /// A far tile's own probe group ([`FarTileEnvironmentGroup`]), which no box of the layout names, placed by a pass:
+    /// one of the tile's layers stacked from the ground up (`layer` 0 the lowest), a box over the tile in its stored
+    /// frame (`centre` and `half_extents` in metres), placed as `how` says.
+    FarTile {
+        layer: u8,
+        centre: [f32; 3],
+        half_extents: [f32; 3],
+        how: FarTilePlacement,
+    },
+}
+
+/// How a far tile's box was placed.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub enum FarTilePlacement {
+    /// Fitted to the groups' own volumes by `place-fromsoft-far-tile-environment`; the game's placement is not traced.
+    Fitted,
+}
+
+/// A far tile's own probe group as the source holds it: the group of the tile's environment packages that no box of
+/// its layout names, and the packages that hold it. The source places it nowhere; a placement pass gives it an
+/// [`EnvironmentRegion`].
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct FarTileEnvironmentGroup {
+    pub area: String,
+    pub group: u32,
+    pub available_packages: Vec<String>,
+}
+impl Component for FarTileEnvironmentGroup {
+    const NAME: &'static str = "fromsoft.far_tile_environment_group";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
+
 impl Component for EnvironmentRegion {
     const NAME: &'static str = "fromsoft.environment_region";
     const GEOMETRY: Geometry = Geometry::None;

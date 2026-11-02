@@ -1,7 +1,7 @@
 //! Explicit environment selection, followed by reader loading and core probe lowering.
 use crate::sekiro::environment_data::{
     EnvironmentCatalog, EnvironmentGroup, EnvironmentLoadRequest, EnvironmentPayloads, EnvironmentRegion,
-    EnvironmentSelection,
+    EnvironmentSelection, FarTileEnvironmentGroup, Placement,
 };
 use fromsoft_formats::envmap::Tier;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
@@ -103,7 +103,7 @@ impl Pass for SelectEldenRingEnvironment {
                 {
                     return Err(format!(
                         "environment box {} group{:04} has no installed payload in state{state:02}/{}",
-                        region.region.name,
+                        region.name(),
                         region.group,
                         self.0.tier.word()
                     ));
@@ -122,6 +122,36 @@ impl Pass for SelectEldenRingEnvironment {
         world.insert_resource(self.0);
         world.insert_resource(EnvironmentLoadRequest(packages));
         Ok(())
+    }
+}
+
+/// A region's box in the stored frame, as columns (three half-extent axes, then the centre), and its half extents. An
+/// authored box's centre is its position plus its local half-height offset turned by its rotation.
+fn box_columns(placement: &Placement) -> Result<([[f32; 3]; 4], [f32; 3]), String> {
+    match placement {
+        Placement::Authored(region) => {
+            let fromsoft_formats::msb::RegionShape::Box { width, height, depth } = region.shape else {
+                return Err("environment effect region is not a box".into());
+            };
+            let half_extents = [width / 2., height / 2., depth / 2.];
+            let mut cols = fromsoft_formats::msb::euler_matrix(
+                region.position,
+                region.rotation_degrees,
+                half_extents,
+                0,
+            )
+            .map_err(|e| e.to_string())?;
+            let centre_offset = cols[1];
+            for (position, offset) in cols[3].iter_mut().zip(centre_offset) {
+                *position += offset;
+            }
+            Ok((cols, half_extents))
+        }
+        Placement::FarTile {
+            centre,
+            half_extents: [x, y, z],
+            ..
+        } => Ok(([[*x, 0., 0.], [0., *y, 0.], [0., 0., *z], *centre], [*x, *y, *z])),
     }
 }
 
@@ -165,7 +195,7 @@ fn group(payloads: &EnvironmentPayloads, state: u8, tier: Tier, id: u32) -> Resu
     }
     Ok(found)
 }
-fn note(world: &mut World, key: &str, reason: String, unsupported: bool) {
+pub(super) fn note(world: &mut World, key: &str, reason: String, unsupported: bool) {
     let existing = world
         .iter::<ContentNote>()
         .find(|(_, n)| n.key == key)
@@ -230,23 +260,19 @@ impl Pass for LowerEldenRingEnvironmentProbes {
                 ))
             })
             .collect::<Result<_, String>>()?;
+        // a far tile's groups are lowered once a pass has placed them; none is left out unsaid
+        if let Some((_, g)) = world
+            .iter::<FarTileEnvironmentGroup>()
+            .find(|(e, _)| world.get::<EnvironmentRegion>(*e).is_none())
+        {
+            return Err(format!(
+                "{} far tile environment group {:04} has no region: place-fromsoft-far-tile-environment places it",
+                g.area, g.group
+            ));
+        }
         let stormveil = regions.iter().any(|(_, r, _)| r.area == "m10_00_00_00");
         for (entity, r, groups) in regions {
-            let fromsoft_formats::msb::RegionShape::Box { width, height, depth } = r.region.shape else {
-                return Err("environment effect region is not a box".into());
-            };
-            let half_extents = [width / 2., height / 2., depth / 2.];
-            let mut cols = fromsoft_formats::msb::euler_matrix(
-                r.region.position,
-                r.region.rotation_degrees,
-                half_extents,
-                0,
-            )
-            .map_err(|e| e.to_string())?;
-            let centre_offset = cols[1];
-            for (position, offset) in cols[3].iter_mut().zip(centre_offset) {
-                *position += offset;
-            }
+            let (cols, half_extents) = box_columns(&r.placement)?;
             let mut transform = crate::pose::placed(cols);
             transform.cols[2] = transform.cols[2].map(|v| -v);
             if let Some(old) = world.get::<ReflectionProbeRegion>(entity).cloned() {
@@ -268,7 +294,7 @@ impl Pass for LowerEldenRingEnvironmentProbes {
                 let diffuse = world.spawn();
                 world.insert(
                     diffuse,
-                    Name(format!("{}:{}:diffuse:{state:02}", r.area, r.region.name)),
+                    Name(format!("{}:{}:diffuse:{state:02}", r.area, r.name())),
                 );
                 world.insert(diffuse, transform);
                 world.insert(

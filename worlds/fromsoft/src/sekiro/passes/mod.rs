@@ -19,6 +19,7 @@ pub mod environment;
 pub mod environment_probes;
 pub mod extras;
 pub mod far;
+pub mod far_tile_environment;
 pub mod geometry;
 pub mod irradiance;
 pub mod layers;
@@ -126,6 +127,7 @@ pub fn register(registry: &mut PassRegistry) {
         &draw_params::SAMPLE_FROMSOFT_DRAW_PARAMS,
         &environment::LOWER_FROMSOFT_ENVIRONMENT,
         &catalog::MATERIALIZE_FROMSOFT_CATALOG,
+        &far_tile_environment::PLACE_FROMSOFT_FAR_TILE_ENVIRONMENT,
         &environment_probes::SELECT_ELDEN_RING_ENVIRONMENT,
         &environment_probes::LOWER_ELDEN_RING_ENVIRONMENT_PROBES,
         &environment_probes::BIND_FROMSOFT_ENVIRONMENT_PROBES,

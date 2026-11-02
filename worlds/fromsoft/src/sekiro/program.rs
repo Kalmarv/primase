@@ -112,7 +112,8 @@ pub struct AreaPreparation {
     /// The draw-param environment sampled at an hour of the game's clock before it is lowered. None: no pass samples,
     /// and the lowering uses its documented fallback hour, a counted approximation.
     pub draw_params: Option<SampleFromSoftDrawParams>,
-    /// The read took environment probes (`select-fromsoft-environment`): lower and bind them after the render graph.
+    /// The read took environment probes (`select-fromsoft-environment`): place a far tile's groups, then lower and bind
+    /// the probes after the render graph.
     pub environment_probes: bool,
     /// A weather snapshot was applied: `resolve-state` runs first.
     pub weather: bool,
@@ -210,6 +211,7 @@ impl AreaPreparation {
             texts.splice(
                 1..1,
                 [
+                    "place-fromsoft-far-tile-environment".to_owned(),
                     "lower-fromsoft-environment-probes".to_owned(),
                     "bind-fromsoft-environment-probes".to_owned(),
                 ],
