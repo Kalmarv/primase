@@ -7,7 +7,10 @@
 //!
 //! The gate refuses what it should refuse, not only agrees on what it accepts: the same envelope with its decoded-size
 //! word or its payload-size word one more or one less, its payload one byte short and one byte over, must not decode
-//! ([`Decoder::decode`]), whichever way the game's library would take it.
+//! ([`Decoder::decode`]), whichever way the game's library would take it. The exception is a stream that ends in a
+//! memset quantum, which states no length: the decoded-size word one off within that quantum decodes, in the game's
+//! library as in oozextract, to one byte fewer or one more fill byte, and it must decode to exactly that (a length-free
+//! ending; Elden Ring's `aet220_816.tpf.dcx` is one).
 //!
 //! The standing census of the streams checked is printed beside the report, so that a green run states its sample: how many
 //! streams (archive entries and binder members), blocks, the block headers of the first block and of the later ones, the
@@ -29,7 +32,7 @@ mod inputs;
 
 use std::collections::BTreeMap;
 
-use fromsoft_formats::dcx::{Compression, Decoder, Envelope};
+use fromsoft_formats::dcx::{Compression, Decoder, Envelope, Format, frame};
 use fromsoft_formats::{Binder, Game};
 use inputs::{Depth, Game as Data, OracleSet, Tool, debug, depth, oracle, scratch, seed, tool};
 use primase_foundations::compress::Decompressor;
@@ -59,6 +62,38 @@ fn framing_fault(framing: &Framing) -> Option<String> {
         .into_iter()
         .find(|d| !matches!(d, DecoderType::Kraken | DecoderType::Lzb16))
         .map(|d| format!("a {d:?} block"))
+}
+
+/// How a stream that ends in a memset quantum ends: a memset quantum states no length (its header and one fill byte), so
+/// the decoder repeats the fill byte to whatever length the envelope's decoded-size word asks within that quantum, the
+/// game's library and oozextract alike.
+#[derive(Debug, PartialEq, Eq)]
+struct MemsetEnding {
+    /// The fill byte, the payload's last byte.
+    fill: u8,
+    /// The decoded bytes the last quantum covers, and the most a quantum of its decoder covers.
+    covers: usize,
+    quantum: usize,
+}
+
+/// The memset ending of a stream whose last block holds memset quanta alone (the counts do not order a block's quanta, so a
+/// block that mixes kinds is not taken as one), or `None`. Neither install has a whole-match quantum, the other kind
+/// that states no length.
+fn memset_ending(framing: &Framing, payload: &[u8]) -> Option<MemsetEnding> {
+    let last = framing.blocks.last()?;
+    let q = last.quanta;
+    if last.stored || q.memset == 0 || q.compressed != 0 || q.whole_match != 0 || q.stored != 0 {
+        return None;
+    }
+    let quantum = last.decoder.quantum_size();
+    Some(MemsetEnding {
+        fill: *payload.last()?,
+        covers: match last.decoded % quantum {
+            0 => quantum,
+            part => part,
+        },
+        quantum,
+    })
 }
 
 /// What the streams checked add up to: the standing census.
@@ -185,6 +220,8 @@ struct Gate<'a> {
     dump: Option<std::path::PathBuf>,
     /// Malformed variants that were refused.
     refused: usize,
+    /// Decoded-size variants of memset endings that decoded as one.
+    length_free: usize,
 }
 
 impl Gate<'_> {
@@ -231,37 +268,68 @@ impl Gate<'_> {
                 }
             }
         }
-        self.malformed(&item, &stored[..76 + envelope.payload.len()]);
+        let ending = memset_ending(&framing, envelope.payload);
+        self.malformed(
+            &item,
+            &stored[..76 + envelope.payload.len()],
+            &expected,
+            ending.as_ref(),
+        );
         Ok(Some(expected))
     }
 
     /// The envelope with either size word one more or one less, its payload one byte short and one byte over: none may
-    /// decode.
-    fn malformed(&mut self, item: &str, envelope: &[u8]) {
+    /// decode, but for a stream with a memset ending whose decoded-size word one off stays within its last quantum, which
+    /// must decode to `decoded` one byte shorter or with one more fill byte.
+    fn malformed(&mut self, item: &str, envelope: &[u8], decoded: &[u8], ending: Option<&MemsetEnding>) {
         // a zero byte after the payload is alignment, so a payload size one over takes it
         let mut base = envelope.to_vec();
         base.push(0);
         let word = |b: &[u8], at: usize| u32::from_be_bytes(b[at..at + 4].try_into().unwrap());
+        // each variant, and the length a memset ending decodes it to (`None`: refused)
         let mut cases = Vec::new();
         for (at, name) in [(28, "decoded size"), (32, "payload size")] {
             let was = word(&base, at);
             for (now, how) in [(was.wrapping_sub(1), "-1"), (was.wrapping_add(1), "+1")] {
                 let mut bad = base.clone();
                 bad[at..at + 4].copy_from_slice(&now.to_be_bytes());
-                cases.push((format!("{name} {how}"), bad));
+                let length_free = ending.filter(|e| {
+                    at == 28
+                        && if now < was {
+                            e.covers > 1
+                        } else {
+                            e.covers < e.quantum
+                        }
+                });
+                cases.push((format!("{name} {how}"), bad, length_free.map(|_| now as usize)));
             }
         }
         let mut short = base.clone();
         short.truncate(base.len() - 2);
-        cases.push(("payload one byte short".to_owned(), short));
+        cases.push(("payload one byte short".to_owned(), short, None));
         let mut over = base;
         over.push(1);
-        cases.push(("payload one byte over".to_owned(), over));
-        for (what, bad) in cases {
-            if self.decoder.decode(&bad).is_ok() {
-                self.report.fail(format!("{item} [{what}]"), "decodes");
-            } else {
-                self.refused += 1;
+        cases.push(("payload one byte over".to_owned(), over, None));
+        for (what, bad, length_free) in cases {
+            match (self.decoder.decode(&bad), length_free.zip(ending)) {
+                (Err(_), None) => self.refused += 1,
+                (Ok(_), None) => self.report.fail(format!("{item} [{what}]"), "decodes"),
+                // the stream's bytes up to the shorter length, then the memset quantum's own fill byte
+                (Ok(got), Some((len, e)))
+                    if got.len() == len
+                        && got[..len.min(decoded.len())] == decoded[..len.min(decoded.len())]
+                        && got[decoded.len().min(len)..].iter().all(|&b| b == e.fill) =>
+                {
+                    self.length_free += 1;
+                }
+                (Ok(_), Some(_)) => self.report.fail(
+                    format!("{item} [{what}]"),
+                    "a memset ending decodes to other bytes than one byte fewer or one fill byte more",
+                ),
+                (Err(e), Some(_)) => self.report.fail(
+                    format!("{item} [{what}]"),
+                    format!("a memset ending is refused: {e}"),
+                ),
             }
         }
     }
@@ -342,6 +410,7 @@ fn gate(game: Game, data: Data) -> std::result::Result<(), BoxError> {
         census: Census::default(),
         dump: debug("oodle.dump").map(|name| scratch().join(name)),
         refused: 0,
+        length_free: 0,
     };
     for (&hash, entry) in &archive.entries {
         if smoke && hash.wrapping_add(seed).wrapping_mul(0x9E37_79B9_7F4A_7C15) % STRIDE != 0 {
@@ -375,19 +444,21 @@ fn gate(game: Game, data: Data) -> std::result::Result<(), BoxError> {
         report,
         census,
         refused,
+        length_free,
         ..
     } = gate;
     census.print(game);
     println!(
-        "{} malformed variants refused (each size word one more and one less, the payload one byte short and over)\n{report}",
-        refused
+        "{refused} malformed variants refused (each size word one more and one less, the payload one byte short and over), \
+         {length_free} length-free endings (a decoded-size word one off within a last memset quantum: one byte fewer or \
+         one fill byte more)\n{report}"
     );
     assert!(census.top + census.members > 0, "no Kraken stream was checked");
     report.assert_passed();
-    // the standing invariants, whatever the sample: six malformed variants of each stream refused, every block restarting
-    // the decoder, no block with the checksum bit
+    // the standing invariants, whatever the sample: six malformed variants of each stream refused or (a decoded-size
+    // word of a memset ending) decoded as one, every block restarting the decoder, no block with the checksum bit
     assert_eq!(
-        refused,
+        refused + length_free,
         6 * (census.top + census.members),
         "malformed variants refused"
     );
@@ -414,4 +485,43 @@ fn sekiro_archives() -> std::result::Result<(), BoxError> {
 #[test]
 fn elden_ring_archives() -> std::result::Result<(), BoxError> {
     gate(Game::EldenRing, Data::Elden)
+}
+
+/// A Kraken stream of one block holding one memset quantum: the block header `8C 06`, the quantum header `07 FF FF` and the
+/// fill byte, as each of the last three blocks of Elden Ring's `aet220_816.tpf.dcx` is (with another fill byte). The game's
+/// library decodes it to whatever length the decoded-size word asks within the block's 256 KiB, the fill byte repeated,
+/// and [`memset_ending`] reads it so; no length, or one over the block, is refused.
+#[test]
+fn memset_ending_states_no_length() -> std::result::Result<(), BoxError> {
+    let Some(path) = tool(Tool::Oodle6) else {
+        return Ok(());
+    };
+    // SAFETY: explicitly configured trusted version-6 game library.
+    #[allow(unsafe_code)]
+    let dll = unsafe { Oodle::load(path, Version::V6)? };
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: usize::MAX >> 1,
+    };
+    let payload = [0x8C, 0x06, 0x07, 0xFF, 0xFF, 0x5A];
+    for n in [1, 2, 87_773, 87_774, 87_775, oodle_framing::BLOCK_SIZE] {
+        let envelope = frame(&Format::KRAKEN, n, &payload)?;
+        assert_eq!(decoder.decode(&envelope)?, vec![0x5A; n], "decoded size {n}");
+        assert_eq!(
+            memset_ending(&oodle_framing::walk(&payload, n)?, &payload),
+            Some(MemsetEnding {
+                fill: 0x5A,
+                covers: n,
+                quantum: oodle_framing::BLOCK_SIZE,
+            }),
+            "decoded size {n}"
+        );
+    }
+    for n in [0, oodle_framing::BLOCK_SIZE + 1] {
+        assert!(
+            decoder.decode(&frame(&Format::KRAKEN, n, &payload)?).is_err(),
+            "decoded size {n}"
+        );
+    }
+    Ok(())
 }
