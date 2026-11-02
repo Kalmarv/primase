@@ -106,8 +106,8 @@ impl<'a> AreaBake<'a> {
             .as_ref()
             .ok_or_else(|| invalid("area bake", group, "group index"))?;
         let (shader, bytecode, stage, vertex) = Self::bound(world, g)?;
+        // a texture sampled through the game's view of it: its colour space, the header's
         let view = |t: &Texture,
-                    srgb: bool,
                     address: [primase_foundations::sampling::Address; 2]|
          -> Result<Arc<iridia_exec::SampledTexture>> {
             let level = t
@@ -118,7 +118,11 @@ impl<'a> AreaBake<'a> {
                 .decode_rgba8(t.format, t.width, t.height, level)
                 .map_err(|e| invalid("area bake pixels", 0, e))?;
             Ok(Arc::new(crate::layer_bake::base_texture(
-                t.width, t.height, &pixels, srgb, address,
+                t.width,
+                t.height,
+                &pixels,
+                t.color_space == primase_core::ColorSpace::Srgb,
+                address,
             )?))
         };
         crate::layer_bake::Prepared::from_binding(
@@ -136,18 +140,19 @@ impl<'a> AreaBake<'a> {
             // the scene's hour of the day, which a program that reads it is baked at (refused where none is stated)
             &crate::layer_bake::FrozenFrame::static_bake(sample_time)
                 .at_hour(world.resource::<primase_core::TimeOfDay>().map(|t| t.hour)),
-            |entity: Entity, srgb, address| {
+            |entity: Entity, address| {
                 let t = world.get::<Texture>(entity).ok_or_else(|| {
                     invalid("area bake", group, "a bound texture entity without core.texture")
                 })?;
-                view(t, srgb, address)
+                view(t, address)
             },
-            |name, srgb, address| {
+            |name, address| {
                 let Some(bytes) = self.payloads.get(name) else {
                     return Ok(None);
                 };
+                // through the game's view of it: the colour space the DDS read states from the header
                 let texture = primase_dds::read(bytes).map_err(|e| invalid("area bake DDS", 0, e))?;
-                view(&texture, srgb, address).map(Some)
+                view(&texture, address).map(Some)
             },
         )
     }

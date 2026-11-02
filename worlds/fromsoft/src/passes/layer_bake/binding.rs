@@ -845,20 +845,20 @@ pub(crate) fn sampled_period(interface: &Interface, material: &LayeredMaterial) 
 impl Prepared {
     /// Frozen-frame preview binding of a layered material straight from its source: resolves the program's binding
     /// ([`resolve`], unbound slots given their counted preview colours) and binds it ([`Prepared::from_binding`]).
-    /// The caller supplies decoded views by texture name and sRGB flag. A program that reads the global time
+    /// The caller supplies decoded views by texture name, each through the game's view of it. A program that reads the global time
     /// (`FC_GlobalTime`, which scrolls some layers' texture coordinates) is sampled at `sample_time` seconds.
     pub fn new(
         bytes: &[u8],
         material: &LayeredMaterial,
         sample_time: f32,
-        mut image: impl FnMut(&str, bool) -> Result<Option<Arc<SampledTexture>>>,
+        mut image: impl FnMut(&str) -> Result<Option<Arc<SampledTexture>>>,
     ) -> Result<Self> {
         let shader = executor(bytes)?;
         // the textures stand as entities of a scratch world, each with the view the caller decoded
         let mut scratch = primase_core::World::default();
         let program = scratch.spawn();
         let mut views: BTreeMap<Entity, Arc<SampledTexture>> = BTreeMap::new();
-        let mut known: BTreeMap<(String, bool), Option<Entity>> = BTreeMap::new();
+        let mut known: BTreeMap<String, Option<Entity>> = BTreeMap::new();
         // the layer bake's materials are Sekiro's layered ones
         let resolution = resolve(
             &shader,
@@ -867,12 +867,13 @@ impl Prepared {
             fromsoft_formats::Game::Sekiro,
             None,
             Unbound::Preview,
-            &mut |stem, srgb| {
-                let key = (stem.to_owned(), srgb);
+            // the slot's role names no other view: one entity a texture
+            &mut |stem, _colour| {
+                let key = stem.to_owned();
                 if let Some(found) = known.get(&key) {
                     return Ok(*found);
                 }
-                let found = image(stem, srgb)?.map(|view| {
+                let found = image(stem)?.map(|view| {
                     let e = scratch.spawn();
                     views.insert(e, view);
                     e
@@ -891,30 +892,30 @@ impl Prepared {
             },
             material,
             &FrozenFrame::static_bake(sample_time),
-            |texture, _, _| {
+            |texture, _| {
                 views
                     .get(&texture)
                     .cloned()
                     .ok_or_else(|| invalid("layer binding", 0, "a texture the caller did not supply"))
             },
-            |name, srgb, _| image(name, srgb),
+            |name, _| image(name),
         )
     }
 
     /// The bake of a layered material from its pixel stage's binding (`core.shader_binding`): the constants as their
     /// roles say (the material's own words as stored, the engine's values from `frame`, counted when a policy
     /// applies, an unknown one left at zero, counted by its reason), each texture slot as bound (`texture` decodes a
-    /// texture entity, `true` for the sRGB colour layers; a default is its constant), and the outputs by their roles.
-    /// The material source gives what a shader does not read: the main albedo's alpha (`stem` decodes a texture file
-    /// by name), the shader family the bake supports and the sampled layers' UV scales. `shader` is the program the
+    /// texture entity through the game's view of it, the colour space its DDS header states; a default is its constant),
+    /// and the outputs by their roles. The material source gives what a shader does not read: the main albedo's alpha
+    /// (`stem` decodes a texture file by name, through the same view), the shader family the bake supports and the sampled layers' UV scales. `shader` is the program the
     /// binding was resolved against (its resources are what the binding names) and `bytecode` its container, which
     /// the bake lifts and executes.
     pub fn from_binding(
         programs: Programs<'_>,
         material: &LayeredMaterial,
         frame: &FrozenFrame,
-        mut texture: impl FnMut(Entity, bool, [Address; 2]) -> Result<Arc<SampledTexture>>,
-        mut stem: impl FnMut(&str, bool, [Address; 2]) -> Result<Option<Arc<SampledTexture>>>,
+        mut texture: impl FnMut(Entity, [Address; 2]) -> Result<Arc<SampledTexture>>,
+        mut stem: impl FnMut(&str, [Address; 2]) -> Result<Option<Arc<SampledTexture>>>,
     ) -> Result<Self> {
         let Programs {
             shader,
@@ -1012,7 +1013,7 @@ impl Prepared {
         let repeat = sampled_period(interface, material)?;
         let (period, period_exact) = (repeat.period, repeat.exact);
         let mut textures = BTreeMap::new();
-        let mut cache = BTreeMap::<(Entity, bool, [Option<AddressMode>; 2]), Arc<SampledTexture>>::new();
+        let mut cache = BTreeMap::<(Entity, [Option<AddressMode>; 2]), Arc<SampledTexture>>::new();
         let mut largest_colour_dimension = 0;
         for bound in &stage.textures {
             let resource = interface
@@ -1057,14 +1058,14 @@ impl Prepared {
                             .entry("texture slot with no stored addressing sampled with wrap".into())
                             .or_default() += 1;
                     }
-                    let key = (*entity, role == "AlbedoMap", stated);
+                    let key = (*entity, stated);
                     let image = match cache.entry(key) {
                         std::collections::btree_map::Entry::Occupied(found) => found.into_mut(),
                         std::collections::btree_map::Entry::Vacant(slot) => {
-                            slot.insert(texture(key.0, key.1, addressing(stated)?)?)
+                            slot.insert(texture(key.0, addressing(stated)?)?)
                         }
                     };
-                    if key.1 {
+                    if role == "AlbedoMap" {
                         largest_colour_dimension = largest_colour_dimension
                             .max(*image.dimensions().iter().max().expect("two axes") as u32);
                     }
@@ -1114,7 +1115,6 @@ impl Prepared {
         if let Some((_, (_, binding))) = main
             && let Some(t) = stem(
                 &binding.texture,
-                true,
                 addressing([binding.address[0], binding.address[1]])?,
             )?
         {

@@ -571,11 +571,12 @@ mod tests {
                 texture.height,
                 &texture.levels[0],
             )?;
-            images.insert(name.clone(), (texture.width, texture.height, rgba));
+            let srgb = texture.color_space == ColorSpace::Srgb;
+            images.insert(name.clone(), (texture.width, texture.height, rgba, srgb));
         }
-        let prepared = Prepared::new(&shader, source.layered.as_ref().unwrap(), 0., |name, srgb| {
-            let (w, h, rgba) = images.get(name).expect("complete jar source texture closure");
-            Ok(Some(Arc::new(wrapped_texture(*w, *h, rgba, srgb)?)))
+        let prepared = Prepared::new(&shader, source.layered.as_ref().unwrap(), 0., |name| {
+            let (w, h, rgba, srgb) = images.get(name).expect("complete jar source texture closure");
+            Ok(Some(Arc::new(wrapped_texture(*w, *h, rgba, *srgb)?)))
         })?;
         for inputs in [
             Inputs::default(),

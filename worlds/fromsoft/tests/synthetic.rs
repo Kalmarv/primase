@@ -450,6 +450,63 @@ fn tpf_import_uses_shared_dds_metadata() {
     assert!(primase_fromsoft::sekiro::tpf_image(&record).is_err());
 }
 
+/// The game's view of a texture comes from its DDS header alone, and the reader keeps the space the DDS read states: an
+/// sRGB DXGI format is viewed sRGB, any other DXGI format and a legacy four-character code linear, whatever the image
+/// was written from.
+#[test]
+fn a_textures_view_is_its_headers() {
+    use fromsoft_formats::tpf::{Texture, TextureKind};
+    use primase_core::{ColorSpace::*, TexFormat, TexRole, Texture as Image};
+    let image = |format: TexFormat, color_space| Image {
+        width: 4,
+        height: 4,
+        format,
+        levels: vec![vec![0; format.level_size(4, 4)]],
+        color_space,
+        role: TexRole::Other,
+        normal: None,
+    };
+    let view = |dds: Vec<u8>| {
+        let record = Texture {
+            name: "synthetic".into(),
+            format: 0,
+            kind: TextureKind::Image2D,
+            mipmaps: 1,
+            flags: 0,
+            extra: None,
+            dds,
+        };
+        primase_fromsoft::sekiro::tpf_image(&record)
+            .expect("image")
+            .color_space
+    };
+    for format in [
+        TexFormat::Bc1,
+        TexFormat::Bc3,
+        TexFormat::Bc7,
+        TexFormat::Rgba8Unorm,
+    ] {
+        for space in [Srgb, Linear] {
+            let dds = primase_dds::write_dx10(&image(format, space)).expect("DDS");
+            assert_eq!(view(dds), space, "{format:?} {space:?}");
+        }
+    }
+    // a legacy code states no transfer: BC1 to BC3 as written, BC4 and BC5 by their codes on headers of the same size
+    for (format, fourcc) in [
+        (TexFormat::Bc1, None),
+        (TexFormat::Bc2, None),
+        (TexFormat::Bc3, None),
+        (TexFormat::Bc1, Some(b"ATI1")),
+        (TexFormat::Bc3, Some(b"ATI2")),
+    ] {
+        let mut dds = primase_dds::write_legacy(&image(format, Srgb)).expect("DDS");
+        if let Some(code) = fourcc {
+            dds[84..88].copy_from_slice(code);
+        }
+        assert_eq!(view(dds), Linear, "{format:?} {fourcc:?}");
+    }
+}
+
 /// The archive path hash: a known Sekiro path, with backslashes and capitals and as the dictionary writes it.
 #[test]
 fn path_hash_reference_values() {

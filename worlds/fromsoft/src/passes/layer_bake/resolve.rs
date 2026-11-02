@@ -399,8 +399,9 @@ fn stated_render_state(blend_mode: i32, disable_depth_write: bool) -> RenderStat
 /// Bind the pixel program `shader` (entity `entity`) of `material` (an MTD's or a material binary's, [`MaterialView`]),
 /// a program of `game` (its G-buffer layout: [`fromsoft_formats::Game::gbuffer`]). `metaparam` is the parameter definition of its
 /// shader's bundle, which states the default of a parameter the material does not, where each parameter sits in an
-/// array-addressed program, and each texture's uv group. `texture` finds the entity of a texture by stem and colour
-/// space (`true`: sRGB, the albedo maps), or `None` when the reader holds no such file.
+/// array-addressed program, and each texture's uv group. `texture` finds the entity of a texture by stem and whether
+/// the slot is the colour (albedo) slot, which gives the texture its role, never its colour space (that is the header's
+/// view, as the DDS read states it), or `None` when the reader holds no such file.
 ///
 /// A program's own layout says how it reads the material's parameters: Sekiro's name each one as a field
 /// (`<family>_snp_*`, the name the material and the metaparam give the parameter), Elden Ring's read them from one array,

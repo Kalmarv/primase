@@ -570,8 +570,8 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
         2
     );
 
-    // one shader entity: the bytecode as stored, its format and interface; one texture: the DDS as stored in the
-    // slot's colour space
+    // one shader entity: the bytecode as stored, its format and interface; one texture: the DDS as stored, in the
+    // colour space its header states (RGBA8 UNORM: linear), in the albedo slot's role
     let shaders: Vec<_> = world.iter::<Shader>().collect();
     assert_eq!(shaders.len(), 2);
     let (shader, program) = *shaders
@@ -593,10 +593,10 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
     let textures: Vec<(Entity, &Texture)> = world.iter::<Texture>().collect();
     assert_eq!(textures.len(), 1);
     let (texture, t) = textures[0];
-    assert_eq!(world.get::<Name>(texture).unwrap().0, "grass_a.dds@srgb");
+    assert_eq!(world.get::<Name>(texture).unwrap().0, "grass_a.dds@colour");
     assert_eq!(
         (t.width, t.format, t.color_space, t.role),
-        (4, TexFormat::Rgba8Unorm, ColorSpace::Srgb, TexRole::Color)
+        (4, TexFormat::Rgba8Unorm, ColorSpace::Linear, TexRole::Color)
     );
 
     // the material with a bundle is bound in both stages, the other in the pixel stage alone
@@ -905,12 +905,11 @@ fn frozen_frame_bake(
         },
         &layered,
         &frame,
-        |_, srgb, address| {
-            assert!(srgb, "the albedo is the only bound texture");
+        |_, address| {
             assert_eq!(address, [Address::Wrap, Address::Mirror]);
             view()
         },
-        |_, _, _| Ok(None),
+        |_, _| Ok(None),
     )
 }
 
@@ -1885,8 +1884,8 @@ fn both_bakes_freeze_the_alpha_test_off_by_the_binding() {
             },
             &material,
             &FrozenFrame::static_bake(0.),
-            |_, _, _| unreachable!("no texture is bound"),
-            |_, _, _| Ok(None),
+            |_, _| unreachable!("no texture is bound"),
+            |_, _| Ok(None),
         )
         .unwrap();
         // the program bake, as the detail probe freezes a program
@@ -1928,8 +1927,8 @@ fn both_bakes_freeze_the_alpha_test_off_by_the_binding() {
         },
         &plain,
         &FrozenFrame::static_bake(0.),
-        |_, _, _| unreachable!("no texture is bound"),
-        |_, _, _| Ok(None),
+        |_, _| unreachable!("no texture is bound"),
+        |_, _| Ok(None),
     )
     .unwrap();
     assert_eq!(prepared.policies.get(ALPHA_TEST_POLICY), None);

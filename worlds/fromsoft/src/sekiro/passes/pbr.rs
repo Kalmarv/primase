@@ -370,12 +370,17 @@ fn held(
 ) -> bool {
     cache.contains_key(&(name.to_owned(), normal)) || payloads.contains_key(name)
 }
+/// A texture for a lowered slot, its colour space by the slot's role: the preview runs no program, so it takes a colour
+/// slot's stored values as sRGB-encoded colour and a normal map's as linear data. Where that differs from the game's view
+/// of the texture (its header's, as the DDS read states it: a colour texture with a linear view), what the program does
+/// after the sample is not read, and the texture is counted as an approximation.
 fn texture(
     world: &mut World,
     payloads: &BTreeMap<String, impl AsRef<[u8]>>,
     cache: &mut BTreeMap<(String, bool), Entity>,
     name: &str,
     normal: bool,
+    log: &mut PassLog,
 ) -> Result<Entity> {
     let key = (name.to_owned(), normal);
     if let Some(e) = cache.get(&key) {
@@ -383,11 +388,23 @@ fn texture(
     }
     let mut t = read(payloads, name)?;
     t.role = if normal { TexRole::Normal } else { TexRole::Color };
-    t.color_space = if normal {
+    let by_role = if normal {
         ColorSpace::Linear
     } else {
         ColorSpace::Srgb
     };
+    if t.color_space != by_role {
+        log.approximate(
+            if normal {
+                "normal maps whose view is sRGB read as linear data (the program's decoding not read)"
+            } else {
+                "colour textures whose view is linear (a legacy or UNORM header) taken as sRGB colour by the slot's role \
+                 (the program's decoding not read)"
+            },
+            1,
+        );
+    }
+    t.color_space = by_role;
     t.normal = normal.then_some(super::normals::SOURCE);
     let e = spawn(world, texture_name(name, normal), t);
     cache.insert(key, e);
@@ -665,7 +682,9 @@ fn lower_materials(
                             && b.scale.iter().all(|v| v.is_finite())
                     });
                     if let Some(b) = binding {
-                        let mut r = TextureRef::new(texture(world, payloads, &mut cache, &b.texture, false)?);
+                        let mut r = TextureRef::new(texture(
+                            world, payloads, &mut cache, &b.texture, false, &mut log,
+                        )?);
                         r.texcoord = c.slot.texcoord;
                         r.transform = Some(row_transform(
                             tiling_row(world, e, &m, &c.slot.binding, b),
@@ -750,7 +769,7 @@ fn lower_materials(
                 && let Some(name) = &pv.albedo
                 && held(payloads, &cache, name, false)
             {
-                let mut r = TextureRef::new(texture(world, payloads, &mut cache, name, false)?);
+                let mut r = TextureRef::new(texture(world, payloads, &mut cache, name, false, &mut log)?);
                 match &base {
                     Ok(Some(b)) if pv.albedo_binding.as_deref() == Some(b.slot.binding.as_str()) => {
                         r.texcoord = b.slot.texcoord;
@@ -804,7 +823,7 @@ fn lower_materials(
                 && let Some(name) = &pv.normal
                 && held(payloads, &cache, name, true)
             {
-                let mut r = TextureRef::new(texture(world, payloads, &mut cache, name, true)?);
+                let mut r = TextureRef::new(texture(world, payloads, &mut cache, name, true, &mut log)?);
                 if let Some((kind, b)) = keyed_normal_binding(&m, &pv) {
                     r.transform = Some(transform(tiling_row(world, e, &m, kind, b), applied, b)?);
                 }

@@ -23,8 +23,8 @@ use primase_core::shader::{
     bind_surface_input_fallbacks,
 };
 use primase_core::{
-    ColorSpace, Component, DrawLayer, DrawOrder, Entity, Instance, MaterialVariants, Mesh, Name, Semantic,
-    Shadows, StepBinding, StepBindings, StepProgram, TexRole, Texture, World,
+    Component, DrawLayer, DrawOrder, Entity, Instance, MaterialVariants, Mesh, Name, Semantic, Shadows,
+    StepBinding, StepBindings, StepProgram, TexRole, Texture, World,
 };
 use primase_core::{
     shader::ConstantRole, shader::MaterialPrograms, shader::ProgramFacts, shader::Shader,
@@ -200,18 +200,14 @@ fn receipts(world: &World) -> BTreeMap<Entity, (u64, u64)> {
     receipts
 }
 
-/// The bound texture's component, a DDS read as stored with the colour space the slot's role gives it.
-fn texture(payloads: &Payloads, stem: &str, srgb: bool) -> fromsoft_formats::Result<Option<Texture>> {
+/// The bound texture's component, a DDS read as stored: its colour space the game's view of it (the one
+/// `primase_dds::read` states from the header), its role the slot's (`colour` for the albedo slot).
+fn texture(payloads: &Payloads, stem: &str, colour: bool) -> fromsoft_formats::Result<Option<Texture>> {
     let Some(bytes) = payloads.get(stem) else {
         return Ok(None);
     };
     let mut t = primase_dds::read(bytes).map_err(|e| crate::invalid("layer texture DDS", 0, e))?;
-    t.color_space = if srgb {
-        ColorSpace::Srgb
-    } else {
-        ColorSpace::Linear
-    };
-    t.role = if srgb { TexRole::Color } else { TexRole::Other };
+    t.role = if colour { TexRole::Color } else { TexRole::Other };
     Ok(Some(t))
 }
 
@@ -497,14 +493,14 @@ fn run(
             game,
             metaparam,
             unbound,
-            &mut |stem: &str, srgb: bool| {
-                let key = (stem.to_owned(), srgb);
+            &mut |stem: &str, colour: bool| {
+                let key = (stem.to_owned(), colour);
                 if let Some(&e) = textures.get(&key) {
                     return Ok(Some(e));
                 }
                 // a texture the DDS reader refuses is one this read does not have: the slot is resolved as an unbound
                 // one is, by the unbound-textures policy, and the refusal counted by its reason
-                let t = match texture(payloads, stem, srgb) {
+                let t = match texture(payloads, stem, colour) {
                     Ok(Some(t)) => t,
                     Ok(None) => return Ok(None),
                     Err(e) => {
@@ -515,8 +511,8 @@ fn run(
                 let e = world.spawn();
                 world.insert(
                     e,
-                    Name(if srgb {
-                        format!("{stem}.dds@srgb")
+                    Name(if colour {
+                        format!("{stem}.dds@colour")
                     } else {
                         format!("{stem}.dds")
                     }),

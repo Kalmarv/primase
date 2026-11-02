@@ -5,8 +5,18 @@ use fromsoft_formats::{Archive, Binder, Result, dcx::Decoder};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-/// A TPF texture's image: a 2D DDS through the shared container reader, retaining encoded mips and colour-space
-/// metadata. Roles and normal conventions belong to bindings. Cube and volume images are refused.
+/// A TPF texture's image: a 2D DDS through the shared container reader, retaining encoded mips. Its colour space is the
+/// view the game samples it through, which the DDS read states from the header alone (`primase_dds::read`): sRGB where
+/// the header states an sRGB DXGI format, linear where it states any other DXGI format or a legacy four-character code
+/// (`DXT1`, `DXT5`, `ATI1`, `ATI2`), which states no transfer. Every path that runs a game program samples through this
+/// view and keeps the space the read gave; a slot's role never changes it. Roles and normal conventions belong to
+/// bindings. Cube and volume images are refused.
+///
+/// That a tagged texture is viewed as tagged is observed: the effect draws of two Elden Ring frame captures view the BC7
+/// UNORM textures as BC7 UNORM, and the sRGB BC1 ones, through a typeless resource, as BC1 sRGB. That a legacy header is
+/// viewed linear is inferred: those draws view every other BC1 texture as a BC1 UNORM resource, and no effect texture's
+/// header states BC1 UNORM; a capture that ties resources to textures confirms or overturns it. Whether the stored
+/// values are sRGB-encoded colour is a different question, which a program answers by what it does after the sample.
 pub fn tpf_image(texture: &tpf::Texture) -> Result<primase_core::Texture> {
     if texture.kind != TextureKind::Image2D {
         return Err(invalid("TPF", 0, "cube/volume image import is not supported"));
