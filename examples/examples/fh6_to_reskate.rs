@@ -64,6 +64,10 @@ fn main() -> Result<()> {
         out_root: "out".into(),
         name: Some("shibuya".into()),
         max_render_edge: Some(48.0),
+        // only prototypes of 500 triangles or more instanced, the rest merged into their tiles: skate holds 65,536
+        // spatial records a level (one per object per 200 m cell), and at the default 150 Shibuya needs 100,777
+        // (it faults 1 s after the level is active); at 500, 42,926, and it loads
+        min_instance_tris: 500,
         offset: [-f64::from(region[0] + region[2]) / 2.0, -f64::from(region[1] + region[3]) / 2.0],
         ..EncodingOptions::default()
     };
