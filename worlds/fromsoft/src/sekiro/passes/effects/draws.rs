@@ -866,7 +866,15 @@ impl Cx<'_> {
                 RefractionShape::Rectangle
             }
         };
-        let blend = units::blend(value::number(&d.blend_mode).round() as i32, &mut self.notes);
+        // the game draws every distortion sheet blended by its alpha (source alpha over one minus it): each of the two
+        // distortion pixel programs has one pipeline in a frame, and every draw of them in two Elden Ring frame captures
+        // has that blend. Whether a file's blend mode can change it is not read (no captured draw is tied to its file)
+        if value::number(&d.blend_mode).round() as i32 != 2 {
+            self.notes.approximate(
+                "a distortion's blend mode as normal (the game's distortion draws blend by their alpha; that the file's mode is unused is not proven)",
+            );
+        }
+        let blend = Blend::Alpha;
         let orientation: Orientation = units::orientation(d.orientation, &mut self.notes);
         let normal_map = self.map_word(TextureKind::Normal, d.normal_map);
         let mask = self.map_word(TextureKind::Albedo, d.mask);

@@ -169,6 +169,41 @@ fn a_basic_node_becomes_one_emitter_with_its_slots_lowered() {
 }
 
 #[test]
+fn a_distortion_sheet_blends_by_its_alpha_whatever_its_files_blend_mode() {
+    for (mode, approximated) in [(0.0, Some(&1)), (2.0, None), (4.0, Some(&1))] {
+        let mut config = torch();
+        config.actions.retain(|a| a.id != 600);
+        config
+            .actions
+            .push(with(action(607), vec![constant(mode)], vec![]));
+        let effect = fx(
+            300,
+            1,
+            node(
+                2000,
+                vec![],
+                vec![],
+                vec![node(2200, vec![map(&[0])], vec![config], vec![])],
+            ),
+        );
+        let l = lower(&effect, Game::EldenRing, 1, &mut NoFiles).unwrap();
+        match &l.system.emitters[0].draw {
+            Some(primase_core::particles::Draw::Refraction(r)) => {
+                assert_eq!(r.blend, Blend::Alpha, "mode {mode}")
+            }
+            other => panic!("mode {mode}: {other:?}"),
+        }
+        assert_eq!(
+            l.notes.approximated.get(
+                "a distortion's blend mode as normal (the game's distortion draws blend by their alpha; that the file's mode is unused is not proven)"
+            ),
+            approximated,
+            "mode {mode}"
+        );
+    }
+}
+
+#[test]
 fn a_node_with_two_configs_is_two_emitters_by_state() {
     let second = Config {
         id: 1004,
