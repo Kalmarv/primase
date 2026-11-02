@@ -82,6 +82,8 @@ mod sky_anchor;
 pub use sky_anchor::SkyAnchor;
 mod material_usage;
 pub use material_usage::MaterialUsage;
+mod water_body;
+pub use water_body::{WaterBody, WaveLayer};
 mod vertex_color;
 pub use vertex_color::{VertexColor, color0_drawn, uses_color0};
 pub mod morphs;

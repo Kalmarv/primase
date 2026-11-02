@@ -56,7 +56,7 @@ use crate::texture_layers::TextureLayers;
 use crate::texture_switch::{TextureSwitch, TextureSwitchView};
 use crate::vertex_color::VertexColor;
 use crate::world::{Component, Resource};
-use crate::{LightFalloff, LightTranslucency, SpotFrustum};
+use crate::{LightFalloff, LightTranslucency, SpotFrustum, WaterBody};
 use primase_foundations::parallel::Threads;
 
 /// What a name of core's names: a component (on entities) or a resource (one per world).
@@ -89,7 +89,7 @@ declared! {
         RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding, LiftedShader, ShaderSpecialisations, ShaderDerivation,
         TextureLayers, MaterialPrograms, ProgramFacts, ClipKey, ClipLength, IncomingTransition, ClipEvents, ClipEffects, Controller, ControllerBinding,
         DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters, SkyAnchor,
-        ParticleSystem, IrradianceVolume, ReflectionProbeRegion, StepBindings, StepDraws, LightFalloff, LightTranslucency, SpotFrustum;
+        ParticleSystem, IrradianceVolume, ReflectionProbeRegion, StepBindings, StepDraws, LightFalloff, LightTranslucency, SpotFrustum, WaterBody;
     resources: PartScope, PartitionPlan, Environment, Atmosphere, PostProcessingStatus, StateAssignment, Surfaces, Threads, Memo, RenderGraph,
         LightUnit, DirectionalLightUnit, TimeOfDay, TextureSwitchView, ReadScopes, OpeningSuggestions,
 }

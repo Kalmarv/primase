@@ -230,6 +230,22 @@ The linked diffuse volumes are states of the region, so a consumer drawing probe
 excludes their linked volumes from independent irradiance accumulation. Source state IDs,
 clock selection and quality-tier selection are outside this generic representation.
 
+## Water bodies
+
+`core.water_body` belongs to a material entity whose `core.material_usage` is water. It states the water under the
+surface in metres, seconds and linear RGB; the surface's own reflectance stays `pbr.material`'s. A view ray that travels
+`d` metres through the water to what is behind gets that light times `exp(-extinction * d)` per channel, plus the body's
+own `scatter * E / pi * (1 - exp(-extinction * d))`, `E` the irradiance (sun and sky) a horizontal diffuse surface at the
+water's surface receives. `extinction` is finite and nonnegative per metre; `scatter` is a diffuse reflectance within 0-1
+(a consumer with only a body colour takes that colour, linear). The sum passes the surface weighted by `1 - F`, Schlick's
+`F = F0 + (1 - F0) * (1 - cos)^5` with `F0 = ((ior - 1) / (ior + 1))^2`; `ior` is finite and above 1 (a source stating
+`F0` gives `ior = (1 + sqrt(F0)) / (1 - sqrt(F0))`). `waves` are normal maps (`normal`, a texture reference like
+`pbr.material`'s, in the reference closure) whose tangent-space normals, x and y times `strength`, sum to the surface's
+normal; each is sampled at its transformed coordinate plus `velocity * t`, `t` in seconds. `shore_fade` is the water
+depth in metres (below the surface along the view axis) over which the surface's opacity rises from 0 to 1, finite and
+nonnegative; 0 is a hard edge. What a source's water does beyond this (caustics, interaction ripples, foam, colours by
+hour) is counted by its lowering.
+
 ## Lights as a program reads them
 
 | Name | Kind | Fields | Invariants |
