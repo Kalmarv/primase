@@ -1,6 +1,7 @@
 //! The Sekiro area reader in the convert loop: slice A of m11_01 read once, its namespaces only `core` and
-//! `fromsoft`, every placed prototype with geometry boxed by its stored model's world box, and the whole world as one
-//! part written with every placement the read kept.
+//! `fromsoft`, every placed prototype with geometry boxed by its stored model's world box, a part's load verifying with
+//! the render graph's steps that draw with programs outside it dropped and reported, and the whole world as one part
+//! written with every placement the read kept.
 //!
 //! Needs `installs.sekiro` and `tools.oodle6`.
 #![allow(clippy::unwrap_used)]
@@ -54,6 +55,7 @@ fn slice_a_reads_through_the_convert_loop() {
             rect: [-170.0, 180.0, -50.0, 300.0],
             margin: 30.0,
         }),
+        render_graph: true,
         ..Default::default()
     };
     let mut reader = AreaReader::of(sekiro.clone(), "m11_01", decoder, options.clone());
@@ -74,8 +76,21 @@ fn slice_a_reads_through_the_convert_loop() {
     assert!(boxed > 0);
     // a part's load is its roots' closure
     let root_set: BTreeSet<_> = world.iter::<Instance>().map(|(e, _)| e).take(3).collect();
-    let (part, _) = reader.load(&world, &root_set).unwrap();
+    let (part, report) = reader.load(&world, &root_set).unwrap();
     assert_eq!(part.iter::<Instance>().count(), root_set.len());
+    // the render graph's screen and compute steps draw with programs no placement refers to: the part drops them, its
+    // report names them, and it verifies
+    let left_out = report
+        .iter()
+        .find(|(k, _)| k == "render graph left out")
+        .map(|(_, v)| v.as_str());
+    assert!(left_out.is_some_and(|v| !v.starts_with("0 ")), "{report:?}");
+    assert_eq!(part.verify_components(), Vec::new());
+    assert_eq!(part.verify_resources(), Vec::new());
+    println!(
+        "slice A part of 3 placements: render graph left out {}",
+        left_out.unwrap_or_default()
+    );
     // through the convert loop, the whole world as one part
     let written = Rc::new(RefCell::new(Vec::new()));
     convert_parts(

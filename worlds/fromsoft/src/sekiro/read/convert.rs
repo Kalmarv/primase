@@ -187,8 +187,13 @@ impl Reader for AreaReader<'_> {
             .collect();
         Ok((world, self.record(&r)))
     }
+    /// The area's render graph draws with entities (its programs) a part's roots need not refer to: the part keeps the
+    /// steps whose entities it holds, and its report counts what it dropped ([`primase_core::Dropped`]).
     fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> Result<(World, Report)> {
-        let mut part = world.subset(&world.closure(roots.iter().copied()));
+        let primase_core::Part {
+            world: mut part,
+            dropped,
+        } = world.part(&world.closure(roots.iter().copied()));
         let payloads = if part
             .resource::<crate::sekiro::environment_data::EnvironmentLoadRequest>()
             .is_some()
@@ -208,6 +213,9 @@ impl Reader for AreaReader<'_> {
                 "environment payloads".into(),
                 serde_json::to_string(&payloads).expect("environment payload report"),
             ));
+        }
+        if !dropped.is_empty() {
+            report.push(("render graph left out".into(), left_out(&dropped)));
         }
         Ok((part, report))
     }
@@ -247,6 +255,34 @@ impl Reader for AreaReader<'_> {
     fn prototype_box(&self, _world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> {
         self.boxes.get(&prototype).copied().flatten()
     }
+}
+
+/// The load's report line for what a part dropped of the render graph: the steps by name, and how many step bindings
+/// and step draws named only their draws.
+fn left_out(dropped: &primase_core::Dropped) -> String {
+    let steps: BTreeSet<&str> = dropped
+        .graph
+        .steps
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    format!(
+        "{} steps drew with entities outside the part ({}){}{}; {} step bindings and {} step draws named only their draws",
+        dropped.graph.steps.len(),
+        steps.into_iter().collect::<Vec<_>>().join(", "),
+        if dropped.graph.picture {
+            ", with the picture"
+        } else {
+            ""
+        },
+        if dropped.graph.lighting {
+            ", with the lighting pipeline"
+        } else {
+            ""
+        },
+        dropped.step_bindings.len(),
+        dropped.step_draws.len(),
+    )
 }
 
 /// The load's report line.
