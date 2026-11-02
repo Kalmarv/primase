@@ -12,105 +12,51 @@
 //!
 //! The lane counts are asserted; the program-level statements are the doc's. Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod common;
 mod inputs;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use inputs::{Game, install, keys};
 use primase_core::World;
-use primase_core::shader::Shader;
-use primase_gta::components::{GtaEffect, GtaShaderTable};
 use primase_gta::read::source::GtaSource;
+use rage_engine_formats::sgd2_table::ProgramTable;
 
-/// The lanes of rows a program reads, from its WGSL (the emitter writes only what the program uses; the lifted IR also
-/// holds an access per lane it never uses): (space, register, row, lane) directly taken, rows used otherwise (a whole
-/// vector), and buffers indexed by a value that is not a literal.
-type Reads = (
-    BTreeSet<(u32, u32, u32, u32)>,
-    BTreeSet<(u32, u32, u32)>,
-    BTreeSet<(u32, u32)>,
-);
-
-fn reads(container: &[u8]) -> Result<Reads, String> {
-    let program = iridia_dxil::lift(container).map_err(|e| e.to_string())?;
-    let text = iridia::emit::wgsl(&program).map_err(|e| format!("{e:?}"))?;
-    // buffer variable name -> (space, register)
-    let mut buffers: BTreeMap<String, (u32, u32)> = BTreeMap::new();
-    let lines: Vec<&str> = text.lines().collect();
-    for (i, l) in lines.iter().enumerate() {
-        if let Some(b) = l
-            .trim()
-            .strip_prefix("@group(0) @binding(")
-            .and_then(|r| r.strip_suffix(')'))
-            && let Ok(b) = b.trim().parse::<u32>()
-            && let Some(v) = lines
-                .get(i + 1)
-                .and_then(|n| n.trim().strip_prefix("var<uniform> "))
-            && let Some((name, _)) = v.split_once(':')
-        {
-            buffers.insert(name.to_owned(), (b >> 16, b & 0xffff));
+/// What a program takes of the two constants, one `(name, lane|"whole"|"dynamic buffer")` note per lane, row or buffer
+/// (as its constant table places them), from one lift; `None` where it does not lift or emit WGSL.
+fn notes(p: &common::Program, table: &ProgramTable) -> Option<Vec<(String, String)>> {
+    let (lanes, whole, dynamic) = iridia_dxil::lift(&p.shader.bytecode)
+        .map_err(|e| e.to_string())
+        .and_then(|program| common::wgsl_reads(&program))
+        .ok()?;
+    let mut notes = Vec::new();
+    for (i, r) in table.resources.iter().enumerate() {
+        if r.constants == 0 {
+            continue;
         }
-    }
-    let (mut lanes, mut whole, mut dynamic) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
-    // let _eK = cbN_[ROW]; -> K -> (space, reg, row)
-    let mut loaded: BTreeMap<String, (u32, u32, u32)> = BTreeMap::new();
-    for l in &lines {
-        let t = l.trim();
-        if let Some(rest) = t.strip_prefix("let ")
-            && let Some((var, rhs)) = rest.split_once(" = ")
-            && let Some((buf, idx)) = rhs.trim_end_matches(';').split_once('[')
-            && let Some(&(sp, rg)) = buffers.get(buf)
-            && let Some(idx) = idx.strip_suffix(']')
-        {
-            match idx.parse::<u32>() {
-                Ok(row) => {
-                    loaded.insert(var.to_owned(), (sp, rg, row));
-                }
-                Err(_) => {
-                    dynamic.insert((sp, rg));
-                }
-            }
-        }
-    }
-    for (var, &(sp, rg, row)) in &loaded {
-        let mut any_lane = false;
-        let mut other = false;
-        for l in &lines {
-            let mut rest: &str = l;
-            let declared = l.trim().starts_with(&format!("let {var} = "));
-            if declared {
+        for c in table.constants_of(i) {
+            let Some(name) = table.name_of(c.name) else {
+                continue;
+            };
+            if !["globalScreenSize", "gDirectionalAmbientColour"].contains(&name) {
                 continue;
             }
-            while let Some(at) = rest.find(var.as_str()) {
-                let after = &rest[at + var.len()..];
-                let before_ok = rest[..at]
-                    .chars()
-                    .last()
-                    .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
-                if before_ok {
-                    match after.strip_prefix('.').and_then(|a| a.chars().next()) {
-                        Some(c @ ('x' | 'y' | 'z' | 'w')) => {
-                            lanes.insert((sp, rg, row, "xyzw".find(c).unwrap() as u32));
-                            any_lane = true;
-                        }
-                        _ if after
-                            .chars()
-                            .next()
-                            .is_none_or(|c| !(c.is_alphanumeric() || c == '_')) =>
-                        {
-                            other = true
-                        }
-                        _ => {}
-                    }
+            let row = u32::from(c.offset) / 16;
+            let (sp, rg) = (u32::from(r.space), u32::from(r.register));
+            for lane in 0..4 {
+                if lanes.contains(&(sp, rg, row, lane)) {
+                    notes.push((name.to_owned(), format!("lane {lane}")));
                 }
-                rest = after;
+            }
+            if whole.contains(&(sp, rg, row)) {
+                notes.push((name.to_owned(), "row loaded, no lane taken".into()));
+            }
+            if dynamic.contains(&(sp, rg)) {
+                notes.push((name.to_owned(), "buffer indexed dynamically".into()));
             }
         }
-        if other || !any_lane {
-            whole.insert((sp, rg, row));
-        }
     }
-    Ok((lanes, whole, dynamic))
+    Some(notes)
 }
 
 #[test]
@@ -121,60 +67,24 @@ fn lanes() {
     let source = GtaSource::open(&dir, &keys).unwrap();
     let mut world = World::new();
     source.add_shader_database(&mut world).unwrap();
-    let mut seen = BTreeSet::new();
     let (mut programs, mut unlifted) = (0usize, 0usize);
     // (name, lane|"whole"|"dynamic buffer") -> programs
     let mut hist: BTreeMap<(String, String), usize> = BTreeMap::new();
     let mut examples: BTreeMap<(String, String), String> = BTreeMap::new();
-    for (_, effect) in world.iter::<GtaEffect>() {
-        for p in &effect.programs {
-            let Some(e) = p.shader else { continue };
-            if !seen.insert(e) {
-                continue;
-            }
-            let (Some(sh), Some(table)) = (
-                world.get::<Shader>(e),
-                world.get::<GtaShaderTable>(e).map(|t| &t.0),
-            ) else {
-                continue;
-            };
-            let Ok((lanes, whole, dynamic)) = reads(&sh.bytecode) else {
-                unlifted += 1;
-                continue;
-            };
-            programs += 1;
-            for (i, r) in table.resources.iter().enumerate() {
-                if r.constants == 0 {
-                    continue;
-                }
-                for c in table.constants_of(i) {
-                    let Some(name) = table.name_of(c.name) else {
-                        continue;
-                    };
-                    if !["globalScreenSize", "gDirectionalAmbientColour"].contains(&name) {
-                        continue;
-                    }
-                    let row = u32::from(c.offset) / 16;
-                    let (sp, rg) = (u32::from(r.space), u32::from(r.register));
-                    let mut note = |what: String| {
-                        *hist.entry((name.to_owned(), what.clone())).or_default() += 1;
-                        examples
-                            .entry((name.to_owned(), what))
-                            .or_insert_with(|| p.name.clone());
-                    };
-                    for lane in 0..4 {
-                        if lanes.contains(&(sp, rg, row, lane)) {
-                            note(format!("lane {lane}"));
-                        }
-                    }
-                    if whole.contains(&(sp, rg, row)) {
-                        note("row loaded, no lane taken".into());
-                    }
-                    if dynamic.contains(&(sp, rg)) {
-                        note("buffer indexed dynamically".into());
-                    }
-                }
-            }
+    // the programs with a constant table
+    let all: Vec<(common::Program, &ProgramTable)> = common::programs(&world)
+        .into_iter()
+        .filter_map(|p| p.table.map(|table| (p, table)))
+        .collect();
+    for ((p, _), notes) in all.iter().zip(common::each(&all, |(p, table)| notes(p, table))) {
+        let Some(notes) = notes else {
+            unlifted += 1;
+            continue;
+        };
+        programs += 1;
+        for key in notes {
+            *hist.entry(key.clone()).or_default() += 1;
+            examples.entry(key).or_insert_with(|| p.program.name.clone());
         }
     }
     println!("{programs} programs lifted, {unlifted} not");

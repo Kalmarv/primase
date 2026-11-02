@@ -20,17 +20,19 @@
 //! The counts are printed (`USE name stage: lanes, effects, smallest reader`) and the lane counts the reasons rest on are
 //! asserted. Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod common;
 mod inputs;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use inputs::{Game, install, keys};
 use primase_core::World;
 use primase_core::shader::Shader;
-use primase_gta::components::{GtaEffect, GtaShaderTable};
+use primase_gta::components::GtaShaderTable;
 use primase_gta::passes::resolve_shaders::constant_reads_of;
 use primase_gta::passes::resolve_shaders::value_bytes;
 use primase_gta::read::source::GtaSource;
+use rage_engine_formats::sgd2_table::ProgramTable;
 
 const NAMES: [&str; 12] = [
     "gDynamicBakesAndWetness",
@@ -65,70 +67,70 @@ fn how_the_programs_use_the_remaining_engine_constants() {
     let source = GtaSource::open(&dir, &keys).unwrap();
     let mut world = World::new();
     source.add_shader_database(&mut world).unwrap();
-    let mut seen = BTreeSet::new();
     let mut uses: BTreeMap<(String, String), Use> = BTreeMap::new();
     // the programs whose reads are not known, by stage and why (the message's first words)
     let mut refused: BTreeMap<String, usize> = BTreeMap::new();
-    for (_, effect) in world.iter::<GtaEffect>() {
-        for p in &effect.programs {
-            let Some(e) = p.shader else { continue };
-            if !seen.insert(e) {
+    // the programs with a constant table, and the words each reads
+    let all: Vec<(common::Program, &ProgramTable)> = common::programs(&world)
+        .into_iter()
+        .filter_map(|p| p.table.map(|table| (p, table)))
+        .collect();
+    let read = common::each(&all, |(p, _)| constant_reads_of(&p.shader.bytecode));
+    for ((program, table), reads) in all.iter().zip(&read) {
+        let (p, e, sh, effect) = (program.program, program.entity, program.shader, program.effect);
+        let reads = match reads {
+            Ok(r) => r,
+            Err(e) => {
+                let why: String = e.chars().take(80).collect();
+                *refused.entry(format!("{:?}: {why}", p.stage)).or_default() += 1;
                 continue;
             }
-            let (Some(sh), Some(table)) = (
-                world.get::<Shader>(e),
-                world.get::<GtaShaderTable>(e).map(|t| &t.0),
-            ) else {
+        };
+        let stage = format!("{:?}", p.stage);
+        for (i, r) in table.resources.iter().enumerate() {
+            if r.constants == 0 {
                 continue;
-            };
-            let reads = match constant_reads_of(&sh.bytecode) {
-                Ok(r) => r,
-                Err(e) => {
-                    let why: String = e.chars().take(80).collect();
-                    *refused.entry(format!("{:?}: {why}", p.stage)).or_default() += 1;
+            }
+            for c in table.constants_of(i) {
+                let Some(name) = table.name_of(c.name) else {
+                    continue;
+                };
+                if !NAMES.contains(&name) {
                     continue;
                 }
-            };
-            let stage = format!("{:?}", p.stage);
-            for (i, r) in table.resources.iter().enumerate() {
-                if r.constants == 0 {
+                let (sp, rg) = (u32::from(r.space), u32::from(r.register));
+                let Some(bytes) = value_bytes(c.flags) else {
+                    continue;
+                };
+                let offset = u32::from(c.offset);
+                let words: Vec<u32> = (0..bytes.min(16) / 4)
+                    .filter(|k| reads.reads_at(sp, rg, offset + 4 * k, 4))
+                    .collect();
+                if words.is_empty() {
                     continue;
                 }
-                for c in table.constants_of(i) {
-                    let Some(name) = table.name_of(c.name) else {
-                        continue;
-                    };
-                    if !NAMES.contains(&name) {
-                        continue;
+                let u = uses.entry((name.to_owned(), stage.clone())).or_default();
+                for k in words {
+                    // the lane of the constant, counted from its first word
+                    u.lanes[k as usize] += 1;
+                    let slot = &mut u.by_lane[k as usize];
+                    if slot.as_ref().is_none_or(|(n, _, _)| sh.bytecode.len() < *n) {
+                        *slot = Some((sh.bytecode.len(), p.name.clone(), e));
                     }
-                    let (sp, rg) = (u32::from(r.space), u32::from(r.register));
-                    let Some(bytes) = value_bytes(c.flags) else {
-                        continue;
-                    };
-                    let offset = u32::from(c.offset);
-                    let words: Vec<u32> = (0..bytes.min(16) / 4)
-                        .filter(|k| reads.reads_at(sp, rg, offset + 4 * k, 4))
-                        .collect();
-                    if words.is_empty() {
-                        continue;
-                    }
-                    let u = uses.entry((name.to_owned(), stage.clone())).or_default();
-                    for k in words {
-                        // the lane of the constant, counted from its first word
-                        u.lanes[k as usize] += 1;
-                        let slot = &mut u.by_lane[k as usize];
-                        if slot.as_ref().is_none_or(|(n, _, _)| sh.bytecode.len() < *n) {
-                            *slot = Some((sh.bytecode.len(), p.name.clone(), e));
-                        }
-                    }
-                    *u.effects.entry(effect.name.clone()).or_default() += 1;
-                    if u.smallest.as_ref().is_none_or(|(n, _)| sh.bytecode.len() < *n) {
-                        u.smallest = Some((sh.bytecode.len(), p.name.clone()));
-                    }
+                }
+                *u.effects.entry(effect.name.clone()).or_default() += 1;
+                if u.smallest.as_ref().is_none_or(|(n, _)| sh.bytecode.len() < *n) {
+                    u.smallest = Some((sh.bytecode.len(), p.name.clone()));
                 }
             }
         }
     }
+    // the words each program with known reads reads, for its smallest readers' tables below
+    let known: BTreeMap<_, _> = all
+        .iter()
+        .zip(&read)
+        .filter_map(|((p, _), r)| Some((p.entity, r.as_ref().ok()?)))
+        .collect();
     let dump = inputs::scratch().join("gta-engine-use");
     std::fs::create_dir_all(&dump).unwrap();
     for (why, n) in &refused {
@@ -164,7 +166,7 @@ fn how_the_programs_use_the_remaining_engine_constants() {
                 std::fs::write(format!("{stem}.wgsl"), format!("// {program}\n{text}")).unwrap();
                 // the constants that reader reads, by buffer and offset: which row of the WGSL is which constant
                 let table = world.get::<GtaShaderTable>(*entity).unwrap();
-                let reads = constant_reads_of(bytes).unwrap();
+                let reads = &known[entity];
                 let mut lines = String::new();
                 for (i, r) in table.0.resources.iter().enumerate() {
                     for c in table.0.constants_of(i) {

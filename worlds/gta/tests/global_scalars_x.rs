@@ -15,6 +15,7 @@
 //!
 //! Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod common;
 mod inputs;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -22,10 +23,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use inputs::{Game, install, keys};
 use iridia::flow::{At, BinaryOperator, MathFunction, Node, NodeId, Op, Values};
 use primase_core::World;
-use primase_core::shader::Shader;
-use primase_gta::components::{GtaEffect, GtaShaderTable};
 use primase_gta::passes::resolve_shaders::value_bytes;
 use primase_gta::read::source::GtaSource;
+use rage_engine_formats::sgd2_table::ProgramTable;
 
 /// What a step of a path is called.
 fn step(values: &Values, id: NodeId) -> Option<String> {
@@ -138,6 +138,114 @@ fn family(name: &str) -> String {
     words[..cut].join("_")
 }
 
+/// What a program does with the word: nothing (it declares no `globalScalars`, or nothing it outputs, discards or
+/// writes is made of the word), why that is not known, or its stage, category and paths.
+enum Use {
+    NoWord,
+    NotLifted,
+    NoGraph,
+    Unread,
+    Read {
+        stage: String,
+        category: &'static str,
+        paths: String,
+    },
+}
+
+/// [`Use`] of one program, given its constant table.
+fn use_of(p: &common::Program, table: &ProgramTable) -> Use {
+    let mut word = None;
+    for (i, r) in table.resources.iter().enumerate() {
+        if r.constants == 0 {
+            continue;
+        }
+        for c in table.constants_of(i) {
+            if table.name_of(c.name) == Some("globalScalars") && value_bytes(c.flags).is_some() {
+                word = Some((u32::from(r.space), u32::from(r.register), u32::from(c.offset) / 4));
+            }
+        }
+    }
+    let Some((space, register, first)) = word else {
+        return Use::NoWord;
+    };
+    let Ok(lifted) = iridia_dxil::lift(&p.shader.bytecode) else {
+        return Use::NotLifted;
+    };
+    let Ok(graph) = lifted.graph() else {
+        return Use::NoGraph;
+    };
+    let Some(buffer) = graph.reads.buffer_at(space, register) else {
+        return Use::Unread;
+    };
+    if !graph.reads.reads(buffer, first * 4, 4) {
+        return Use::Unread;
+    }
+    let values = &graph.values;
+    let Some(target) = values.reached_from(values.roots()).into_iter().find(|&id| {
+        matches!(values.node(id), Node::Global { resource: Some(r), at: At::Component(w) } if *r == buffer && *w == first)
+    }) else {
+        return Use::Unread;
+    };
+    let stage = format!("{:?}", p.program.stage);
+    let mut paths = BTreeSet::new();
+    for (&(output, lane), &id) in values.outputs() {
+        if let Some(chain) = path(values, id, target) {
+            let v = &graph.interface.outputs[output];
+            let label = match v.system {
+                Some(iridia::SystemValue::Target(n)) => format!("T{n}"),
+                _ => format!("{}{}", v.label.name, v.label.index),
+            };
+            paths.insert(format!(
+                "x>{}>{label}.{}",
+                chain.into_iter().collect::<Vec<_>>().join(">"),
+                "xyzw".as_bytes()[usize::from(lane)] as char
+            ));
+        }
+    }
+    for conditions in values.discards() {
+        for &c in conditions {
+            if let Some(chain) = path(values, c, target) {
+                paths.insert(format!(
+                    "x>{}>discard",
+                    chain.into_iter().collect::<Vec<_>>().join(">")
+                ));
+            }
+        }
+    }
+    for write in values.writes() {
+        for &w in write {
+            if let Some(chain) = path(values, w, target) {
+                paths.insert(format!(
+                    "x>{}>write",
+                    chain.into_iter().collect::<Vec<_>>().join(">")
+                ));
+            }
+        }
+    }
+    let ends: Vec<&str> = paths.iter().map(|p| p.rsplit('>').next().unwrap_or("")).collect();
+    let category = if stage == "Compute" {
+        "compute: the reflection image's alpha"
+    } else if ends
+        .iter()
+        .any(|e| (e.starts_with('T') && e.ends_with(".w")) || *e == "discard")
+    {
+        "pixel: an alpha lane or an alpha-test discard"
+    } else if ends.iter().all(|e| *e == "T1.z") {
+        "pixel: the emission of the reflection G-buffer, which has no alpha"
+    } else if ends.iter().all(|e| *e == "SV_Depth0.x") {
+        "pixel: the depth of a depth-based alpha test"
+    } else if ends.iter().all(|e| matches!(*e, "T0.x" | "T0.y" | "T0.z")) {
+        "pixel: the mix between the surface and the scene behind it, in the colour lanes"
+    } else {
+        "other"
+    };
+    Use::Read {
+        stage,
+        category,
+        paths: paths.into_iter().collect::<Vec<_>>().join("; "),
+    }
+}
+
 #[test]
 fn what_the_programs_do_with_global_scalars_x() {
     let (Some(dir), Some(keys)) = (install(Game::Gta), keys(Game::Gta)) else {
@@ -146,129 +254,50 @@ fn what_the_programs_do_with_global_scalars_x() {
     let source = GtaSource::open(&dir, &keys).unwrap();
     let mut world = World::new();
     source.add_shader_database(&mut world).unwrap();
-    let mut seen = BTreeSet::new();
-    let mut hashes = BTreeSet::new();
     // (stage, paths) -> family -> distinct programs
     let mut census: BTreeMap<(String, String), BTreeMap<String, usize>> = BTreeMap::new();
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut categories: BTreeMap<&str, usize> = BTreeMap::new();
-    for (_, effect) in world.iter::<GtaEffect>() {
-        for p in &effect.programs {
-            let Some(e) = p.shader else { continue };
-            if !seen.insert(e) {
-                continue;
-            }
-            let (Some(sh), Some(table)) = (
-                world.get::<Shader>(e),
-                world.get::<GtaShaderTable>(e).map(|t| &t.0),
-            ) else {
-                continue;
-            };
-            let hash = iridia::source_hash(&sh.bytecode);
-            if !hashes.insert(hash.clone()) {
-                continue;
-            }
-            *counts.entry("programs".into()).or_default() += 1;
-            let mut word = None;
-            for (i, r) in table.resources.iter().enumerate() {
-                if r.constants == 0 {
-                    continue;
-                }
-                for c in table.constants_of(i) {
-                    if table.name_of(c.name) == Some("globalScalars") && value_bytes(c.flags).is_some() {
-                        word = Some((u32::from(r.space), u32::from(r.register), u32::from(c.offset) / 4));
-                    }
-                }
-            }
-            let Some((space, register, first)) = word else {
-                continue;
-            };
-            *counts
-                .entry("programs declaring globalScalars".into())
-                .or_default() += 1;
-            let Ok(lifted) = iridia_dxil::lift(&sh.bytecode) else {
+    // the programs with a constant table, the first of each bytecode hash
+    let mut hashes = BTreeSet::new();
+    let all: Vec<(common::Program, &ProgramTable)> = common::programs(&world)
+        .into_iter()
+        .filter_map(|p| p.table.map(|table| (p, table)))
+        .filter(|(p, _)| hashes.insert(iridia::source_hash(&p.shader.bytecode)))
+        .collect();
+    counts.insert("programs".into(), all.len());
+    for ((p, _), found) in all.iter().zip(common::each(&all, |(p, table)| use_of(p, table))) {
+        if matches!(found, Use::NoWord) {
+            continue;
+        }
+        *counts
+            .entry("programs declaring globalScalars".into())
+            .or_default() += 1;
+        let (stage, category, paths) = match found {
+            Use::NoWord | Use::Unread => continue,
+            Use::NotLifted => {
                 *counts.entry("refused: not lifted".into()).or_default() += 1;
                 continue;
-            };
-            let Ok(graph) = lifted.graph() else {
+            }
+            Use::NoGraph => {
                 *counts.entry("refused: no value graph".into()).or_default() += 1;
                 continue;
-            };
-            let Some(buffer) = graph.reads.buffer_at(space, register) else {
-                continue;
-            };
-            if !graph.reads.reads(buffer, first * 4, 4) {
-                continue;
             }
-            let values = &graph.values;
-            let Some(target) = values.reached_from(values.roots()).into_iter().find(|&id| {
-                matches!(values.node(id), Node::Global { resource: Some(r), at: At::Component(w) } if *r == buffer && *w == first)
-            }) else {
-                continue;
-            };
-            let stage = format!("{:?}", p.stage);
-            *counts
-                .entry(format!("{stage} programs reading the word"))
-                .or_default() += 1;
-            let mut paths = BTreeSet::new();
-            for (&(output, lane), &id) in values.outputs() {
-                if let Some(chain) = path(values, id, target) {
-                    let v = &graph.interface.outputs[output];
-                    let label = match v.system {
-                        Some(iridia::SystemValue::Target(n)) => format!("T{n}"),
-                        _ => format!("{}{}", v.label.name, v.label.index),
-                    };
-                    paths.insert(format!(
-                        "x>{}>{label}.{}",
-                        chain.into_iter().collect::<Vec<_>>().join(">"),
-                        "xyzw".as_bytes()[usize::from(lane)] as char
-                    ));
-                }
-            }
-            for conditions in values.discards() {
-                for &c in conditions {
-                    if let Some(chain) = path(values, c, target) {
-                        paths.insert(format!(
-                            "x>{}>discard",
-                            chain.into_iter().collect::<Vec<_>>().join(">")
-                        ));
-                    }
-                }
-            }
-            for write in values.writes() {
-                for &w in write {
-                    if let Some(chain) = path(values, w, target) {
-                        paths.insert(format!(
-                            "x>{}>write",
-                            chain.into_iter().collect::<Vec<_>>().join(">")
-                        ));
-                    }
-                }
-            }
-            let ends: Vec<&str> = paths.iter().map(|p| p.rsplit('>').next().unwrap_or("")).collect();
-            let category = if stage == "Compute" {
-                "compute: the reflection image's alpha"
-            } else if ends
-                .iter()
-                .any(|e| (e.starts_with('T') && e.ends_with(".w")) || *e == "discard")
-            {
-                "pixel: an alpha lane or an alpha-test discard"
-            } else if ends.iter().all(|e| *e == "T1.z") {
-                "pixel: the emission of the reflection G-buffer, which has no alpha"
-            } else if ends.iter().all(|e| *e == "SV_Depth0.x") {
-                "pixel: the depth of a depth-based alpha test"
-            } else if ends.iter().all(|e| matches!(*e, "T0.x" | "T0.y" | "T0.z")) {
-                "pixel: the mix between the surface and the scene behind it, in the colour lanes"
-            } else {
-                "other"
-            };
-            *categories.entry(category).or_default() += 1;
-            *census
-                .entry((stage, paths.into_iter().collect::<Vec<_>>().join("; ")))
-                .or_default()
-                .entry(family(&p.name))
-                .or_default() += 1;
-        }
+            Use::Read {
+                stage,
+                category,
+                paths,
+            } => (stage, category, paths),
+        };
+        *counts
+            .entry(format!("{stage} programs reading the word"))
+            .or_default() += 1;
+        *categories.entry(category).or_default() += 1;
+        *census
+            .entry((stage, paths))
+            .or_default()
+            .entry(family(&p.program.name))
+            .or_default() += 1;
     }
     println!("{counts:?}");
     println!("{categories:#?}");
