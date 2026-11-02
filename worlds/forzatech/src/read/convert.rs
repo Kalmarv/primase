@@ -1,23 +1,25 @@
 //! The `convert::Reader` over a track: `read` makes the placements and prototypes of the caller's box and season
 //! ([`super::placements`]), each prototype's levels kept as `forzatech.levels`; `load` gives the forms a part reaches
 //! their meshes ([`super::models`]), makes `core.lods` of the levels once they have meshes ([`models::make_lods`]),
-//! and gives the materials their chains and textures ([`super::materials`]). So a level of detail is selected after
-//! loading. Both scope choices are the caller's, with no default.
+//! and gives the materials their chains and textures ([`super::materials`]), each texture's stored tiers as the scope
+//! names them ([`TextureScope`]). So a level of detail is selected after loading. Every scope choice is the caller's,
+//! with no default; the tiers a load leaves unloaded are recorded in `core.read_scopes` and noticed.
 use super::materials::{Library, MaterialReport};
 use super::models::{self, Materials, ModelReport};
 use super::open::Track;
 use super::placements::{self, PlacementReport, Scope};
+use super::textures::TextureScope;
 use crate::FRAME;
 use crate::components::ModelFiles;
 use forzatech_formats::world::{Area, Season};
-use primase_core::convert::{self, Reader, Report};
+use primase_core::convert::{self, Notice, Reader, Report};
 use primase_core::pass::{OptionSpec, Options};
 use primase_core::read_scope::{ReadScope, ReadScopeSpec};
 use primase_core::{Entity, World};
 use std::collections::BTreeSet;
 
-/// The read scope: the box (the game's own x and z, metres: `x0:z0:x1:z1`, origins in `[x0, x1) × [z0, z1)`) and the
-/// season.
+/// The read scope: the box (the game's own x and z, metres: `x0:z0:x1:z1`, origins in `[x0, x1) × [z0, z1)`), the
+/// season, and the stored tiers of each texture loaded.
 pub const READ_SCOPE: ReadScopeSpec = ReadScopeSpec {
     name: "forzatech-area",
     options: &[
@@ -32,6 +34,11 @@ pub const READ_SCOPE: ReadScopeSpec = ReadScopeSpec {
             "summer",
             "spring, summer, autumn or winter: the placements, templates and materials it shows",
         ),
+        OptionSpec::required(
+            "texture-form",
+            "reach-256",
+            "all, or reach-N: of each texture's stored tiers (its halvings), every one, or only the smallest at least N              pixels on its larger side (the largest when none is, counted), the others recorded unloaded",
+        ),
     ],
 };
 
@@ -44,6 +51,8 @@ pub struct ForzaReader {
     pub materials: MaterialReport,
     /// The track's materials and shaders, opened on the first load.
     library: Option<Library>,
+    /// The scope notices of the loads since the caller last asked.
+    notices: Vec<Notice>,
 }
 
 impl std::fmt::Debug for ForzaReader {
@@ -64,6 +73,7 @@ impl ForzaReader {
             models: ModelReport::default(),
             materials: MaterialReport::default(),
             library: None,
+            notices: Vec::new(),
         }
     }
 
@@ -95,9 +105,11 @@ impl ForzaReader {
                 ));
             }
         };
+        let textures = TextureScope::parse(options.get("texture-form").ok_or("texture-form is required")?)?;
         Ok(Scope {
             area: Area::new(x0, z0, x1, z1),
             season,
+            textures,
         })
     }
 
@@ -109,13 +121,23 @@ impl ForzaReader {
                 format!("{}:{}:{}:{}", a.min_x, a.min_z, a.max_x, a.max_z),
             ),
             ("season".into(), self.scope.season.folder().into()),
+            ("texture-form".into(), self.scope.textures.value()),
         ])
+    }
+
+    /// The scope with `tiers` recorded unloaded.
+    fn scope_with(&self, tiers: &[super::textures::Unloaded]) -> convert::Result<ReadScope> {
+        let mut scope = READ_SCOPE.resolve(self.options())?;
+        for t in tiers {
+            READ_SCOPE.record_unloaded(&mut scope, "texture-form", &t.size, t.source.clone())?;
+        }
+        Ok(scope)
     }
 
     fn load_meshes(&mut self, world: &mut World, entities: Vec<Entity>) -> convert::Result<Report> {
         let library = match &mut self.library {
             Some(l) => l,
-            slot @ None => slot.insert(Library::open(&self.track)?),
+            slot @ None => slot.insert(Library::open(&self.track, self.scope.textures)?),
         };
         let mut materials = Materials::new(library);
         let mut report = ModelReport::default();
@@ -130,9 +152,14 @@ impl ForzaReader {
             )?;
         }
         models::make_lods(world, &mut report);
+        let found = materials.report;
         let mut lines = report.lines();
-        lines.extend(materials.report.lines());
-        self.materials.add(&materials.report);
+        lines.extend(found.lines());
+        // this load's scope, with the tiers it left unloaded, in the world it loaded and noticed
+        let scope = self.scope_with(&found.tiers.unloaded)?;
+        scope.record_in(world);
+        self.notices.push(scope.notice());
+        self.materials.add(&found);
         self.models.files += report.files;
         self.models.meshes += report.meshes;
         self.models.triangles += report.triangles;
@@ -151,7 +178,7 @@ impl Reader for ForzaReader {
         Some(&READ_SCOPE)
     }
     fn read_scope(&self) -> Option<ReadScope> {
-        READ_SCOPE.resolve(self.options()).ok()
+        self.scope_with(&self.materials.tiers.unloaded).ok()
     }
     fn read(&mut self) -> convert::Result<(World, Report)> {
         let mut world = World::new();
@@ -168,6 +195,9 @@ impl Reader for ForzaReader {
         let entities: Vec<Entity> = world.iter::<ModelFiles>().map(|(e, _)| e).collect();
         let lines = self.load_meshes(&mut world, entities)?;
         Ok((world, lines))
+    }
+    fn notices(&mut self) -> Vec<Notice> {
+        std::mem::take(&mut self.notices)
     }
     fn emits(&self) -> &'static [&'static str] {
         &["core", "forzatech"]

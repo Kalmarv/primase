@@ -15,6 +15,7 @@ use primase_forzatech::passes::{
 use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
 use primase_forzatech::read::placements::Scope;
+use primase_forzatech::read::textures::TextureScope;
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_image::{
     BakeLayerChannels, Beyond, CapMode, CapTextures, MissingLevels, NormalDownscale, NormalizeNormals, OrmSize, PackOrm,
@@ -52,7 +53,10 @@ fn main() -> Result<()> {
         f64::from(region[3] + margin),
     );
     let track = Track::open(fh6.join("media/Tracks/Brio"))?;
-    let mut reader = ForzaReader::new(track, Scope { area, season: Season::Summer });
+    // of each texture's stored tiers (its halvings) only the one 256 on its larger side, the size the map caps its
+    // textures at: the larger tiers are not loaded and the lowerings derive their maps at that size
+    let scope = Scope { area, season: Season::Summer, textures: TextureScope::Reaching(256) };
+    let mut reader = ForzaReader::new(track, scope);
     let e = EncodingOptions {
         out_root: "out".into(),
         name: Some("shibuya".into()),

@@ -9,10 +9,12 @@
 //! default textures the Shibuya Scramble box's shaders name, not a census. Two game paths of one hash, or two tiers of
 //! one quality, are refused.
 //!
-//! A texture entity ([`load_texture`]) holds the tier whose payload is largest as its `core.texture` and the others as
-//! its forms (`core.texture_forms`, ranked by width: no tier is chosen). Each is the swatch as stored: its format, the
-//! mips of its one slice (block-compressed levels kept encoded), sRGB or linear by its colour profile. What a material
-//! samples it as (colour, normal, mask) is the material's, so its role is `Other` until a material lowering states it.
+//! A texture entity ([`load_texture`]) holds the tiers the caller's scope loads ([`TextureScope`], the read scope's
+//! `texture-form`): with every tier, the one whose payload is largest as its `core.texture` and the others as its forms
+//! (`core.texture_forms`, ranked by width: no tier is chosen); with one tier by size, that tier alone, the others left
+//! unloaded and recorded ([`Unloaded`]). Each is the swatch as stored: its format, the mips of its one slice
+//! (block-compressed levels kept encoded), sRGB or linear by its colour profile. What a material samples it as (colour,
+//! normal, mask) is the material's, so its role is `Other` until a material lowering states it.
 use super::open::{Archive, Track};
 use crate::{Error, Result};
 use forzatech_formats::material::path_hash;
@@ -135,6 +137,57 @@ impl TextureTable {
     }
 }
 
+/// Which of a texture's stored tiers a read loads: the caller's scope (`texture-form`), never a default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextureScope {
+    /// Every tier (`all`): the largest as the texture's own, the others as its forms.
+    All,
+    /// The smallest tier at least `N` pixels on its larger side, the largest when none is (`reach-N`); the others are
+    /// left unloaded. The track's tiers of a texture are its halvings, one level each but the smallest, which holds the
+    /// rest of the chain (observed over the Shibuya Scramble box's textures).
+    Reaching(u32),
+}
+
+impl TextureScope {
+    /// The scope as its option value: `all` or `reach-N`.
+    pub fn value(self) -> String {
+        match self {
+            TextureScope::All => "all".into(),
+            TextureScope::Reaching(n) => format!("reach-{n}"),
+        }
+    }
+
+    /// The scope of an option value; refused: anything but `all` or `reach-N` with `N` at least 1.
+    pub fn parse(value: &str) -> std::result::Result<TextureScope, String> {
+        if value == "all" {
+            return Ok(TextureScope::All);
+        }
+        value
+            .strip_prefix("reach-")
+            .and_then(|n| n.parse().ok())
+            .filter(|&n| n > 0)
+            .map(TextureScope::Reaching)
+            .ok_or_else(|| {
+                format!("texture-form {value:?}: needs all or reach-N (N a size of 1 or more pixels)")
+            })
+    }
+}
+
+/// A stored tier a read left unloaded: its size (`WxH`) and its identity (the texture's game path and quality).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unloaded {
+    pub size: String,
+    pub source: String,
+}
+
+/// What a [`TextureScope::Reaching`] read did to the tiers: those it left unloaded, and the textures none of whose
+/// tiers reaches the size, given their largest.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TierRecord {
+    pub unloaded: Vec<Unloaded>,
+    pub short: usize,
+}
+
 /// A swatch's DXGI-equivalent core format.
 pub fn format(e: Encoding) -> TexFormat {
     match e {
@@ -159,15 +212,27 @@ pub fn format(e: Encoding) -> TexFormat {
     }
 }
 
+/// Of tier sizes listed finest first, the index of the smallest at least `n` pixels on its larger side (the last listed
+/// of equal sizes); `None` when none is.
+fn reaching(sizes: &[(u32, u32)], n: u32) -> Option<usize> {
+    sizes.iter().rposition(|&(w, h)| w.max(h) >= n)
+}
+
+/// A swatch's PC header; refused: a Durango (console) payload.
+fn pc_header<'s>(s: &'s Swatch<'_>) -> Result<&'s forzatech_formats::texture::PcHeader> {
+    match &s.header {
+        Header::Pc(h) => Ok(h),
+        Header::Durango(_) => Err(Error::Model(
+            "a Durango texture: its tiled payload is not laid out in the file".into(),
+        )),
+    }
+}
+
 /// A swatch's bytes as a core texture: its one slice's mips as stored. Refused: a Durango (console) payload, an array,
 /// a cube or a volume.
 pub fn texture(bytes: &[u8]) -> Result<Texture> {
     let s = Swatch::parse(bytes)?;
-    let Header::Pc(h) = &s.header else {
-        return Err(Error::Model(
-            "a Durango texture: its tiled payload is not laid out in the file".into(),
-        ));
-    };
+    let h = pc_header(&s)?;
     let [slice] = h.slices.as_slice() else {
         return Err(Error::Model(format!(
             "{} slices: arrays and cubes are not read",
@@ -199,13 +264,16 @@ pub fn texture(bytes: &[u8]) -> Result<Texture> {
     })
 }
 
-/// The texture entity of `hash`, made on first use with its tiers; `None` when no archive holds it.
+/// The texture entity of `hash`, made on first use with the tiers `scope` loads, what it leaves recorded in `record`;
+/// `None` when no archive holds it.
 pub fn load_texture(
     track: &Track,
     table: &TextureTable,
+    scope: TextureScope,
     made: &mut HashMap<u32, Entity>,
     world: &mut World,
     hash: u32,
+    record: &mut TierRecord,
 ) -> Result<Option<Entity>> {
     if let Some(e) = made.get(&hash) {
         return Ok(Some(*e));
@@ -213,15 +281,43 @@ pub fn load_texture(
     let Some((game, tiers)) = table.get(hash) else {
         return Ok(None);
     };
-    let mut forms = Vec::with_capacity(tiers.len());
+    let at = |t: &Tier| match t.quality {
+        Some(q) => format!("{game} quality {q}"),
+        None => game.to_owned(),
+    };
+    let mut stored = Vec::with_capacity(tiers.len());
     for t in tiers {
         let bytes = table.read(track, t)?;
-        let tex =
-            texture(&bytes).map_err(|e| Error::Model(format!("{game} quality {:?}: {e}", t.quality)))?;
-        forms.push((t.quality, tex));
+        let size = Swatch::parse(&bytes)
+            .map_err(Error::from)
+            .and_then(|s| pc_header(&s).map(|h| (h.width, h.height)))
+            .map_err(|e| Error::Model(format!("{}: {e}", at(t))))?;
+        stored.push((t, size, bytes));
     }
     // finest first: by width, then height
-    forms.sort_by_key(|(_, t)| std::cmp::Reverse((t.width, t.height)));
+    stored.sort_by_key(|(_, size, _)| std::cmp::Reverse(*size));
+    if let TextureScope::Reaching(n) = scope {
+        let sizes: Vec<(u32, u32)> = stored.iter().map(|(_, size, _)| *size).collect();
+        let keep = reaching(&sizes, n).unwrap_or_else(|| {
+            record.short += 1;
+            0
+        });
+        for (k, (t, (w, h), _)) in stored.iter().enumerate() {
+            if k != keep {
+                record.unloaded.push(Unloaded {
+                    size: format!("{w}x{h}"),
+                    source: at(t),
+                });
+            }
+        }
+        let kept = stored.swap_remove(keep);
+        stored = vec![kept];
+    }
+    let mut forms = Vec::with_capacity(stored.len());
+    for (t, _, bytes) in stored {
+        let tex = texture(&bytes).map_err(|e| Error::Model(format!("{}: {e}", at(t))))?;
+        forms.push((t.quality, tex));
+    }
     let mut forms = forms.into_iter();
     let Some((_, own)) = forms.next() else {
         return Ok(None);
@@ -253,4 +349,40 @@ pub fn load_texture(
     }
     made.insert(hash, e);
     Ok(Some(e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The texture-form value round-trips; anything but `all` or `reach-N` (N at least 1) is refused.
+    #[test]
+    fn the_scope_is_all_or_a_size() {
+        for v in ["all", "reach-256", "reach-1"] {
+            assert_eq!(TextureScope::parse(v).map(TextureScope::value), Ok(v.to_owned()));
+        }
+        for v in ["", "reach-0", "reach-", "256", "finest", "reach-x"] {
+            assert!(TextureScope::parse(v).is_err(), "{v}");
+        }
+    }
+
+    /// The smallest tier reaching the size by its larger side, whatever the aspect; none when every tier is smaller.
+    #[test]
+    fn reaching_keeps_the_smallest_tier_at_least_the_size() {
+        let square = [(1024, 1024), (512, 512), (256, 256), (128, 128)];
+        assert_eq!(reaching(&square, 256), Some(2));
+        assert_eq!(reaching(&square, 200), Some(2));
+        assert_eq!(reaching(&square, 257), Some(1));
+        assert_eq!(reaching(&square, 1), Some(3));
+        assert_eq!(reaching(&square, 2048), None);
+        let tall = [
+            (256, 4096),
+            (128, 2048),
+            (64, 1024),
+            (32, 512),
+            (16, 256),
+            (8, 128),
+        ];
+        assert_eq!(reaching(&tall, 256), Some(4));
+    }
 }

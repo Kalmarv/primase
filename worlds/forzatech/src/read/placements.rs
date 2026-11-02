@@ -15,6 +15,7 @@
 //! templates with different models (which one the game draws is not known), and a template or row list with no
 //! model in the install.
 use super::open::Track;
+use super::textures::TextureScope;
 use crate::components::{
     DrawRange, ForzaLevels, LodProfile, LodProfiles, ModelFile, ModelFiles, Placement, PlacementOrigin,
     Template,
@@ -30,11 +31,13 @@ use forzatech_formats::world::{Area, Cell, Season, SeasonMask, half};
 use primase_core::{Entity, Instance, LodForm, Name, Transform, World};
 use std::collections::{BTreeMap, HashMap};
 
-/// What a read covers: the box the placements' origins are in (the game's x and z, metres) and the season.
+/// What a read covers: the box the placements' origins are in (the game's x and z, metres), the season, and the stored
+/// tiers of each texture it loads.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Scope {
     pub area: Area,
     pub season: Season,
+    pub textures: TextureScope,
 }
 
 /// What a placement read found and left out.

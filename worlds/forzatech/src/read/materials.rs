@@ -18,7 +18,7 @@
 //! list, a listed entry the zip lacks, or a texture hash no archive of the table has is counted in the
 //! [`MaterialReport`] by name and the chain kept as far as it reads; nothing stands in for it.
 use super::open::{Archive, Track};
-use super::textures::{TextureTable, load_texture};
+use super::textures::{TextureScope, TextureTable, TierRecord, load_texture};
 use crate::components::{
     Declared, ForzaMaterial, InstanceLevel, MaterialLevel, MaterialTexture, MaterialTextures, Parameter,
     ShaderLevel, Slot, Value,
@@ -39,6 +39,8 @@ pub struct Library {
     bin: Archive,
     manifest: AssetManifest,
     textures: TextureTable,
+    /// The tiers of each texture a read loads: the caller's scope.
+    texture_scope: TextureScope,
     /// By zip entry (lower case): the material level, or `None` when the zip lacks the entry.
     materials: HashMap<String, Option<MaterialLevel>>,
     shaders: HashMap<String, Option<ShaderLevel>>,
@@ -63,6 +65,8 @@ pub struct MaterialReport {
     /// Texture hashes no GeoChunk or library zip entry has, with the path a parameter gives (empty when none) and how many
     /// materials name each.
     pub texture_missing: BTreeMap<u32, (String, usize)>,
+    /// The tiers the scope left unloaded, and the textures given their largest as none reaches its size.
+    pub tiers: TierRecord,
 }
 
 impl MaterialReport {
@@ -99,6 +103,16 @@ impl MaterialReport {
                 format!("{hash:#010x} {path} ({n})"),
             ));
         }
+        if !self.tiers.unloaded.is_empty() || self.tiers.short > 0 {
+            lines.push((
+                "forzatech textures".into(),
+                format!(
+                    "{} stored tiers left unloaded by the read scope; {} textures with no tier reaching its size, given their largest",
+                    self.tiers.unloaded.len(),
+                    self.tiers.short
+                ),
+            ));
+        }
         lines
     }
 
@@ -123,6 +137,8 @@ impl MaterialReport {
                 .or_insert_with(|| (path.clone(), 0))
                 .1 += n;
         }
+        self.tiers.short += other.tiers.short;
+        self.tiers.unloaded.extend(other.tiers.unloaded.iter().cloned());
     }
 }
 
@@ -187,7 +203,7 @@ fn slots(map: &[MapEntry]) -> Vec<Slot> {
 
 impl Library {
     /// The track's library: its `bin.zip` and asset manifest, and the texture table of its GeoChunks.
-    pub fn open(track: &Track) -> Result<Library> {
+    pub fn open(track: &Track, texture_scope: TextureScope) -> Result<Library> {
         let bin = track.bin()?;
         let bytes = bin
             .read("AssetManifest.xml")?
@@ -196,6 +212,7 @@ impl Library {
             manifest: AssetManifest::parse(&bytes)?,
             bin,
             textures: TextureTable::of(track)?,
+            texture_scope,
             materials: HashMap::new(),
             shaders: HashMap::new(),
         })
@@ -360,7 +377,15 @@ impl Library {
                 continue;
             }
             let before = made.len();
-            let texture = load_texture(track, &self.textures, made, world, *path_hash)?;
+            let texture = load_texture(
+                track,
+                &self.textures,
+                self.texture_scope,
+                made,
+                world,
+                *path_hash,
+                &mut report.tiers,
+            )?;
             report.textures += made.len() - before;
             if texture.is_none() {
                 report

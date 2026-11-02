@@ -26,12 +26,15 @@ use primase_forzatech::passes::SelectForzaDrawn;
 use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
 use primase_forzatech::read::placements::Scope;
+use primase_forzatech::read::textures::TextureScope;
 use std::collections::{BTreeMap, BTreeSet};
 
 fn scope() -> Scope {
     Scope {
         area: Area::new(-1550.0, -5000.0, -1100.0, -13_700.0 / 3.0),
         season: Season::Summer,
+        // every stored tier: the textures as the game stores them
+        textures: TextureScope::All,
     }
 }
 
