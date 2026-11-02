@@ -257,6 +257,27 @@ pub struct Layout {
     pub placements: BTreeMap<Entity, Drawn>,
     /// Each rig written as a node tree.
     pub rigs: BTreeMap<Entity, RigNodes>,
+    /// Each glTF mesh written, by its index.
+    pub meshes: Vec<MeshWritten>,
+}
+
+/// A glTF mesh as written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MeshWritten {
+    /// The prototype whose `core.mesh` it is.
+    pub prototype: Entity,
+    /// Its primitives, in the prototype's primitive order.
+    pub primitives: Vec<PrimitiveWritten>,
+}
+
+/// A primitive of a glTF mesh as written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrimitiveWritten {
+    /// The material entity it is drawn with in the world, whether or not glTF has a material for it (a layered
+    /// material without `pbr.material` is drawn with none in glTF).
+    pub material: Option<Entity>,
+    /// The vertex attributes written for it, by their glTF names (`POSITION`, `TEXCOORD_1`, `COLOR_0`, ...).
+    pub attributes: BTreeSet<String>,
 }
 
 /// A placement as written.
@@ -1160,6 +1181,7 @@ impl Writer<'_> {
     ) -> Result<usize> {
         let morphs = self.morph_accessors(from.src, mesh)?;
         let mut prims = Vec::with_capacity(accessors.len());
+        let mut written_prims = Vec::with_capacity(accessors.len());
         for (i, ((acc, material), prim)) in accessors.iter().zip(materials).zip(mesh.primitives()).enumerate()
         {
             let mut p = Map::new();
@@ -1201,6 +1223,10 @@ impl Writer<'_> {
                     None
                 }
             };
+            written_prims.push(PrimitiveWritten {
+                material: *material,
+                attributes: attrs.keys().cloned().collect(),
+            });
             p.insert("attributes".into(), Value::Object(attrs));
             if let Some(i) = acc.indices {
                 p.insert("indices".into(), json!(i));
@@ -1232,6 +1258,10 @@ impl Writer<'_> {
             m.insert("extras".into(), json!({ "targetNames": mo.names }));
         }
         self.meshes.push(Value::Object(m));
+        self.report.layout.meshes.push(MeshWritten {
+            prototype: from.prototype,
+            primitives: written_prims,
+        });
         self.report.meshes += 1;
         Ok(self.meshes.len() - 1)
     }

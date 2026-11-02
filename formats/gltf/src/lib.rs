@@ -28,7 +28,10 @@ use primase_core::Entity;
 pub use parts::{GlbParts, target};
 pub use read::{ReadReport, read_glb, read_with_images};
 pub use textures::{GltfMaterialTextures, GltfSlot, ImageResolver, SlotTexture};
-pub use write::{Drawn, GroupBy, Layout, RigNodes, WriteOptions, WriteReport, write, write_file};
+pub use write::{
+    Drawn, GroupBy, Layout, MeshWritten, PrimitiveWritten, RigNodes, WriteOptions, WriteReport, write,
+    write_file,
+};
 
 /// Register this crate's passes by their declarations.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {

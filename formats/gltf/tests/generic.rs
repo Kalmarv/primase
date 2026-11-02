@@ -264,6 +264,37 @@ fn a_layered_material_with_its_pbr_material_is_written_from_it() {
     assert_eq!(report.components_without_form.get("core.layered"), Some(&1));
 }
 
+/// The layout names, for each glTF mesh, its prototype and each primitive's world material as drawn, the one glTF
+/// leaves without a material included, with the attributes written for it as the document holds them.
+#[test]
+fn the_layout_names_each_written_primitive_and_its_material() {
+    let w = world();
+    let (doc, report) = written(&w);
+    let entity = |name: &str| {
+        w.iter::<Name>()
+            .find(|(_, n)| n.0 == name)
+            .map(|(e, _)| e)
+            .unwrap()
+    };
+    let meshes = &report.layout.meshes;
+    assert_eq!(meshes.len(), doc["meshes"].as_array().unwrap().len());
+    assert_eq!(meshes[0].prototype, entity("crate"));
+    let drawn: Vec<_> = meshes[0].primitives.iter().map(|p| p.material).collect();
+    assert_eq!(drawn, [Some(entity("stone")), Some(entity("terrain"))]);
+    // the terrain's primitive has no glTF material, and its layout still names the terrain
+    assert!(doc["meshes"][0]["primitives"][1].get("material").is_none());
+    for (i, p) in meshes[0].primitives.iter().enumerate() {
+        let attributes: std::collections::BTreeSet<String> = doc["meshes"][0]["primitives"][i]["attributes"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(p.attributes, attributes, "primitive {i}");
+    }
+    assert!(meshes[0].primitives[1].attributes.contains("COLOR_1"));
+}
+
 /// glTF has one tangent set and no attribute for a shader's own per-vertex inputs: a second tangent set and the
 /// inputs are not written, each counted per primitive by name; the first tangent set is `TANGENT`.
 #[test]
