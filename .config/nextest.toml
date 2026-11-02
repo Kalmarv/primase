@@ -35,14 +35,28 @@ threads-required = 10
 
 [[profile.default.overrides]]
 filter = """
-binary(grass_census) | binary(sekiro_scene) | binary(elden_area) | binary(elden_binding)
-| binary(shader_bundles)
+binary(grass_census) | binary(sekiro_scene) | binary(elden_area) | binary(shader_bundles)
 """
 threads-required = 9
 
 [[profile.default.overrides]]
-filter = "binary(baked_area) | binary(material_class_census) | binary(shadow_census) | binary(layer_bake_digest)"
+filter = "binary(forward_constants) | binary(binding_census)"
+threads-required = 11
+
+[[profile.default.overrides]]
+filter = "binary(vertex_colours) | binary(elden_light_tables)"
+threads-required = 7
+
+[[profile.default.overrides]]
+filter = """
+binary(baked_area) | binary(material_class_census) | binary(shadow_census) | binary(layer_bake_digest)
+| binary(ca_defaults) | binary(elden_binding)
+"""
 threads-required = 6
+
+[[profile.default.overrides]]
+filter = "binary(light_tables) | binary(low_textures) | binary(render_graph)"
+threads-required = 5
 
 [[profile.default.overrides]]
 filter = "binary(shibuya_materials)"
@@ -53,8 +67,13 @@ filter = "binary(interchange_real_data)"
 threads-required = 5
 
 [[profile.default.overrides]]
+filter = "binary(interchange)"
+threads-required = 3
+
+[[profile.default.overrides]]
 filter = """
 binary(census) | binary(scene_disc) | binary(npc_outfits) | binary(character_census) | binary(elden_character)
-| binary(elden_character_animation) | binary(speedtree)
+| binary(elden_character_animation) | binary(speedtree) | binary(gta_terrain_layers) | binary(carried_alpha_test)
+| binary(character_outfits) | binary(sat_field_census) | binary(regression_census)
 """
 threads-required = 2
