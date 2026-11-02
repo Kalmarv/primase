@@ -703,6 +703,76 @@ pub struct World {
     /// While a pass runs ([`World::start_effects`]): what it did that the pass manager can't see by comparing the world
     /// before and after (resources written in place or replaced, entities filled by copying another).
     effects: Option<Effects>,
+    /// What entities leaving dropped to keep the world whole ([`World::retain`], [`World::despawn`],
+    /// [`World::move_components`]), until [`World::take_dropped`]: the pass manager counts it in the log of the pass
+    /// that made it.
+    dropped: Dropped,
+}
+
+/// What a world dropped to stay whole when entities left it: the render graph's steps that drew with an entity that
+/// left ([`crate::render_graph::RenderGraph::retain_steps`]), and the step bindings and step draws that named the
+/// draws only those steps made ([`crate::StepBindings`], [`crate::StepDraws`]), which would name draws the graph no
+/// longer has.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Dropped {
+    pub graph: crate::render_graph::StepsDropped,
+    /// (material, draw), for each draw a material's step bindings named.
+    pub step_bindings: Vec<(Entity, String)>,
+    /// (placement, draw), for each draw a placement's step draws named.
+    pub step_draws: Vec<(Entity, String)>,
+}
+
+impl Dropped {
+    pub fn is_empty(&self) -> bool {
+        self.graph.is_empty() && self.step_bindings.is_empty() && self.step_draws.is_empty()
+    }
+
+    fn append(&mut self, mut other: Dropped) {
+        self.graph.steps.append(&mut other.graph.steps);
+        self.graph.lighting |= other.graph.lighting;
+        self.graph.picture |= other.graph.picture;
+        self.step_bindings.append(&mut other.step_bindings);
+        self.step_draws.append(&mut other.step_draws);
+    }
+}
+
+impl fmt::Display for Dropped {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut parts = Vec::new();
+        if !self.graph.steps.is_empty() {
+            let steps: Vec<String> = self
+                .graph
+                .steps
+                .iter()
+                .map(|(name, gone)| format!("{name} (drew with {gone:?})"))
+                .collect();
+            parts.push(format!("render graph steps {}", steps.join(", ")));
+        }
+        if self.graph.lighting {
+            parts.push("the render graph's lighting pipeline".to_owned());
+        }
+        if self.graph.picture {
+            parts.push("the render graph's picture".to_owned());
+        }
+        for (what, list) in [
+            ("step bindings", &self.step_bindings),
+            ("step draws", &self.step_draws),
+        ] {
+            if !list.is_empty() {
+                let named: Vec<String> = list.iter().map(|(e, draw)| format!("{e:?} {draw}")).collect();
+                parts.push(format!("{what} {}", named.join(", ")));
+            }
+        }
+        write!(f, "{}", parts.join("; "))
+    }
+}
+
+/// Entities taken from a world into one of their own ([`World::part`], [`World::split_part`]), and what that world
+/// dropped to stay whole.
+#[derive(Debug)]
+pub struct Part {
+    pub world: World,
+    pub dropped: Dropped,
 }
 
 /// What a pass did to a world that a before/after comparison of names doesn't show ([`World::start_effects`]).
@@ -716,6 +786,9 @@ pub(crate) struct Effects {
     /// Copies it made: (source, target) for each [`World::duplicate`] and [`World::copy_components`]. An exemption,
     /// not a check: a name a copy puts on its target is the source's, so it counts as no addition.
     pub(crate) copies: Vec<(Entity, Entity)>,
+    /// What entities leaving made the world drop to stay whole ([`World::take_dropped`]): an exemption as copies are,
+    /// the step bindings and step draws it took counted in the pass's log, not declared by the pass.
+    pub(crate) dropped: Dropped,
 }
 
 /// The primitive rebuilds a pass made, per entity; `None` when its mesh was also replaced another way between two of
@@ -746,6 +819,7 @@ impl Clone for World {
             opaque_resources: self.opaque_resources.clone(),
             rebuilds: None,
             effects: None,
+            dropped: Dropped::default(),
         }
     }
 }
@@ -771,14 +845,25 @@ impl World {
         Self::default()
     }
 
-    /// Every resource, copied, with its references to entities outside `alive` forgotten. A resource that keeps one
-    /// breaks the contract of [`Resource::retain_references`]: a bug, refused here (a part would refer to an entity it
-    /// lacks), in release as in debug.
-    fn resources_for(&self, alive: &BTreeSet<Entity>) -> BTreeMap<TypeId, Box<dyn AnyResource>> {
-        self.resources
+    /// Every resource, copied, with its references to entities outside `alive` forgotten, and what the render graph
+    /// dropped doing so. A resource that keeps one breaks the contract of [`Resource::retain_references`]: a bug,
+    /// refused here (a part would refer to an entity it lacks), in release as in debug.
+    fn resources_for(
+        &self,
+        alive: &BTreeSet<Entity>,
+    ) -> (
+        BTreeMap<TypeId, Box<dyn AnyResource>>,
+        crate::render_graph::StepsDropped,
+    ) {
+        let mut graph = crate::render_graph::StepsDropped::default();
+        let resources = self
+            .resources
             .iter()
             .map(|(k, v)| {
                 let mut r = v.clone_box();
+                if let Some(g) = r.as_any_mut().downcast_mut::<crate::render_graph::RenderGraph>() {
+                    graph = g.retain_steps(&|e| alive.contains(&e));
+                }
                 if let Some(e) = r.retain_references(&|e| alive.contains(&e)) {
                     panic!(
                         "{} keeps a reference to {e:?}, which it was told to forget",
@@ -787,14 +872,41 @@ impl World {
                 }
                 (*k, r)
             })
-            .collect()
+            .collect();
+        (resources, graph)
+    }
+
+    /// The step bindings and step draws naming the draws of the render graph's steps that went, taken away
+    /// ([`crate::step_bindings::retain_made`]), with what the graph dropped: nothing where it dropped nothing.
+    fn reconcile(&mut self, graph: crate::render_graph::StepsDropped) -> Dropped {
+        if graph.is_empty() {
+            return Dropped::default();
+        }
+        Dropped {
+            graph,
+            ..crate::step_bindings::retain_made(self)
+        }
+    }
+
+    /// What entities leaving dropped since the last call ([`World::retain`], [`World::despawn`],
+    /// [`World::move_components`]); a [`World::part`] states its own.
+    pub fn take_dropped(&mut self) -> Dropped {
+        std::mem::take(&mut self.dropped)
     }
 
     /// Every resource forgets its references to the entities `gone` accepts. A whole selection leaving
     /// (`strict`: [`World::retain`]) checks the contract of [`Resource::retain_references`] in release too; one
     /// entity leaving ([`World::despawn`], [`World::move_components`]) only in debug builds, where checking each would
     /// cost a pass over every resource's references per entity (the verifier names a dangling reference either way).
+    /// The render graph's steps that drew with one of them go, and the step bindings and step draws naming their draws
+    /// with them (on entities still alive), recorded until [`World::take_dropped`].
     fn forget_in_resources(&mut self, gone: impl Fn(Entity) -> bool, strict: bool) {
+        let graph = self
+            .resources
+            .get_mut(&TypeId::of::<crate::render_graph::RenderGraph>())
+            .and_then(|r| r.as_any_mut().downcast_mut::<crate::render_graph::RenderGraph>())
+            .map(|g| g.retain_steps(&|e| !gone(e)))
+            .unwrap_or_default();
         for r in self.resources.values_mut() {
             if let Some(e) = r.retain_references(&|e| !gone(e)) {
                 let broken = format!(
@@ -805,6 +917,8 @@ impl World {
                 debug_assert!(false, "{broken}");
             }
         }
+        let dropped = self.reconcile(graph);
+        self.dropped.append(dropped);
     }
 
     pub fn spawn(&mut self) -> Entity {
@@ -1454,11 +1568,28 @@ impl World {
     /// A world of only `keep`'s entities (those alive) with all their components, typed and opaque, under the
     /// same ids, and every resource (forgetting its references to entities left out). Entities spawned in it get ids
     /// above every id of `self`.
+    ///
+    /// For a selection that keeps everything the world's render graph draws with: one that leaves some of it out drops
+    /// what [`World::part`] states, and panics naming it (take that part with [`World::part`] and count it).
+    #[track_caller]
     pub fn subset(&self, keep: &BTreeSet<Entity>) -> World {
+        let Part { world, dropped } = self.part(keep);
+        assert!(
+            dropped.is_empty(),
+            "World::subset left out what the render graph draws with, and dropped {dropped}: take the part with \
+             World::part and count what it drops"
+        );
+        world
+    }
+
+    /// [`World::subset`]'s world, and what it dropped to stay whole: the render graph's steps that drew with an entity
+    /// left out, and the step bindings and step draws naming draws only they made ([`Dropped`]).
+    pub fn part(&self, keep: &BTreeSet<Entity>) -> Part {
         let alive: BTreeSet<Entity> = self.alive.intersection(keep).copied().collect();
-        World {
+        let (resources, graph) = self.resources_for(&alive);
+        let mut world = World {
             next: self.next,
-            resources: self.resources_for(&alive),
+            resources,
             alive,
             columns: self
                 .columns
@@ -1474,19 +1605,39 @@ impl World {
             opaque_resources: self.opaque_resources.clone(),
             rebuilds: None,
             effects: None,
-        }
+            dropped: Dropped::default(),
+        };
+        let dropped = world.reconcile(graph);
+        Part { world, dropped }
     }
 
     /// Move `keep`'s entities (those alive), with all their components, out into a world of their own: what
     /// [`World::subset`] copies, without copying. The part has every resource (copied, as a subset's) and spawns ids
     /// above every id of `self`, as a subset does; [`World::absorb`] moves it back. This world's resources keep their
     /// references to the moved entities, which come back with the part.
+    ///
+    /// For a selection that keeps everything the world's render graph draws with, as [`World::subset`]: one that leaves
+    /// some of it out panics naming what the part dropped ([`World::split_part`]).
+    #[track_caller]
     pub fn split_off(&mut self, keep: &BTreeSet<Entity>) -> World {
+        let Part { world, dropped } = self.split_part(keep);
+        assert!(
+            dropped.is_empty(),
+            "World::split_off left out what the render graph draws with, and the part dropped {dropped}: take it with \
+             World::split_part and count what it drops"
+        );
+        world
+    }
+
+    /// [`World::split_off`]'s part, and what it dropped to stay whole ([`World::part`]). The step bindings and step
+    /// draws it dropped are its entities' own: absorbed back, they hold none of them.
+    pub fn split_part(&mut self, keep: &BTreeSet<Entity>) -> Part {
         let alive: BTreeSet<Entity> = self.alive.intersection(keep).copied().collect();
         for e in &alive {
             self.alive.remove(e);
         }
-        World {
+        let (resources, graph) = self.resources_for(&alive);
+        let mut world = World {
             next: self.next,
             columns: self
                 .columns
@@ -1505,12 +1656,15 @@ impl World {
                     (k.clone(), part)
                 })
                 .collect(),
-            resources: self.resources_for(&alive),
+            resources,
             alive,
             opaque_resources: self.opaque_resources.clone(),
             rebuilds: None,
             effects: None,
-        }
+            dropped: Dropped::default(),
+        };
+        let dropped = world.reconcile(graph);
+        Part { world, dropped }
     }
 
     /// Move every entity of `part` (a [`World::split_off`] of this world) back in, with its components; `part`'s

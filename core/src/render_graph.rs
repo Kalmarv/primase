@@ -943,9 +943,51 @@ impl RenderGraph {
         out
     }
 
-    /// The `core.shader` entities the passes' programs are on.
-    fn shaders(&self) -> impl Iterator<Item = Entity> + '_ {
-        self.stages().into_iter().map(|(_, s)| s.shader)
+    /// Keep the steps that draw with entities `keep` accepts alone; drop each other top-level step whole (a group's
+    /// steps run together, so a group goes with any of its steps). The lighting pipeline goes where it selected a
+    /// dropped step, and its other selections are renumbered; the picture goes where a dropped step wrote it. The
+    /// targets and buffers stay. The steps left draw what they drew: a step reading what a dropped one made reads
+    /// the target as the frame leaves it, as the graph states for a step a frame does not have.
+    pub fn retain_steps(&mut self, keep: &dyn Fn(Entity) -> bool) -> StepsDropped {
+        let mut dropped = StepsDropped::default();
+        let mut renumbered = Vec::with_capacity(self.passes.len());
+        let mut kept = Vec::with_capacity(self.passes.len());
+        for pass in std::mem::take(&mut self.passes) {
+            let mut references = Vec::new();
+            pass_references(&pass, &mut references);
+            match references.into_iter().find(|e| !keep(*e)) {
+                Some(gone) => {
+                    renumbered.push(None);
+                    if self.picture.is_some_and(|t| writes_target(&pass, t)) {
+                        dropped.picture = true;
+                    }
+                    dropped.steps.push((pass.name, gone));
+                }
+                None => {
+                    renumbered.push(u32::try_from(kept.len()).ok());
+                    kept.push(pass);
+                }
+            }
+        }
+        self.passes = kept;
+        if dropped.picture {
+            self.picture = None;
+        }
+        if let Some(lighting) = &mut self.lighting {
+            let selected: Option<Vec<u32>> = lighting
+                .passes
+                .iter()
+                .map(|&i| renumbered.get(i as usize).copied().flatten())
+                .collect();
+            match selected {
+                Some(passes) => lighting.passes = passes,
+                None => {
+                    self.lighting = None;
+                    dropped.lighting = true;
+                }
+            }
+        }
+        dropped
     }
 
     fn objects(&self) -> Vec<Entity> {
@@ -1039,25 +1081,87 @@ impl Resource for RenderGraph {
         Ok(())
     }
     fn references(&self, out: &mut Vec<Entity>) {
-        out.extend(self.shaders());
-        out.extend(self.objects());
-        for (_, stage) in self.stages() {
-            for texture in &stage.textures {
-                if let TextureSource::Texture { texture, .. } = texture.source {
-                    out.push(texture);
-                }
-            }
+        for pass in &self.passes {
+            pass_references(pass, out);
         }
     }
-    /// A graph whose program left the world cannot run: a part without it keeps no graph's passes (the targets stay).
+    /// The steps that draw with an entity that left go ([`RenderGraph::retain_steps`]); the world counts them and the
+    /// step bindings that named their draws ([`crate::Dropped`]).
     fn retain_references(&mut self, keep: &dyn Fn(Entity) -> bool) {
-        let mut references = Vec::new();
-        self.references(&mut references);
-        if references.into_iter().any(|e| !keep(e)) {
-            self.passes.clear();
-            self.picture = None;
-            self.lighting = None;
+        self.retain_steps(keep);
+    }
+}
+
+/// What [`RenderGraph::retain_steps`] dropped.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StepsDropped {
+    /// Each top-level step dropped, by name, with an entity it drew with that left.
+    pub steps: Vec<(String, Entity)>,
+    /// The lighting pipeline, which selected a dropped step.
+    pub lighting: bool,
+    /// The picture, which a dropped step wrote.
+    pub picture: bool,
+}
+
+impl StepsDropped {
+    pub fn is_empty(&self) -> bool {
+        self.steps.is_empty() && !self.lighting && !self.picture
+    }
+}
+
+/// The entities a step draws with, a group's steps' included: its programs' `core.shader` entities, the textures its
+/// bindings sample and a geometry step's object.
+fn pass_references(pass: &RenderPass, out: &mut Vec<Entity>) {
+    let stage = |s: &StageBinding, out: &mut Vec<Entity>| {
+        out.push(s.shader);
+        for texture in &s.textures {
+            if let TextureSource::Texture { texture, .. } = texture.source {
+                out.push(texture);
+            }
         }
+    };
+    match &pass.work {
+        PassWork::Geometry { object, stages, .. } => {
+            out.push(*object);
+            for s in stages {
+                stage(s, out);
+            }
+        }
+        PassWork::Screen { stages, .. } => {
+            for s in stages {
+                stage(s, out);
+            }
+        }
+        PassWork::Compute { stage: s, .. } => stage(s, out),
+        PassWork::Group { steps } => {
+            for step in steps {
+                pass_references(step, out);
+            }
+        }
+        PassWork::Scene { .. }
+        | PassWork::Clear { .. }
+        | PassWork::Copy { .. }
+        | PassWork::ClearBuffer { .. }
+        | PassWork::CopyBuffer { .. }
+        | PassWork::Slot { .. } => {}
+    }
+}
+
+/// Whether a step (a group's steps included) writes target `target`.
+fn writes_target(pass: &RenderPass, target: TargetId) -> bool {
+    let outputs = |o: &Outputs| {
+        o.colour.iter().any(|(_, v)| v.target == target)
+            || o.depth.as_ref().is_some_and(|d| d.view.target == target)
+    };
+    match &pass.work {
+        PassWork::Geometry { outputs: o, .. }
+        | PassWork::Screen { outputs: o, .. }
+        | PassWork::Scene { outputs: o, .. }
+        | PassWork::Slot { outputs: o, .. } => outputs(o),
+        PassWork::Compute { writes, .. } => writes.iter().any(|(_, v)| v.target == target),
+        PassWork::Clear { target: v, .. } | PassWork::Copy { to: v, .. } => v.target == target,
+        PassWork::Group { steps } => steps.iter().any(|s| writes_target(s, target)),
+        PassWork::ClearBuffer { .. } | PassWork::CopyBuffer { .. } => false,
     }
 }
 

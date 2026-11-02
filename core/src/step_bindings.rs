@@ -218,6 +218,70 @@ impl Component for StepDraws {
     }
 }
 
+/// The step bindings and step draws that name a draw the world's `core.render_graph` no longer makes, taken away (a
+/// component left naming none goes with them): what they named when the steps making their draws went with entities
+/// that left the world ([`RenderGraph::retain_steps`]): each (material, draw) and (placement, draw) dropped, in entity
+/// order, as [`crate::Dropped`] states them. Nothing changes in a world without a graph.
+pub(crate) fn retain_made(w: &mut World) -> crate::Dropped {
+    let Some(graph) = w.resource::<RenderGraph>() else {
+        return crate::Dropped::default();
+    };
+    let made: std::collections::BTreeSet<String> = graph
+        .scene_draws()
+        .into_iter()
+        .map(|(d, _)| d.to_owned())
+        .collect();
+    let stale_bindings: Vec<Entity> = w
+        .iter::<StepBindings>()
+        .filter(|(e, _)| w.is_alive(*e))
+        .filter(|(_, b)| b.0.iter().any(|b| !made.contains(&b.draw)))
+        .map(|(e, _)| e)
+        .collect();
+    let stale_draws: Vec<Entity> = w
+        .iter::<StepDraws>()
+        .filter(|(e, _)| w.is_alive(*e))
+        .filter(|(_, d)| d.0.iter().any(|d| !made.contains(d)))
+        .map(|(e, _)| e)
+        .collect();
+    let mut bindings = Vec::new();
+    for e in stale_bindings {
+        let Some(mut b) = w.remove::<StepBindings>(e) else {
+            continue;
+        };
+        b.0.retain(|b| {
+            let keep = made.contains(&b.draw);
+            if !keep {
+                bindings.push((e, b.draw.clone()));
+            }
+            keep
+        });
+        if !b.0.is_empty() {
+            w.insert(e, b);
+        }
+    }
+    let mut draws = Vec::new();
+    for e in stale_draws {
+        let Some(mut d) = w.remove::<StepDraws>(e) else {
+            continue;
+        };
+        d.0.retain(|d| {
+            let keep = made.contains(d);
+            if !keep {
+                draws.push((e, d.clone()));
+            }
+            keep
+        });
+        if !d.0.is_empty() {
+            w.insert(e, d);
+        }
+    }
+    crate::Dropped {
+        step_bindings: bindings,
+        step_draws: draws,
+        ..crate::Dropped::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,5 +458,145 @@ mod tests {
                 .unwrap_err()
                 .contains("lists its placements")
         );
+    }
+
+    /// A part that leaves out what a step of the graph draws with drops that step whole (a group with all its steps),
+    /// the picture it wrote, and the step bindings and step draws naming the draws only it made, and says so; the part
+    /// verifies. `subset` panics naming them; a despawn drops the same and records it for the pass manager. The
+    /// lighting pipeline's selections are renumbered past a dropped step, and it goes where it selected one.
+    #[test]
+    fn a_part_drops_the_steps_reaching_outside_it_and_the_bindings_naming_their_draws() {
+        use crate::render_graph::LightingPipeline;
+        use iridia_interface::Stage;
+        let mut w = World::new();
+        let program = w.spawn();
+        let (lit, depth_only, placement) = (w.spawn(), w.spawn(), w.spawn());
+        let stated = |placements| SceneMembers::Stated { placements };
+        let mut g = graph(&[
+            ("forward", stated(ScenePlacements::All)),
+            ("depth_normals", stated(ScenePlacements::Listed)),
+        ]);
+        // the depth normals draw runs in a group after a screen step of `program`, which writes the picture
+        let depth_step = g.passes.remove(1);
+        let screen = RenderPass {
+            name: "resolve".into(),
+            shared: false,
+            presence: Presence::Always,
+            runs: Runs::Once,
+            work: PassWork::Screen {
+                vertices: 3,
+                stages: vec![crate::shader::StageBinding::new(Stage::Pixel, program)],
+                state: Default::default(),
+                outputs: Outputs {
+                    colour: Vec::new(),
+                    depth: Some(DepthView {
+                        view: TargetView {
+                            target: 0,
+                            mip: 0,
+                            first_layer: 0,
+                            layers: 0,
+                        },
+                        read_only_depth: false,
+                        read_only_stencil: false,
+                    }),
+                },
+                region: None,
+            },
+        };
+        g.passes.push(RenderPass {
+            name: "depth group".into(),
+            shared: false,
+            presence: Presence::Always,
+            runs: Runs::Once,
+            work: PassWork::Group {
+                steps: vec![screen, depth_step],
+            },
+        });
+        g.picture = Some(0);
+        let group = g.passes[1].clone();
+        w.insert_resource(g);
+        let unbound = |draw: &str| StepBinding {
+            draw: draw.into(),
+            pass: None,
+            program: StepProgram::Unbound {
+                why: "a fixture".into(),
+            },
+        };
+        w.insert(
+            lit,
+            StepBindings(vec![unbound("forward"), unbound("depth_normals")]),
+        );
+        w.insert(depth_only, StepBindings(vec![unbound("depth_normals")]));
+        w.insert(placement, Mesh::new(Vec::new()));
+        w.insert(placement, StepDraws(vec!["depth_normals".into()]));
+
+        let keep = std::collections::BTreeSet::from([lit, depth_only, placement]);
+        let part = w.part(&keep);
+        assert_eq!(
+            part.dropped.graph.steps,
+            vec![("depth group".to_owned(), program)]
+        );
+        assert!(part.dropped.graph.picture && !part.dropped.graph.lighting);
+        assert_eq!(
+            part.dropped.step_bindings,
+            vec![
+                (lit, "depth_normals".to_owned()),
+                (depth_only, "depth_normals".to_owned())
+            ]
+        );
+        assert_eq!(
+            part.dropped.step_draws,
+            vec![(placement, "depth_normals".to_owned())]
+        );
+        let p = &part.world;
+        assert_eq!(p.verify_components(), Vec::new());
+        assert_eq!(p.verify_resources(), Vec::new());
+        assert_eq!(
+            p.get::<StepBindings>(lit),
+            Some(&StepBindings(vec![unbound("forward")]))
+        );
+        assert!(!p.has::<StepBindings>(depth_only) && !p.has::<StepDraws>(placement));
+        let kept = p.resource::<RenderGraph>().unwrap();
+        assert_eq!((kept.passes.len(), kept.picture), (1, None));
+        // what keeps everything drops nothing
+        assert!(w.part(&w.entities().collect()).dropped.is_empty());
+
+        // subset names what it would drop
+        let panicked =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| w.subset(&keep))).unwrap_err();
+        let message = panicked.downcast_ref::<String>().unwrap();
+        assert!(
+            message.contains("depth group")
+                && message.contains("step bindings")
+                && message.contains("depth_normals"),
+            "{message}"
+        );
+
+        // a despawn drops the same in place
+        let mut despawned = w.clone();
+        despawned.despawn(program);
+        assert_eq!(despawned.take_dropped(), part.dropped);
+        assert_eq!(despawned.verify_components(), Vec::new());
+        assert!(despawned.take_dropped().is_empty());
+
+        // the lighting pipeline: renumbered past a dropped step, gone where it selected one
+        let mut g = graph(&[
+            ("a", stated(ScenePlacements::All)),
+            ("b", stated(ScenePlacements::All)),
+        ]);
+        g.passes.insert(0, group);
+        g.lighting = Some(LightingPipeline {
+            passes: vec![2],
+            ..LightingPipeline::default()
+        });
+        let mut renumbered = g.clone();
+        assert_eq!(renumbered.retain_steps(&|e| e != program).steps.len(), 1);
+        assert_eq!(renumbered.lighting.map(|l| l.passes), Some(vec![1]));
+        g.lighting = Some(LightingPipeline {
+            passes: vec![0, 2],
+            ..LightingPipeline::default()
+        });
+        assert!(g.retain_steps(&|e| e != program).lighting);
+        assert_eq!(g.lighting, None);
     }
 }

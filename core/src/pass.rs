@@ -229,6 +229,49 @@ fn setting_text<T: RunSetting>(w: &World) -> Option<String> {
     w.resource::<T>().map(RunSetting::text)
 }
 
+/// What entities leaving made a pass's world drop to stay whole ([`crate::Dropped`]), counted in the pass's log.
+fn count_dropped(log: &mut PassLog, d: &crate::Dropped) {
+    let n = |x: usize| u64::try_from(x).unwrap_or(u64::MAX);
+    for (what, count) in [
+        (
+            "render graph steps dropped: they drew with an entity that left the world",
+            n(d.graph.steps.len()),
+        ),
+        (
+            "render graph lighting pipelines dropped: they selected a dropped step",
+            u64::from(d.graph.lighting),
+        ),
+        (
+            "render graph pictures dropped: a dropped step wrote them",
+            u64::from(d.graph.picture),
+        ),
+        (
+            "step bindings dropped: only dropped render graph steps made their draws",
+            n(d.step_bindings.len()),
+        ),
+        (
+            "step draws dropped: only dropped render graph steps made their draws",
+            n(d.step_draws.len()),
+        ),
+    ] {
+        if count > 0 {
+            log.count(what, count);
+        }
+    }
+}
+
+/// The entities the world itself took component `name` from to stay whole ([`crate::Dropped`]).
+fn dropped_from(d: &crate::Dropped, name: &str) -> BTreeSet<Entity> {
+    let list = if name == <crate::StepBindings as crate::Component>::NAME {
+        &d.step_bindings
+    } else if name == <crate::StepDraws as crate::Component>::NAME {
+        &d.step_draws
+    } else {
+        return BTreeSet::new();
+    };
+    list.iter().map(|(e, _)| *e).collect()
+}
+
 /// A setting read from a world that does not state it ([`Setting`]): a pass that reads one without declaring it in
 /// [`Pass::settings`], or a caller outside the pass manager. The program states its settings for the run
 /// ([`PassManager::with_settings`]), and no default stands in for one.
@@ -1592,11 +1635,13 @@ impl PassManager {
         let ran = p.run(w, log);
         *run = started.elapsed();
         let rebuilds = w.take_rebuild_log();
-        let effects = w.take_effects();
+        let mut effects = w.take_effects();
+        effects.dropped = w.take_dropped();
         ran.map_err(|message| Error::Pass {
             pass: text.to_owned(),
             message,
         })?;
+        count_dropped(log, &effects.dropped);
         let conservation = ledger.map_or_else(Vec::new, |b| b.gaps(w, &rebuilds, log));
         if self.conservation == Conservation::Enforce
             && let Some(g) = conservation.first()
@@ -1665,6 +1710,7 @@ impl PassManager {
                 .filter(|n| {
                     !declared.contains(&n.as_str())
                         && !(removal && despawned_with(n))
+                        && !(removal && !dropped_from(&effects.dropped, n).is_empty())
                         && !(removal && p.removes_by_log() && log.removed.contains(n.as_str()))
                 })
                 .cloned()
@@ -1790,7 +1836,11 @@ impl PassManager {
                 .copied()
                 .filter(|&e| !w.entity_has_named(e, name))
                 .collect();
-            let (alive, dead): (Vec<Entity>, Vec<Entity>) = gone.into_iter().partition(|&e| w.is_alive(e));
+            let (mut alive, dead): (Vec<Entity>, Vec<Entity>) =
+                gone.into_iter().partition(|&e| w.is_alive(e));
+            // the world's own drops, counted in the log ([`count_dropped`])
+            let world_dropped = dropped_from(&effects.dropped, name);
+            alive.retain(|e| !world_dropped.contains(e));
             if !declared && !alive.is_empty() {
                 taken.push(some(name, &alive));
             }

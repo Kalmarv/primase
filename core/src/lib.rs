@@ -135,8 +135,8 @@ pub use json::JsonError;
 pub use layered::{Layer, LayerWeights, LayeredMaterial, WeightMapping};
 pub use texformat::TexFormat;
 pub use world::{
-    Column, ColumnMut, Component, ComponentJson, ComponentJsonError, Entity, Geometry, IdError, Linearity,
-    NameClash, Opaque, OpaqueData, Resource, VertexBlend, World, remap_list,
+    Column, ColumnMut, Component, ComponentJson, ComponentJsonError, Dropped, Entity, Geometry, IdError,
+    Linearity, NameClash, Opaque, OpaqueData, Part, Resource, VertexBlend, World, remap_list,
 };
 
 /// Register core's generic passes by their declarations, as every crate registers its own: a program builds its
