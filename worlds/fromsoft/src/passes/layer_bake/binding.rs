@@ -242,6 +242,11 @@ pub(crate) fn program_constants(
 /// no depth along a view axis, so they are left at frozen zero, as where they are unbound.
 pub const NO_DEPTH_POLICY: &str = "camera depth terms left at frozen zero: the static bake has no view depth";
 
+/// The policy a consumer counts when it runs a program that reads the previous frame's view-projection in a frame that
+/// states a camera ([`FrameCamera`]): the camera stands still, so the previous frame's is this one's.
+pub const STILL_CAMERA_POLICY: &str =
+    "previous frame's view-projection taken as this frame's: the frame's camera stands still";
+
 /// The policy a consumer counts when it runs a program that reads the direction towards the dominant light: the static
 /// bake lights nothing, so it is left at frozen zero, as where it is unbound.
 pub const NO_DIRECTIONAL_LIGHT_POLICY: &str =
@@ -321,6 +326,25 @@ pub(crate) fn frozen_words(
                 policies.insert(ALPHA_TEST_POLICY.into(), 1);
             }
             vec![ALPHA_TEST_OFF.to_bits()]
+        }
+        ConstantRole::View(ViewParameter::CameraPosition) if let Some(camera) = frame.camera => {
+            bits(&[camera.eye[0], camera.eye[1], camera.eye[2], 1.])
+        }
+        // a matrix the program never reads needs no value
+        ConstantRole::View(view)
+            if frame.camera.is_some_and(|c| c.matrix(*view).is_some())
+                && matches!(
+                    lines,
+                    Some(MatrixLines::Unshown(iridia_interface::Unshown::NotRead))
+                ) =>
+        {
+            return Ok(None);
+        }
+        ConstantRole::View(view) if let Some(m) = frame.camera.and_then(|c| c.matrix(*view)) => {
+            if *view == ViewParameter::PreviousViewProjection {
+                policies.insert(STILL_CAMERA_POLICY.into(), 1);
+            }
+            matrix_words(&m, lines)?
         }
         ConstantRole::View(ViewParameter::CameraPosition) => bits(&frame.camera_position),
         ConstantRole::View(ViewParameter::InverseViewProjection) => bits(&frame.inverse_view_projection),
@@ -454,8 +478,25 @@ pub(crate) fn frozen_words(
         }
         // the bake fills its whole target
         ConstantRole::View(ViewParameter::ResolutionScale) => bits(&[1., 1.]),
-        // the bake's frame has no depth along a view axis and no light: what a program computes from them is left at
-        // frozen zero, as where they are unbound
+        // a frame that states a camera's depth gives its terms
+        ConstantRole::View(ViewParameter::Perspective) if frame.camera.is_some() => vec![1],
+        ConstantRole::View(
+            ViewParameter::NearPlane
+            | ViewParameter::FarPlane
+            | ViewParameter::InverseFarPlane
+            | ViewParameter::DepthRange
+            | ViewParameter::DeviceDepthOffset
+            | ViewParameter::DeviceDepthScale,
+        ) if let Some(depth) = frame.camera.map(|c| c.depth) => bits(&[match role {
+            ConstantRole::View(ViewParameter::NearPlane) => depth.near,
+            ConstantRole::View(ViewParameter::FarPlane) => depth.far,
+            ConstantRole::View(ViewParameter::InverseFarPlane) => 1. / depth.far,
+            ConstantRole::View(ViewParameter::DepthRange) => depth.far - depth.near,
+            ConstantRole::View(ViewParameter::DeviceDepthOffset) => depth.offset(),
+            _ => depth.scale(),
+        }]),
+        // the static bake's frame has no depth along a view axis and no light: what a program computes from them is
+        // left at frozen zero, as where they are unbound
         ConstantRole::View(
             ViewParameter::Perspective
             | ViewParameter::NearPlane
@@ -467,6 +508,13 @@ pub(crate) fn frozen_words(
         ) => {
             policies.insert(NO_DEPTH_POLICY.into(), 1);
             return Ok(None);
+        }
+        ConstantRole::Frame(FrameParameter::DirectionToLight) if let Some(sun) = frame.sun => {
+            bits(&sun.direction_to_light)
+        }
+        ConstantRole::Frame(FrameParameter::LightColour) if let Some(sun) = frame.sun => bits(&sun.colour),
+        ConstantRole::Frame(FrameParameter::LightSpecularColour) if let Some(sun) = frame.sun => {
+            bits(&sun.specular_colour)
         }
         ConstantRole::Frame(
             FrameParameter::DirectionToLight
@@ -547,6 +595,189 @@ pub struct FrozenFrame {
     /// `Frame(TimeOfDay)`: the scene's hour of the day (`core.time_of_day`), `None` where the scene states none: a
     /// program that reads the hour is then not baked ([`NO_HOUR`]).
     pub hour: Option<f32>,
+    /// A perspective camera ([`FrameCamera`]), in a frame that measures what a program does with a view: its eye is
+    /// `View(CameraPosition)`, its depth terms `View(Perspective)`, `NearPlane`, `FarPlane`, `InverseFarPlane`,
+    /// `DepthRange`, `DeviceDepthOffset` and `DeviceDepthScale`, and its matrices every view matrix role. `None` in a
+    /// static bake, which has no view: [`FrozenFrame::camera_position`], [`FrozenFrame::view_matrix`] and
+    /// [`FrozenFrame::inverse_view_projection`] stand in, and the depth terms are left at zero ([`NO_DEPTH_POLICY`]).
+    pub camera: Option<FrameCamera>,
+    /// The dominant directional light (`Frame(DirectionToLight)`, `LightColour`, `LightSpecularColour`): `None` in a
+    /// static bake, which lights nothing ([`NO_DIRECTIONAL_LIGHT_POLICY`]).
+    pub sun: Option<FrameSun>,
+}
+
+/// A perspective camera's depth terms, as a frame states them ([`FrozenFrame::depth`]): its near and far clip planes
+/// along the view axis (world units), the far one where its device depth reaches 0 (a reversed depth), so a point at
+/// depth `d` has device depth `offset + scale / d` ([`FrameDepth::device_depth`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameDepth {
+    pub near: f32,
+    pub far: f32,
+}
+
+impl FrameDepth {
+    /// `View(DeviceDepthOffset)`: the device depth of a point infinitely far away, `-near / (far - near)`.
+    pub fn offset(&self) -> f32 {
+        -self.near / (self.far - self.near)
+    }
+
+    /// `View(DeviceDepthScale)`: `near * far / (far - near)`, so the near plane's device depth is 1 and the far one's 0.
+    pub fn scale(&self) -> f32 {
+        self.near * self.far / (self.far - self.near)
+    }
+
+    /// The device depth of a point at `depth` along the view axis.
+    pub fn device_depth(&self, depth: f32) -> f32 {
+        self.offset() + self.scale() / depth
+    }
+}
+
+/// A 4 x 4 matrix as its rows, applied to column vectors (`M * p`).
+type Matrix = [[f64; 4]; 4];
+
+/// A perspective camera, as a frame states it ([`FrozenFrame::camera`]): where it stands, the point it looks at and its
+/// depth terms. Its view space is left-handed (x to the right, y up, z along the view axis away from the eye, so a point
+/// in front has clip w its depth along that axis); its up is the world's +y, or +z where it looks straight up or down.
+/// Its projection is square, 90 degrees across, and gives a point at depth `d` the device depth
+/// [`FrameDepth::device_depth`] (reversed: 1 at the near plane, 0 at the far one).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameCamera {
+    pub eye: [f32; 3],
+    pub target: [f32; 3],
+    pub depth: FrameDepth,
+}
+
+fn sub3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn unit3(a: [f64; 3]) -> [f64; 3] {
+    let l = dot3(a, a).sqrt();
+    [a[0] / l, a[1] / l, a[2] / l]
+}
+
+fn product(a: &Matrix, b: &Matrix) -> Matrix {
+    std::array::from_fn(|r| std::array::from_fn(|c| (0..4).map(|k| a[r][k] * b[k][c]).sum()))
+}
+
+impl FrameCamera {
+    /// The view's axes in the world: right, up and forward (unit, left-handed).
+    fn axes(&self) -> [[f64; 3]; 3] {
+        let eye = self.eye.map(f64::from);
+        let forward = unit3(sub3(self.target.map(f64::from), eye));
+        let hint = if forward[1].abs() > 0.999 {
+            [0., 0., 1.]
+        } else {
+            [0., 1., 0.]
+        };
+        let right = unit3(cross3(hint, forward));
+        [right, cross3(forward, right), forward]
+    }
+
+    /// The world-to-view matrix.
+    pub fn view(&self) -> [[f64; 4]; 4] {
+        let eye = self.eye.map(f64::from);
+        let [r, u, f] = self.axes();
+        let row = |a: [f64; 3]| [a[0], a[1], a[2], -dot3(a, eye)];
+        [row(r), row(u), row(f), [0., 0., 0., 1.]]
+    }
+
+    /// The view-to-world matrix.
+    pub fn inverse_view(&self) -> [[f64; 4]; 4] {
+        let eye = self.eye.map(f64::from);
+        let [r, u, f] = self.axes();
+        let row = |k: usize| [r[k], u[k], f[k], eye[k]];
+        [row(0), row(1), row(2), [0., 0., 0., 1.]]
+    }
+
+    /// The view-to-clip matrix: clip x and y the view's, clip w its z, clip z `offset * z + scale`.
+    pub fn projection(&self) -> [[f64; 4]; 4] {
+        let (o, s) = (f64::from(self.depth.offset()), f64::from(self.depth.scale()));
+        [
+            [1., 0., 0., 0.],
+            [0., 1., 0., 0.],
+            [0., 0., o, s],
+            [0., 0., 1., 0.],
+        ]
+    }
+
+    /// The clip-to-view matrix.
+    pub fn inverse_projection(&self) -> [[f64; 4]; 4] {
+        let (o, s) = (f64::from(self.depth.offset()), f64::from(self.depth.scale()));
+        [
+            [1., 0., 0., 0.],
+            [0., 1., 0., 0.],
+            [0., 0., 0., 1.],
+            [0., 0., 1. / s, -o / s],
+        ]
+    }
+
+    /// The clip position of the world point `p`.
+    pub fn clip(&self, p: [f32; 3]) -> [f32; 4] {
+        let m = product(&self.projection(), &self.view());
+        let p = [f64::from(p[0]), f64::from(p[1]), f64::from(p[2]), 1.];
+        std::array::from_fn(|r| (0..4).map(|k| m[r][k] * p[k]).sum::<f64>() as f32)
+    }
+
+    /// The matrix of a view matrix role; `None` for another role. The camera stands still, so the previous frame's
+    /// view-projection is this one's.
+    fn matrix(&self, role: ViewParameter) -> Option<Matrix> {
+        Some(match role {
+            ViewParameter::View => self.view(),
+            ViewParameter::Projection => self.projection(),
+            ViewParameter::ViewProjection | ViewParameter::PreviousViewProjection => {
+                product(&self.projection(), &self.view())
+            }
+            ViewParameter::CameraRelativeViewProjection => {
+                let mut rotation = self.view();
+                for row in rotation.iter_mut().take(3) {
+                    row[3] = 0.;
+                }
+                product(&self.projection(), &rotation)
+            }
+            ViewParameter::InverseView => self.inverse_view(),
+            ViewParameter::InverseProjection => self.inverse_projection(),
+            ViewParameter::InverseViewProjection => product(&self.inverse_view(), &self.inverse_projection()),
+            _ => return None,
+        })
+    }
+}
+
+/// The words of `m` in the lines a binding states: its rows one after another, or its columns. A camera's matrix is not
+/// its own transpose, so lines the program does not show refuse it (where it reads the matrix at all: one it never reads
+/// is given no value, [`frozen_words`]).
+fn matrix_words(m: &Matrix, lines: Option<&MatrixLines>) -> Result<Vec<u32>> {
+    let word = |v: f64| (v as f32).to_bits();
+    match lines {
+        Some(MatrixLines::Rows) => Ok(m.iter().flatten().map(|v| word(*v)).collect()),
+        Some(MatrixLines::Columns) => Ok((0..4).flat_map(|c| (0..4).map(move |r| word(m[r][c]))).collect()),
+        other => Err(invalid(
+            "layer binding",
+            0,
+            format!("a camera's matrix bound in lines the program does not show: {other:?}"),
+        )),
+    }
+}
+
+/// The dominant directional light of a frame ([`FrozenFrame::sun`]): the unit direction towards it and its diffuse and
+/// specular colours, as the source's programs read them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameSun {
+    pub direction_to_light: [f32; 3],
+    pub colour: [f32; 3],
+    pub specular_colour: [f32; 3],
 }
 impl FrozenFrame {
     /// The static bake's frame, its global time `time` seconds, at no hour of the day ([`FrozenFrame::at_hour`]
@@ -569,6 +800,8 @@ impl FrozenFrame {
             view_matrix: IDENTITY,
             viewport_size: [1.; 2],
             hour: None,
+            camera: None,
+            sun: None,
         }
     }
 
