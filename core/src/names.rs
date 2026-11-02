@@ -25,6 +25,7 @@ use crate::irradiance_volume::IrradianceVolume;
 use crate::layered::LayeredMaterial;
 use crate::light_unit::{DirectionalLightUnit, LightUnit};
 use crate::lod::Lods;
+use crate::lod_switch::{LodSwitch, LodSwitchView};
 use crate::marker::{Curve, Marker};
 use crate::material_parameters::MaterialParameters;
 use crate::material_usage::MaterialUsage;
@@ -84,14 +85,14 @@ macro_rules! declared {
 
 declared! {
     components: Collider, Heightfield, Name, Source, Transform, Instance, Shadows, Mesh, Texture, Light, Collision,
-        TextureFile, TextureAbsent, MeshFile, MaterialVariants, Tile, DrawOrder, LayeredMaterial, Lods, TextureForms, TextureSwitch, Marker, Curve, MaterialUsage,
+        TextureFile, TextureAbsent, MeshFile, MaterialVariants, Tile, DrawOrder, LayeredMaterial, Lods, LodSwitch, TextureForms, TextureSwitch, Marker, Curve, MaterialUsage,
         PbrMaterial, DetailedMaterial, Priority, Provenance, StateAxis, Condition, PrimitiveCondition, StateOverride, VertexColor, Skeleton, AssemblyReference, Skin, Morphs, RigInstance,
         RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding, LiftedShader, ShaderSpecialisations, ShaderDerivation,
         TextureLayers, MaterialPrograms, ProgramFacts, ClipKey, ClipLength, IncomingTransition, ClipEvents, ClipEffects, Controller, ControllerBinding,
         DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters, SkyAnchor,
         ParticleSystem, IrradianceVolume, ReflectionProbeRegion, StepBindings, StepDraws, LightFalloff, LightTranslucency, SpotFrustum, WaterBody;
     resources: PartScope, PartitionPlan, Environment, Atmosphere, PostProcessingStatus, StateAssignment, Surfaces, Threads, Memo, RenderGraph,
-        LightUnit, DirectionalLightUnit, TimeOfDay, TextureSwitchView, ReadScopes, OpeningSuggestions, ProgramFrame,
+        LightUnit, DirectionalLightUnit, TimeOfDay, TextureSwitchView, LodSwitchView, ReadScopes, OpeningSuggestions, ProgramFrame,
 }
 
 #[cfg(test)]

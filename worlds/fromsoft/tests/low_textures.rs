@@ -18,8 +18,8 @@ use primase_core::convert::NoticeKind;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
-    Component, Entity, Instance, Mesh, Name, Resource, SelectTextureForm, Texture, TextureChoice,
-    TextureForms, TextureSwitch, TextureSwitchState, TextureSwitchView, World,
+    Component, Entity, Instance, LodSwitch, LodSwitchView, Mesh, Name, Resource, SelectTextureForm, Texture,
+    TextureChoice, TextureForms, TextureSwitch, TextureSwitchState, TextureSwitchView, World,
 };
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::materials::Material;
@@ -272,12 +272,44 @@ fn low_twins_are_forms_and_change_nothing_else() -> Result<()> {
             t.unread.is_none(),
             t.switched,
             t.border_zero,
-            t.without_row,
-            t.pieces_unestablished,
-            t.asset_rows_differ
+            t.rows.without_row,
+            t.rows.pieces_unestablished,
+            t.rows.asset_rows_differ
         ),
         (true, 679, 0, 0, 0, 0)
     );
+    // the level switch: every Elden Ring read states it, from the same rows, twins or not; here every placement read has
+    // one (645 cross-fading, 34 with hysteresis), each LOD type's scale the same at every load-balancer level, and every
+    // placement the preparation keeps keeps it
+    for (world, report) in [(&off, &off_report), (&on, &report)] {
+        let l = &report.lod_switch;
+        println!("level switch {l:?}");
+        assert_eq!(
+            (
+                l.unread.is_none(),
+                l.switched,
+                l.cross_fade,
+                l.unstated,
+                l.scale_by_level,
+                l.rows.without_row,
+                l.rows.pieces_unestablished,
+                l.rows.asset_rows_differ
+            ),
+            (true, 679, 645, 0, 0, 0, 0, 0),
+            "{l:?}"
+        );
+        for (e, s) in world.iter::<LodSwitch>() {
+            assert_eq!(s.verify(e, world), Ok(()));
+        }
+        assert!(
+            world.iter::<Instance>().all(|(e, _)| world.has::<LodSwitch>(e)),
+            "a placement kept without its level switch"
+        );
+        let view = world
+            .resource::<LodSwitchView>()
+            .expect("the level switch's view");
+        assert_eq!(view.verify(world), Ok(()));
+    }
     for (e, s) in on.iter::<TextureSwitch>() {
         assert_eq!(s.verify(e, &on), Ok(()));
     }

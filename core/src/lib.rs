@@ -62,6 +62,8 @@ pub mod ledger;
 mod lod;
 pub mod names;
 pub use lod::{LodChoice, LodForm, Lods, SELECT_LOD, SelectLod};
+mod lod_switch;
+pub use lod_switch::{LodBand, LodBoundary, LodSwitch, LodSwitchView};
 mod texture_forms;
 pub use texture_forms::{SELECT_TEXTURE_FORM, SelectTextureForm, TextureChoice, TextureForm, TextureForms};
 mod texture_switch;

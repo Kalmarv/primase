@@ -17,6 +17,7 @@ pub mod equipment;
 pub mod extras;
 pub mod groups;
 pub mod irradiance;
+pub mod lod_switch;
 pub mod material_events;
 pub mod messages;
 pub mod objects;

@@ -12,12 +12,14 @@
 //! `parts_draw_param_id` where it sets `use_parts_draw_param` (observed: it fits all 20 map-piece draws of two
 //! captures; a map piece without the flag has no row established here and no switch).
 //!
-//! The scale: the game fills a table per LOD type from row `100 + lodType` of one of two params, picked at run time
-//! (param 0xc1, or `LoadBalancerDrawDistScaleParam` when a check returns 1), at the load balancer's current level,
-//! and takes 1.0 where the row is missing. The read takes the scale only where it does not depend on that choice:
-//! `LoadBalancerDrawDistScaleParam`'s row holds one value at every level (or is missing: 1.0) and
-//! `LoadBalancerNewDrawDistScaleParam_win64` (the other PC member of the family) holds no such row. Otherwise it
-//! refuses, naming the row.
+//! The scale: the game fills a table per LOD type from row `100 + lodType` (the level switch's from row `lodType`,
+//! [`super::lod_switch`]) of `LoadBalancerDrawDistScaleParam` at the load balancer's current level, and takes 1.0
+//! where the row is missing. The code can read another param in its place (index 0xc1, past the 193 of the game's own
+//! param table) when a check returns anything but 1; the check returns a value only it writes, set to 1 when it is 0,
+//! which holds 1 in a dumped running image, and no other code or data of the executable refers to it (read from its
+//! code and data). So `LoadBalancerNewDrawDistScaleParam_win64` is not read. The read takes the scale only where it
+//! does not depend on the load balancer's level: the row holds one value at every level (or is missing: 1.0).
+//! Otherwise it refuses, naming the row.
 //!
 //! The inputs, each stated in the world's `core.texture_switch_view` or refused by name:
 //!
@@ -35,10 +37,9 @@
 //! is open. So the read's state is the game's in play, at least 3 s after a map load or the menu, with memory not under
 //! pressure; a frame outside that state is not what the read describes.
 use crate::invalid;
-use fromsoft_formats::param::{AssetGeometryParam, DrawDistScaleParam, Param, PartsDrawParam};
+use fromsoft_formats::param::{AssetGeometryParam, DrawDistScaleParam, PartsDraw, PartsDrawParam};
 use fromsoft_formats::{Archive, Install, Result, dcx::Decoder, game_params::read_param, msb};
 use primase_core::{TextureSwitch, TextureSwitchState, TextureSwitchView};
-use std::collections::BTreeSet;
 
 /// The game's reference vertical field of view for the switch distances, set by its renderer setup.
 pub const REFERENCE_FOV_Y_DEGREES: f32 = 43.0;
@@ -109,6 +110,13 @@ pub struct Report {
     pub switched: usize,
     /// Placements whose row has a border of 0: no switch.
     pub border_zero: usize,
+    /// Placements without a row, by reason.
+    pub rows: RowReport,
+}
+
+/// How the placements' `PartsDrawParam` rows were found ([`Params::row`]), for each switch that reads them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RowReport {
     /// Assets whose model has no geometry row or names no `PartsDrawParam` row (or one the param lacks).
     pub without_row: usize,
     /// Map pieces without `use_parts_draw_param`: no row established.
@@ -117,14 +125,12 @@ pub struct Report {
     pub asset_rows_differ: usize,
 }
 
-/// The three params the switch reads.
+/// The params the texture switch and the level switch ([`super::lod_switch`]) read.
 #[derive(Debug)]
 pub struct Params {
     parts: PartsDrawParam,
     assets: AssetGeometryParam,
     scale: DrawDistScaleParam,
-    /// The row ids of `LoadBalancerNewDrawDistScaleParam_win64`.
-    new_scale_rows: BTreeSet<i32>,
 }
 
 impl Params {
@@ -135,23 +141,13 @@ impl Params {
             parts: PartsDrawParam::from_param(&param("PartsDrawParam.param")?)?,
             assets: AssetGeometryParam::from_param(&param("AssetEnvironmentGeometryParam.param")?)?,
             scale: DrawDistScaleParam::from_param(&param("LoadBalancerDrawDistScaleParam.param")?)?,
-            new_scale_rows: param("LoadBalancerNewDrawDistScaleParam_win64.param")
-                .map(|p: Param| p.rows.iter().map(|r| r.id).collect())?,
         })
     }
 
-    /// The scale of LOD type `lod_type`, where both candidate sources give one value ([module docs](self)).
-    fn scale(&self, lod_type: u8) -> Result<f32> {
-        let id = 100 + i32::from(lod_type);
-        if self.new_scale_rows.contains(&id) {
-            return Err(invalid(
-                "texture switch",
-                0,
-                format!(
-                    "LoadBalancerNewDrawDistScaleParam_win64 holds row {id}: which of the two scale params the game reads is a runtime choice not modelled"
-                ),
-            ));
-        }
+    /// The scale of LOD type `lod_type` in the rows from `base` (the level switch's 0, the texture switch's 100), where it
+    /// does not depend on the load balancer's level ([module docs](self)).
+    pub(super) fn scale(&self, base: i32, lod_type: u8) -> Result<f32> {
+        let id = base + i32::from(lod_type);
         let Some(row) = self.scale.row(id) else {
             return Ok(1.0);
         };
@@ -178,6 +174,31 @@ impl Params {
         model: &str,
         report: &mut Report,
     ) -> Result<Option<TextureSwitch>> {
+        let Some(row) = self.row(kind, draw, model, &mut report.rows)? else {
+            return Ok(None);
+        };
+        if row.tex_lv01_border == 0.0 {
+            report.border_zero += 1;
+            return Ok(None);
+        }
+        report.switched += 1;
+        Ok(Some(TextureSwitch {
+            border: row.tex_lv01_border,
+            play: row.tex_lv01_play,
+            scale: self.scale(100, row.lod_type)?,
+        }))
+    }
+
+    /// The `PartsDrawParam` row of a placement of `model` by a part of `kind` with the draw controls `draw`: an asset's
+    /// model's `refDrawParamId`, a map piece's part's row where it sets `use_parts_draw_param`; counted in `report`
+    /// where there is none. A map piece naming a row the param lacks is an error.
+    pub(super) fn row(
+        &self,
+        kind: msb::PartKind,
+        draw: &msb::DrawControls,
+        model: &str,
+        report: &mut RowReport,
+    ) -> Result<Option<&PartsDraw>> {
         let row = match kind {
             msb::PartKind::Asset => {
                 let id = asset_row(model);
@@ -210,16 +231,7 @@ impl Params {
             }
             _ => return Ok(None),
         };
-        if row.tex_lv01_border == 0.0 {
-            report.border_zero += 1;
-            return Ok(None);
-        }
-        report.switched += 1;
-        Ok(Some(TextureSwitch {
-            border: row.tex_lv01_border,
-            play: row.tex_lv01_play,
-            scale: self.scale(row.lod_type)?,
-        }))
+        Ok(Some(row))
     }
 }
 
@@ -236,37 +248,73 @@ fn asset_row(model: &str) -> Option<i32> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
-    use fromsoft_formats::param::{AssetGeometry, DrawDistScale, LodBoundary, PartsDraw};
+    use fromsoft_formats::param::{AssetGeometry, DrawDistScale, LodBoundary};
 
-    fn params(scale: [f32; 21], new_rows: &[i32]) -> Params {
+    pub(in crate::sekiro::read) fn params(scale: [f32; 21]) -> Params {
         Params {
             parts: PartsDrawParam {
                 rows: vec![
                     PartsDraw {
                         id: 8100,
+                        lod_boundaries: [
+                            LodBoundary {
+                                border: 5.0,
+                                play: 1.0,
+                            },
+                            LodBoundary {
+                                border: 20.0,
+                                play: 2.0,
+                            },
+                            LodBoundary {
+                                border: 30.0,
+                                play: 0.0,
+                            },
+                            LodBoundary {
+                                border: 9999.0,
+                                play: 0.0,
+                            },
+                            LodBoundary {
+                                border: 9999.0,
+                                play: 0.0,
+                            },
+                        ],
+                        cross_fade: false,
+                        shadow_lod_offset: 0,
                         tex_lv01_border: 80.0,
                         tex_lv01_play: 5.0,
                         lod_type: 1,
-                        lod_boundaries: [LodBoundary {
-                            border: 0.0,
-                            play: 0.0,
-                        }; 5],
-                        cross_fade: false,
-                        shadow_lod_offset: 0,
                     },
                     PartsDraw {
                         id: 7,
+                        lod_boundaries: [
+                            LodBoundary {
+                                border: 10.0,
+                                play: 0.5,
+                            },
+                            LodBoundary {
+                                border: 5.0,
+                                play: 0.0,
+                            },
+                            LodBoundary {
+                                border: 30.0,
+                                play: 0.0,
+                            },
+                            LodBoundary {
+                                border: 40.0,
+                                play: 0.0,
+                            },
+                            LodBoundary {
+                                border: 50.0,
+                                play: 0.0,
+                            },
+                        ],
+                        cross_fade: true,
+                        shadow_lod_offset: 1,
                         tex_lv01_border: 0.0,
                         tex_lv01_play: 1.0,
                         lod_type: 0,
-                        lod_boundaries: [LodBoundary {
-                            border: 0.0,
-                            play: 0.0,
-                        }; 5],
-                        cross_fade: false,
-                        shadow_lod_offset: 0,
                     },
                 ],
             },
@@ -283,16 +331,24 @@ mod tests {
                 ],
             },
             scale: DrawDistScaleParam {
-                rows: vec![DrawDistScale {
-                    id: 101,
-                    levels: scale,
-                }],
+                rows: vec![
+                    DrawDistScale {
+                        id: 101,
+                        levels: scale,
+                    },
+                    DrawDistScale {
+                        id: 1,
+                        levels: [0.75; 21],
+                    },
+                ],
             },
-            new_scale_rows: new_rows.iter().copied().collect(),
         }
     }
 
-    fn draw(use_parts_draw_param: bool, parts_draw_param_id: u16) -> msb::DrawControls {
+    pub(in crate::sekiro::read) fn draw(
+        use_parts_draw_param: bool,
+        parts_draw_param_id: u16,
+    ) -> msb::DrawControls {
         msb::DrawControls {
             use_parts_draw_param,
             parts_draw_param_id,
@@ -304,7 +360,7 @@ mod tests {
     /// and a piece without the flag have no switch, each counted.
     #[test]
     fn a_placement_takes_its_row() {
-        let p = params([1.0; 21], &[]);
+        let p = params([1.0; 21]);
         let mut r = Report::default();
         let asset =
             |model: &str, d: msb::DrawControls, r: &mut Report| p.switch(msb::PartKind::Asset, &d, model, r);
@@ -338,25 +394,26 @@ mod tests {
                 unread: None,
                 switched: 3,
                 border_zero: 1,
-                without_row: 2,
-                pieces_unestablished: 1,
-                asset_rows_differ: 1,
+                rows: RowReport {
+                    without_row: 2,
+                    pieces_unestablished: 1,
+                    asset_rows_differ: 1,
+                },
             }
         );
     }
 
-    /// The scale is taken only where it does not depend on the game's runtime choices: one value at every level of
-    /// the old param's row (1.0 without a row) and no row in the new one.
+    /// The scale is taken only where it does not depend on the load balancer's level: one value at every level of its
+    /// row (1.0 without a row), from the row of the switch's base.
     #[test]
     fn the_scale_does_not_depend_on_runtime_state() {
         let mut halved = [0.5; 21];
-        assert_eq!(params(halved, &[]).scale(1).unwrap(), 0.5);
-        assert_eq!(params(halved, &[]).scale(2).unwrap(), 1.0);
+        assert_eq!(params(halved).scale(100, 1).unwrap(), 0.5);
+        assert_eq!(params(halved).scale(100, 2).unwrap(), 1.0);
+        assert_eq!(params(halved).scale(0, 1).unwrap(), 0.75);
         halved[3] = 1.0;
-        let e = params(halved, &[]).scale(1).unwrap_err().to_string();
+        let e = params(halved).scale(100, 1).unwrap_err().to_string();
         assert!(e.contains("row 101 differs"), "{e}");
-        let e = params([1.0; 21], &[101]).scale(1).unwrap_err().to_string();
-        assert!(e.contains("holds row 101"), "{e}");
         assert_eq!(asset_row("AEG210_334"), Some(210_334));
         assert_eq!(
             (

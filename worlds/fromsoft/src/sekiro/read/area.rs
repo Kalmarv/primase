@@ -4,8 +4,8 @@
 //! (where a map keeps its files, how objects are found, tile parents) is [`fromsoft_formats::Game`]'s; what Elden Ring's read does
 //! not cover yet (world states, materials without a definition) is in its notices.
 use super::{
-    animation, collision, draw_param, effect_lights, effects, extras, groups, objects, shaders, shadows, sky,
-    states, texture_switch, textures,
+    animation, collision, draw_param, effect_lights, effects, extras, groups, lod_switch, objects, shaders,
+    shadows, sky, states, texture_switch, textures,
 };
 use crate::sekiro::source::{self, Region};
 use crate::{invalid, materials};
@@ -230,6 +230,9 @@ pub struct Report {
     /// With `low_textures` (Elden Ring): the placements given `core.texture_switch` from their draw param, and those
     /// left without one, by reason ([`texture_switch`]).
     pub texture_switch: texture_switch::Report,
+    /// Elden Ring: the placements given `core.lod_switch` from their draw param, and those left without one, by reason
+    /// ([`lod_switch`]).
+    pub lod_switch: lod_switch::Report,
     /// With `states: Event`: the rules read and the parts decided or left at their default.
     pub states: Option<states::Report>,
     /// With `display_groups: Axes`: the axes made, the placements conditioned or left present, and how the layout's draw
@@ -313,12 +316,60 @@ impl Report {
                 .example(why.clone()),
             );
         }
-        if self.texture_switch.pieces_unestablished > 0 {
+        if self.texture_switch.rows.pieces_unestablished > 0 {
             out.push(Notice::new(
                 stage,
                 NoticeKind::Unsupported,
                 "map pieces without use_parts_draw_param: their texture switch row is not established, none is read",
-                self.texture_switch.pieces_unestablished as u64,
+                self.texture_switch.rows.pieces_unestablished as u64,
+            ));
+        }
+        if let Some(why) = &self.lod_switch.unread {
+            out.push(
+                Notice::new(
+                    stage,
+                    NoticeKind::Unsupported,
+                    "level-of-detail switch params not read: no placement states how it switches its levels",
+                    1,
+                )
+                .example(why.clone()),
+            );
+        }
+        if self.lod_switch.rows.pieces_unestablished > 0 {
+            out.push(Notice::new(
+                stage,
+                NoticeKind::Unsupported,
+                "map pieces without use_parts_draw_param: their level switch row is not established, none is read",
+                self.lod_switch.rows.pieces_unestablished as u64,
+            ));
+        }
+        if self.lod_switch.unstated > 0 {
+            out.push(Notice::new(
+                stage,
+                NoticeKind::Unsupported,
+                "placements whose draw param's level borders decrease or are negative: the game's two rules read them \
+                 differently, no level switch is stated",
+                self.lod_switch.unstated as u64,
+            ));
+        }
+        if self.lod_switch.scale_by_level > 0 {
+            out.push(
+                Notice::new(
+                    stage,
+                    NoticeKind::Unsupported,
+                    "placements whose LOD type's draw-distance scale differs by the load balancer's level (the game's                      runtime state): no level switch is stated",
+                    self.lod_switch.scale_by_level as u64,
+                )
+                .example(format!("LoadBalancerDrawDistScaleParam rows {:?}", self.lod_switch.scale_rows)),
+            );
+        }
+        if self.lod_switch.switched > 0 {
+            out.push(Notice::new(
+                stage,
+                NoticeKind::Selection,
+                "level switches stated as the game's main view applies them (read from its code, not compared with \
+                 frames; its two-bit memory of the level and shadow views' offset are not stated)",
+                self.lod_switch.switched as u64,
             ));
         }
         if let Some(quality) = self.texture_switch.quality
@@ -1729,6 +1780,19 @@ pub fn read_game_area_staged(
     } else {
         None
     };
+    // the level switch's: the same params, read whether or not the twins are (every Elden Ring read keeps its levels'
+    // forms where its preparation does)
+    let lod_params = if game == Game::EldenRing && switch_params.is_none() {
+        match texture_switch::Params::read(install, &archive, decoder) {
+            Ok(p) => Some(p),
+            Err(why) => {
+                report.lod_switch.unread = Some(why.to_string());
+                None
+            }
+        }
+    } else {
+        None
+    };
     for (key, index, transform) in selected {
         let Placed {
             part,
@@ -1782,6 +1846,14 @@ pub fn read_game_area_staged(
                 world.insert(e, switch);
             }
         }
+        if let Some(params) = switch_params.as_ref().or(lod_params.as_ref())
+            && !*in_sky
+        {
+            let model = key.split_once('/').map_or(key.as_str(), |k| k.1);
+            if let Some(switch) = params.lod_switch(part.kind, &part.draw, model, &mut report.lod_switch)? {
+                world.insert(e, switch);
+            }
+        }
         if let Some((role, state)) = sky_part {
             sky::attach(&mut world, e, sky_axis, role, state);
         }
@@ -1792,6 +1864,9 @@ pub fn read_game_area_staged(
     }
     if report.texture_switch.switched > 0 {
         world.insert_resource(texture_switch::view());
+    }
+    if report.lod_switch.switched > 0 {
+        world.insert_resource(lod_switch::view());
     }
     let grass = layout.grass_configs()?;
     report.grass_parts = grass.len();
