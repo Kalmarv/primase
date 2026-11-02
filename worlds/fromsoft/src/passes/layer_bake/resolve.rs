@@ -1180,6 +1180,10 @@ pub(crate) fn engine_role(name: &str) -> Option<ConstantRole> {
 /// draw-param light set's `Directional Light Angle0` (to float precision), and the moon's quad stands 25 units from the
 /// camera along it.
 ///
+/// `Vec_0`'s `w` sets how far the light's highlight spreads: Elden Ring's forward water (`M[PlacidLake]_FwdSdw`) lights its
+/// highlight with a smoothness of `sqrt(smoothness * (1 - 0.075 / w))`, so a `w` of 0 gives no number. Its value is
+/// [`SUN_SPREAD_POLICY`]'s.
+///
 /// The instance record's `mulCol` is (1, 1, 1, 1), as its `aColor`, in the three sky draws captured (`M[Clouds9]`, two
 /// sessions); its `w` scales the sky programs' alpha.
 ///
@@ -1293,6 +1297,15 @@ fn scene_values(
             12,
             ConstantRole::Frame(FrameParameter::LightSpecularColour),
         )?;
+        constant(
+            "Vec_0",
+            set + 3,
+            4,
+            ConstantRole::Default {
+                words: vec![SUN_SPREAD.to_bits()],
+                why: SUN_SPREAD_POLICY.into(),
+            },
+        )?;
     }
     constant(
         "mulCol",
@@ -1313,6 +1326,15 @@ fn scene_values(
     }
     Ok(())
 }
+
+/// The primary light's `Vec_0.w` ([`SUN_SPREAD_POLICY`]).
+const SUN_SPREAD: f32 = 1.0;
+
+/// Why Elden Ring's primary light's `Vec_0.w` is [`SUN_SPREAD`]: no capture holds an Elden Ring `cbLight`. Sekiro's
+/// light sets state 1 there in 243 of the 248 one-set `cbLight` reads of the nine frames of three captured sessions;
+/// the other 5 read a set of four equal lights of colour 1.5 whose every `w` is 50, not the area's sun.
+pub const SUN_SPREAD_POLICY: &str = "the primary light's highlight spread (cbLight Vec_0.w) is 1, as Sekiro's area light \
+    sets state it in three captured sessions: no capture holds an Elden Ring cbLight";
 
 /// Why Elden Ring's volumetric fog parameters are the engine's own for no fog ([`SCENE_VALUES_EVIDENCE`]).
 pub const NO_FOG_POLICY: &str = "volumetric fog parameters of no fog, as Elden Ring binds them where its fog is off \
