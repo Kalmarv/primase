@@ -13,6 +13,8 @@ pub use back_faces::{ADD_BACK_FACES, AddBackFaces};
 mod curves;
 mod distance;
 mod drop_marker;
+mod duplicates;
+pub use duplicates::{DROP_DUPLICATE_TRIANGLES, DropDuplicateTriangles};
 mod fill_normals;
 pub use fill_normals::{FILL_NORMALS, FillNormals, Method as FillMethod, Undirected};
 mod spawn_at_start;
@@ -52,6 +54,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         &SPLIT_UV_TILES,
         &ADD_BACK_FACES,
         &DROP_COVERED_SURFACES,
+        &DROP_DUPLICATE_TRIANGLES,
         &DRAW_COLLISION,
         &DROP_MARKER,
         &FILL_NORMALS,
@@ -543,6 +546,7 @@ mod tests {
             "bake-texture-transforms",
             "draw-collision",
             "drop-covered-surfaces",
+            "drop-duplicate-triangles",
             "drop-marker",
             "fill-normals",
             "first-texcoord-set",
@@ -564,6 +568,7 @@ mod tests {
             "add-back-faces",
             "bake-texture-transforms",
             "draw-collision",
+            "drop-duplicate-triangles",
             "first-texcoord-set",
             "omit-materialless-primitives",
             "omit-unshaded-primitives",

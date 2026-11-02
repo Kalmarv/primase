@@ -21,7 +21,8 @@ use primase_image::{
     BakeLayerChannels, Beyond, CapMode, CapTextures, MissingLevels, NormalDownscale, NormalizeNormals, OrmSize, PackOrm,
 };
 use primase_meshops::{
-    BakeNonrigid, FirstTexcoordSet, Mirrors, OmitUnshadedPrimitives, SpecializeMaterialVariants, UnusedVariants,
+    BakeNonrigid, DropDuplicateTriangles, FirstTexcoordSet, Mirrors, OmitUnshadedPrimitives,
+    SpecializeMaterialVariants, UnusedVariants,
 };
 use primase_reskate::compile::{CompileChoices, Streaming, Studio, TimeOfDay, compile_map};
 use primase_reskate::components::{CollisionSurfaces, CollisionWeld};
@@ -92,6 +93,8 @@ fn main() -> Result<()> {
             // what draws nothing the writer can take is left out, counted: a slot with no material instance, and the
             // shader families with no lowering rule yet; after the collision, so their ground stays solid
             Box::new(OmitUnshadedPrimitives),
+            // a triangle a primitive holds twice (the game's own meshes do, bit for bit) is drawn once, counted
+            Box::new(DropDuplicateTriangles),
             Box::new(NormalizeNormals),
             // the writer takes rigid placements: a mirrored or sheared one draws a baked copy of its prototype
             Box::new(BakeNonrigid { mirrors: Mirrors::Bake }),
