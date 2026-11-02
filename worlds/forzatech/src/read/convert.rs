@@ -39,6 +39,11 @@ pub const READ_SCOPE: ReadScopeSpec = ReadScopeSpec {
             "reach-256",
             "all, or reach-N: of each texture's stored tiers (its halvings), every one, or only the smallest at least N              pixels on its larger side (the largest when none is, counted), the others recorded unloaded",
         ),
+        OptionSpec::required(
+            "terrain-texture-form",
+            "all",
+            "all, or reach-N, as texture-form, for the far-field terrain textures (those under a tbheightfield folder:              each cell's pre-baked ground, roads and their markings included)",
+        ),
     ],
 };
 
@@ -106,10 +111,16 @@ impl ForzaReader {
             }
         };
         let textures = TextureScope::parse(options.get("texture-form").ok_or("texture-form is required")?)?;
+        let terrain_textures = TextureScope::parse(
+            options
+                .get("terrain-texture-form")
+                .ok_or("terrain-texture-form is required")?,
+        )?;
         Ok(Scope {
             area: Area::new(x0, z0, x1, z1),
             season,
             textures,
+            terrain_textures,
         })
     }
 
@@ -122,6 +133,7 @@ impl ForzaReader {
             ),
             ("season".into(), self.scope.season.folder().into()),
             ("texture-form".into(), self.scope.textures.value()),
+            ("terrain-texture-form".into(), self.scope.terrain_textures.value()),
         ])
     }
 
@@ -129,7 +141,7 @@ impl ForzaReader {
     fn scope_with(&self, tiers: &[super::textures::Unloaded]) -> convert::Result<ReadScope> {
         let mut scope = READ_SCOPE.resolve(self.options())?;
         for t in tiers {
-            READ_SCOPE.record_unloaded(&mut scope, "texture-form", &t.size, t.source.clone())?;
+            READ_SCOPE.record_unloaded(&mut scope, t.option, &t.size, t.source.clone())?;
         }
         Ok(scope)
     }
@@ -137,7 +149,7 @@ impl ForzaReader {
     fn load_meshes(&mut self, world: &mut World, entities: Vec<Entity>) -> convert::Result<Report> {
         let library = match &mut self.library {
             Some(l) => l,
-            slot @ None => slot.insert(Library::open(&self.track, self.scope.textures)?),
+            slot @ None => slot.insert(Library::open(&self.track, self.scope.texture_scopes())?),
         };
         let mut materials = Materials::new(library);
         let mut report = ModelReport::default();

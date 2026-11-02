@@ -173,19 +173,49 @@ impl TextureScope {
     }
 }
 
-/// A stored tier a read left unloaded: its size (`WxH`) and its identity (the texture's game path and quality).
+/// The scopes of a read's textures: the far-field terrain textures' (`terrain-texture-form`: those under a
+/// `tbheightfield` folder, the cells' pre-baked ground) and every other texture's (`texture-form`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextureScopes {
+    pub textures: TextureScope,
+    pub terrain: TextureScope,
+}
+
+impl TextureScopes {
+    /// The scope of the texture stored at `game` (its game path), and the option that states it.
+    pub fn of(self, game: &str) -> (TextureScope, &'static str) {
+        if is_terrain(game) {
+            (self.terrain, "terrain-texture-form")
+        } else {
+            (self.textures, "texture-form")
+        }
+    }
+}
+
+/// Whether the texture stored at `game` is a far-field terrain texture: a folder of its path is `tbheightfield`.
+fn is_terrain(game: &str) -> bool {
+    game.split(['\\', '/'])
+        .rev()
+        .skip(1)
+        .any(|dir| dir.eq_ignore_ascii_case("tbheightfield"))
+}
+
+/// A stored tier a read left unloaded: its size (`WxH`), its identity (the texture's game path and quality) and the
+/// option whose scope left it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Unloaded {
     pub size: String,
     pub source: String,
+    pub option: &'static str,
 }
 
 /// What a [`TextureScope::Reaching`] read did to the tiers: those it left unloaded, and the textures none of whose
-/// tiers reaches the size, given their largest.
+/// tiers reaches the size, given their largest; and the far-field terrain textures loaded (by `terrain-texture-form`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TierRecord {
     pub unloaded: Vec<Unloaded>,
     pub short: usize,
+    pub terrain: usize,
 }
 
 /// A swatch's DXGI-equivalent core format.
@@ -264,12 +294,12 @@ pub fn texture(bytes: &[u8]) -> Result<Texture> {
     })
 }
 
-/// The texture entity of `hash`, made on first use with the tiers `scope` loads, what it leaves recorded in `record`;
-/// `None` when no archive holds it.
+/// The texture entity of `hash`, made on first use with the tiers its scope in `scopes` loads, what it leaves recorded
+/// in `record`; `None` when no archive holds it.
 pub fn load_texture(
     track: &Track,
     table: &TextureTable,
-    scope: TextureScope,
+    scopes: TextureScopes,
     made: &mut HashMap<u32, Entity>,
     world: &mut World,
     hash: u32,
@@ -281,6 +311,10 @@ pub fn load_texture(
     let Some((game, tiers)) = table.get(hash) else {
         return Ok(None);
     };
+    let (scope, option) = scopes.of(game);
+    if is_terrain(game) {
+        record.terrain += 1;
+    }
     let at = |t: &Tier| match t.quality {
         Some(q) => format!("{game} quality {q}"),
         None => game.to_owned(),
@@ -307,6 +341,7 @@ pub fn load_texture(
                 record.unloaded.push(Unloaded {
                     size: format!("{w}x{h}"),
                     source: at(t),
+                    option,
                 });
             }
         }
@@ -384,5 +419,34 @@ mod tests {
             (8, 128),
         ];
         assert_eq!(reaching(&tall, 256), Some(4));
+    }
+
+    #[test]
+    fn a_texture_under_a_tbheightfield_folder_takes_the_terrain_scope() {
+        let scopes = TextureScopes {
+            textures: TextureScope::Reaching(256),
+            terrain: TextureScope::All,
+        };
+        for game in [
+            "textures\\TBHeightfield\\swatches\\submap_x-3069_z-10230_xsummerx_diff.swatchbin",
+            "media/tracks/brio/textures/tbheightfield/swatches/mainmap.swatchbin",
+        ] {
+            assert_eq!(
+                scopes.of(game),
+                (TextureScope::All, "terrain-texture-form"),
+                "{game}"
+            );
+        }
+        for game in [
+            "textures\\city\\pavement_cty_asp_darkasphalt_bclr.swatchbin",
+            // the file's own name is not a folder
+            "textures\\swatches\\tbheightfield",
+        ] {
+            assert_eq!(
+                scopes.of(game),
+                (TextureScope::Reaching(256), "texture-form"),
+                "{game}"
+            );
+        }
     }
 }

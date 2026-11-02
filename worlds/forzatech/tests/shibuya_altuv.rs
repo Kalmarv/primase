@@ -50,6 +50,7 @@ fn shibuya_altuv_emission() {
         area: Area::new(-1550.0, -5000.0, -1100.0, -13_700.0 / 3.0),
         season: Season::Summer,
         textures: TextureScope::All,
+        terrain_textures: TextureScope::All,
     };
     let mut reader = ForzaReader::new(Track::open(folder).unwrap(), scope);
     let (world, _) = reader.read().unwrap();

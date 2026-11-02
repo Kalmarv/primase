@@ -15,7 +15,7 @@
 //! templates with different models (which one the game draws is not known), and a template or row list with no
 //! model in the install.
 use super::open::Track;
-use super::textures::TextureScope;
+use super::textures::{TextureScope, TextureScopes};
 use crate::components::{
     DrawRange, ForzaLevels, LodProfile, LodProfiles, ModelFile, ModelFiles, Placement, PlacementOrigin,
     Template,
@@ -32,12 +32,23 @@ use primase_core::{Entity, Instance, LodForm, Name, Transform, World};
 use std::collections::{BTreeMap, HashMap};
 
 /// What a read covers: the box the placements' origins are in (the game's x and z, metres), the season, and the stored
-/// tiers of each texture it loads.
+/// tiers of each texture it loads: of the far-field terrain textures (`terrain_textures`) and of every other.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Scope {
     pub area: Area,
     pub season: Season,
     pub textures: TextureScope,
+    pub terrain_textures: TextureScope,
+}
+
+impl Scope {
+    /// The texture scopes this read loads by.
+    pub fn texture_scopes(&self) -> TextureScopes {
+        TextureScopes {
+            textures: self.textures,
+            terrain: self.terrain_textures,
+        }
+    }
 }
 
 /// What a placement read found and left out.

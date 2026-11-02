@@ -55,9 +55,15 @@ fn main() -> Result<()> {
         f64::from(region[3] + margin),
     );
     let track = Track::open(fh6.join("media/Tracks/Brio"))?;
-    // of each texture's stored tiers (its halvings) only the one 256 on its larger side, the size the map caps its
-    // textures at: the larger tiers are not loaded and the lowerings derive their maps at that size
-    let scope = Scope { area, season: Season::Summer, textures: TextureScope::Reaching(256) };
+    // of each texture's stored tiers (its halvings) only the one 256 on its larger side: the larger tiers are not
+    // loaded and the lowerings derive their maps at that size. The far-field terrain textures, every tier: the cell's
+    // ground and the roads' painted markings are in them, 0.25 m a texel at their finest (2048 for a 512 m cell)
+    let scope = Scope {
+        area,
+        season: Season::Summer,
+        textures: TextureScope::Reaching(256),
+        terrain_textures: TextureScope::All,
+    };
     let mut reader = ForzaReader::new(track, scope);
     // the box written about the map's origin: Tokyo lies kilometres from the game's, past Studio's half extent
     // (`limit`, 4,780 m), where the writer writes nothing
@@ -88,8 +94,9 @@ fn main() -> Result<()> {
             Box::new(LowerForzaMaterials),
             // the terrain and the roads' planar layers read the position of a surface point: its coordinates, per placement
             Box::new(LowerForzaPlanarUv),
-            // the textures are kept no larger than 256, before the swatch tint copies the ones it bakes
-            Box::new(CapTextures::new(256, CapMode { beyond: Beyond::Filter, normals: NormalDownscale::Box })?),
+            // the textures are kept no larger than the far-field terrain's finest tier (2048), before the swatch tint copies
+            // the ones it bakes: every other texture is read at 256 and the lowerings derive theirs at their inputs' size
+            Box::new(CapTextures::new(2048, CapMode { beyond: Beyond::Filter, normals: NormalDownscale::Box })?),
             // a material that samples two coordinate sets (the emission map of EmissiveAltUV is on TEXCOORD4) is drawn through
             // the one set: its maps re-rasterised in that set's space, then the emission map times the base colour map
             Box::new(RebaseTexcoordSet::new(4, 256)?),

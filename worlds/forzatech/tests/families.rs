@@ -27,6 +27,7 @@ fn scope() -> Scope {
         season: Season::Summer,
         // every stored tier: the textures as the game stores them
         textures: TextureScope::All,
+        terrain_textures: TextureScope::All,
     }
 }
 
