@@ -10,7 +10,10 @@
 //! positions, a texture is not loaded as pixels (`load-textures`) or is signed (`lower-textures-rgba8` remaps those),
 //! or the normal map's convention is not X in red along the tangent (a normal map is turned between the sets' frames,
 //! below). A texture wider than 8 bits or floating point is read as 8-bit RGBA, the atlases being 8-bit: rounded, or
-//! clamped to 0-1, and counted with the floating-point texels that lay outside 0-1.
+//! clamped to 0-1, and counted with the floating-point texels that lay outside 0-1. The exception is an emissive slot
+//! whose texture is floating point with a largest colour value above 1 ([`crate::float_peak`]): it holds radiance, so it
+//! is divided by that value (the ratios between its values kept, none clamped) and the material copy's
+//! `emissive_strength` is multiplied by it, counted.
 //!
 //! **A set the texture is constant over.** When every slot sampling set `N` is the emissive one and its texture, read
 //! through the slot's transform and wrap over every texel any triangle's coordinates touch (a bilinear sample reads
@@ -55,7 +58,8 @@ use crate::rgba8::{Conversion, conversion};
 use crate::texture::level_dimensions;
 use crate::uv_resample::wrapped;
 use crate::{
-    Canvas, Image, Samples, Source, UvTriangle, claimed_texels, rebake, srgb8_to_linear, texture_level_rgba8,
+    Canvas, Image, Samples, Source, UvTriangle, claimed_texels, float_peak, rebake, srgb8_to_linear,
+    texture_level_rgba8, texture_level_rgba8_divided,
 };
 use iridia_interface::Filters;
 use primase_core::layered::LayeredMaterial;
@@ -140,6 +144,17 @@ struct Slot {
     meta: Meta,
     /// The approximations reading the texture as 8-bit RGBA made, each with its count.
     loss: Loss,
+    /// The factor the texture was divided by to be read as 8-bit RGBA, which the emissive strength takes back (1 when
+    /// it was not divided).
+    emission_scale: f32,
+}
+
+/// A texture read as 8-bit RGBA for one slot.
+struct Read {
+    image: Image,
+    meta: Meta,
+    loss: Loss,
+    emission_scale: f32,
 }
 
 /// The value of a texel nothing reached.
@@ -279,6 +294,8 @@ enum Plan {
         material: Entity,
         colour: [u8; 3],
         loss: Loss,
+        /// What the emissive strength is multiplied by.
+        emission_scale: f32,
     },
     Rebase {
         material: Entity,
@@ -288,6 +305,8 @@ enum Plan {
         clamped: bool,
         groups: Vec<GroupPlan>,
         loss: Loss,
+        /// What the emissive strength is multiplied by.
+        emission_scale: f32,
     },
 }
 
@@ -298,12 +317,15 @@ fn refuse(log: &mut PassLog, why: &str, triangles: u64) {
 }
 
 impl RebaseTexcoordSet {
-    fn load(w: &World, r: TextureRef) -> Result<(Image, Meta, Loss), String> {
+    fn load(w: &World, r: TextureRef, slot: TextureSlot) -> Result<Read, String> {
+        let undecodable = || "a texture does not decode".to_owned();
         let Some(t) = w.get::<Texture>(r.texture) else {
             return Err("a texture is not loaded as pixels".to_owned());
         };
         // the atlases are 8-bit, so a wider or floating-point source is read as 8-bit RGBA, each counted
         let mut loss = Vec::new();
+        let mut emission_scale = 1.0;
+        let mut image = None;
         match conversion(t.format) {
             None => {}
             Some(Conversion::Signed) => return Err(format!("a texture is signed ({:?})", t.format)),
@@ -314,37 +336,54 @@ impl RebaseTexcoordSet {
                 ));
             }
             Some(Conversion::Clamped) => {
-                let (width, height) =
-                    level_dimensions(t, 0).map_err(|_| "a texture does not decode".to_owned())?;
-                let level = t.levels.first().ok_or("a texture does not decode")?;
-                let values = Decoder::default()
-                    .decode_rgba32f(t.format, width, height, level)
-                    .map_err(|_| "a texture does not decode".to_owned())?;
-                let outside = values
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .filter(|p| p.iter().any(|v| !(0.0..=1.0).contains(v)))
-                    .count() as u64;
-                loss.push(("floating-point textures read clamped to 0-1 in 8-bit RGBA", 1));
-                if outside > 0 {
+                // an emission map holds radiance: its largest value above 1 is divided out and the emissive strength
+                // takes it back, so the ratios between its values are kept
+                let peak = float_peak(t, 0)
+                    .map_err(|_| undecodable())?
+                    .filter(|p| slot == TextureSlot::Emissive && *p > 1.0);
+                if let Some(peak) = peak {
+                    image = Some(texture_level_rgba8_divided(t, 0, peak).map_err(|_| undecodable())?);
+                    emission_scale = peak;
                     loss.push((
-                        "floating-point texels of those textures with a channel outside 0-1, clamped",
-                        outside,
+                        "floating-point emission maps divided by their largest value, which multiplies the emissive strength",
+                        1,
                     ));
+                } else {
+                    let (width, height) = level_dimensions(t, 0).map_err(|_| undecodable())?;
+                    let level = t.levels.first().ok_or_else(undecodable)?;
+                    let values = Decoder::default()
+                        .decode_rgba32f(t.format, width, height, level)
+                        .map_err(|_| undecodable())?;
+                    let outside = values
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .filter(|p| p.iter().any(|v| !(0.0..=1.0).contains(v)))
+                        .count() as u64;
+                    loss.push(("floating-point textures read clamped to 0-1 in 8-bit RGBA", 1));
+                    if outside > 0 {
+                        loss.push((
+                            "floating-point texels of those textures with a channel outside 0-1, clamped",
+                            outside,
+                        ));
+                    }
                 }
             }
         }
-        let image = texture_level_rgba8(t, 0).map_err(|_| "a texture does not decode".to_owned())?;
-        Ok((
+        let image = match image {
+            Some(image) => image,
+            None => texture_level_rgba8(t, 0).map_err(|_| undecodable())?,
+        };
+        Ok(Read {
             image,
-            Meta {
+            meta: Meta {
                 color_space: t.color_space,
                 role: t.role,
                 normal: t.normal,
             },
             loss,
-        ))
+            emission_scale,
+        })
     }
 
     /// What to do with primitive `i` of mesh `e`; `None` when it is left as it is (counted when it is a candidate).
@@ -404,13 +443,14 @@ impl RebaseTexcoordSet {
         // the pixels of every slot
         let mut loaded: Vec<Slot> = Vec::with_capacity(slots.len());
         for (slot, reference) in slots.drain(..) {
-            match Self::load(w, reference) {
-                Ok((image, meta, loss)) => loaded.push(Slot {
+            match Self::load(w, reference, slot) {
+                Ok(read) => loaded.push(Slot {
                     slot,
                     reference,
-                    image,
-                    meta,
-                    loss,
+                    image: read.image,
+                    meta: read.meta,
+                    loss: read.loss,
+                    emission_scale: read.emission_scale,
                 }),
                 Err(why) => {
                     refuse(log, &why, count);
@@ -432,6 +472,7 @@ impl RebaseTexcoordSet {
                 material: m,
                 colour: mean.map(|c| c.round().clamp(0.0, 255.0) as u8),
                 loss: loaded.iter().flat_map(|s| s.loss.iter().copied()).collect(),
+                emission_scale: loaded.iter().map(|s| s.emission_scale).product(),
             });
         }
         // the window
@@ -603,6 +644,7 @@ impl RebaseTexcoordSet {
             clamped,
             groups: plans,
             loss: loaded.iter().flat_map(|s| s.loss.iter().copied()).collect(),
+            emission_scale: loaded.iter().map(|s| s.emission_scale).product(),
         })
     }
 }
@@ -706,6 +748,7 @@ impl Pass for RebaseTexcoordSet {
                         material,
                         colour,
                         loss,
+                        emission_scale,
                     } => {
                         approximations.extend(loss);
                         let copy = match folded.get(&(material, colour)) {
@@ -719,6 +762,7 @@ impl Pass for RebaseTexcoordSet {
                                     .get_mut::<PbrMaterial>(c)
                                     .ok_or("a material that is not lowered")?;
                                 m.emissive_texture = None;
+                                m.emissive_strength *= emission_scale;
                                 for (k, f) in linear.iter().enumerate() {
                                     m.emissive[k] = (m.emissive[k] * f).clamp(0.0, 1.0);
                                 }
@@ -741,6 +785,7 @@ impl Pass for RebaseTexcoordSet {
                         clamped,
                         groups,
                         loss,
+                        emission_scale,
                     } => {
                         approximations.extend(loss);
                         let whole = primitives[i].clone();
@@ -768,6 +813,9 @@ impl Pass for RebaseTexcoordSet {
                             };
                             let copy = material_copy(w, material, &made, &suffix)?;
                             spawned.push(copy);
+                            if let Some(m) = w.get_mut::<PbrMaterial>(copy) {
+                                m.emissive_strength *= emission_scale;
+                            }
                             counts.push(("materials made for rebased primitives", 1));
                             let mut piece = if groups.len() == 1 {
                                 whole.clone()

@@ -119,12 +119,18 @@ fn sample(image: &Image, u: f64, v: f64) -> [f64; 4] {
     out
 }
 
-/// Level 0 of `t` as RGBA8, as stored. `None` when it has no pixels.
-pub(crate) fn decode(t: &Texture) -> Result<Option<Image>, String> {
+/// Level 0 of `t` as RGBA8, as stored, a floating-point format's colour divided by `divisor` first
+/// ([`primase_image::texture_level_rgba8_divided`]; 1 for every other texture). `None` when it has no pixels.
+pub(crate) fn decode(t: &Texture, divisor: f32) -> Result<Option<Image>, String> {
     let mut data = Vec::new();
     let mut size = None;
     if t.levels.is_empty() {
         return Ok(None);
+    }
+    if divisor > 1.0 {
+        return primase_image::texture_level_rgba8_divided(t, 0, divisor)
+            .map(Some)
+            .map_err(|e| format!("decoding a texture: {e}"));
     }
     map_rgba8_levels(
         t,
@@ -196,6 +202,10 @@ fn srgb_byte(linear: f64) -> u8 {
         .clamp(0.0, 255.0) as u8
 }
 
+/// What is counted for each floating-point emission map divided by its largest value.
+pub(crate) const HDR_EMISSION: &str =
+    "floating-point emission maps divided by their largest value, which multiplies the emissive strength";
+
 impl Lowering {
     /// An sRGB colour atlas made of `atlas`: its texels painted with `paint` (or as they are, when `None`), times
     /// `emissive`'s texel at the same normalised position when given. Made once per source, paint and emission map.
@@ -214,9 +224,10 @@ impl Lowering {
         if let Some(&e) = self.baked.get(&(atlas, key.clone(), emissive)) {
             return Ok(Some(e));
         }
+        let peak = emissive.map_or(1.0, |e| self.emission_peak(w, e));
         let (Some(source), emission) = (
             w.get::<Texture>(atlas),
-            emissive.map(|e| w.get::<Texture>(e).map(|t| (t.color_space, decode(t)))),
+            emissive.map(|e| w.get::<Texture>(e).map(|t| (t.color_space, decode(t, peak)))),
         ) else {
             log.count(&format!("{what} atlases left out: no pixels"), 1);
             return Ok(None);
@@ -251,6 +262,9 @@ impl Lowering {
             )),
         );
         w.insert(e, texture);
+        if peak > 1.0 {
+            log.count(HDR_EMISSION, 1);
+        }
         log.count(
             &format!(
                 "{what} atlases baked as {} maps",
@@ -412,7 +426,10 @@ impl Lowering {
                     if let Some(drawn) = drawn {
                         pbr.emissive_texture = Some(drawn);
                         pbr.emissive = tint.map(|c| c / strength.max(1.0));
-                        pbr.emissive_strength = strength.max(1.0);
+                        // the baked map is divided by its largest value, which the strength takes back (an alt map is
+                        // divided by the rebasing pass)
+                        let peak = if alt { 1.0 } else { self.emission_peak(w, em) };
+                        pbr.emissive_strength = strength.max(1.0) * peak;
                         approximate(
                             log,
                             e,

@@ -116,6 +116,52 @@ fn the_emission_map_times_the_base_colour_map_is_one_emission_map() {
 }
 
 #[test]
+fn a_floating_point_emission_map_is_divided_by_its_largest_value_and_the_strength_takes_it_back() {
+    let mut world = World::new();
+    let base = texture(&mut world, "base", 2, [255, 255, 255, 255]);
+    // 2 x 2 texels of radiance: 4, 2, 1 and 0 in red
+    let glow = world.spawn();
+    let texels: [[f32; 4]; 4] = [
+        [4.0, 1.0, 0.0, 1.0],
+        [2.0, 1.0, 0.0, 1.0],
+        [1.0, 1.0, 0.0, 1.0],
+        [0.0, 1.0, 0.0, 1.0],
+    ];
+    world.insert(
+        glow,
+        Texture {
+            width: 2,
+            height: 2,
+            format: TexFormat::Rgba32Float,
+            levels: vec![texels.iter().flatten().flat_map(|v| v.to_le_bytes()).collect()],
+            color_space: ColorSpace::Linear,
+            role: TexRole::Color,
+            normal: None,
+        },
+    );
+    let m = marked(
+        &mut world,
+        Some(TextureRef::new(base)),
+        Some(TextureRef::new(glow)),
+    );
+    let log = run(&mut world);
+    let pbr = world.get::<PbrMaterial>(m).unwrap();
+    // the strength was 3: it is 3 x 4 now, the map holds the ratios
+    assert_eq!(pbr.emissive_strength, 12.0);
+    let made = world
+        .get::<Texture>(pbr.emissive_texture.unwrap().texture)
+        .unwrap();
+    let red: Vec<f64> = made.levels[0].chunks(4).map(|t| srgb8_to_linear(t[0])).collect();
+    for (got, want) in red.iter().zip([1.0, 0.5, 0.25, 0.0]) {
+        assert!((got - want).abs() < 0.01, "{red:?}");
+    }
+    assert_eq!(
+        log.counts["floating-point emission maps divided by their largest value, which multiplies the emissive strength"],
+        1
+    );
+}
+
+#[test]
 fn an_emission_folded_into_the_factor_takes_the_base_colour_map_as_its_pattern() {
     let mut world = World::new();
     let base = texture(&mut world, "base", 4, [200, 100, 50, 255]);

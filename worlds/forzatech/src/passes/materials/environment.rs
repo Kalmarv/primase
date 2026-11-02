@@ -50,6 +50,9 @@
 //! variation (`EmissiveTempVariationOnOff`, from the world position), the flash (`EmissiveFlash`, time-driven, the
 //! steady state is the emission), `g(d)` and the sky preset's scale (run-time). `v` is the placement's: the material
 //! carries its ramp ([`crate::components::EmissionVariation`]) and `apply-forzatech-emission-variation` applies it.
+//! An emission map stored as floating point holds radiance (its largest value is above 1 in the Tokyo track's box): it is
+//! divided by that value where it becomes 8-bit (the bake here, `rebase-texcoord-set`, `bake-forzatech-emission-product`)
+//! and the material's `emissive_strength` is multiplied by it, counted.
 use super::{ALPHA_REFERENCE, Binding, Derived, Lowering, Params, approximate, left_out};
 use crate::components::{EmissionByBaseColour, ForzaMaterial, MaterialTextures, SwatchTint};
 use primase_core::pass::PassLog;
@@ -183,7 +186,10 @@ impl Lowering {
             pbr.emissive_texture = Some(Self::slot(baked, Some([1.0; 2]), offset));
         }
         pbr.emissive = radiance.map(|c| c / strength.max(1.0));
-        pbr.emissive_strength = strength.max(1.0);
+        // a baked map is divided by its largest value, which the strength takes back (an alt map is divided by the
+        // rebasing pass)
+        let peak = if alt { 1.0 } else { self.emission_peak(w, emission) };
+        pbr.emissive_strength = strength.max(1.0) * peak;
         if p.on("LightEmisVariationOnOff") {
             Self::vary_emission(w, e, p, pbr);
         }

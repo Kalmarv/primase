@@ -112,6 +112,19 @@ fn shibuya_altuv_emission() {
     for (what, n) in rebase.approximations.iter().chain(&product.approximations) {
         println!("approximation: {what}: {n}");
     }
+    // the other emissive materials' maps, baked by the lowering
+    for (what, n) in log.counts.iter().filter(|(w, _)| w.contains("floating-point")) {
+        println!("count: lowering: {what}: {n}");
+    }
+    // a floating-point emission map keeps its range: nothing is clamped
+    assert!(
+        rebase
+            .approximations
+            .keys()
+            .all(|what| !what.contains("outside 0-1, clamped")),
+        "texels clamped: {:?}",
+        rebase.approximations
+    );
 
     assert_eq!(part.iter::<EmissionByBaseColour>().count(), 0, "no mark is left");
     for (_, mesh) in part.iter::<Mesh>() {

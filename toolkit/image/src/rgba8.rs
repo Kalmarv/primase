@@ -11,6 +11,7 @@ use primase_core::{Component, Entity, Name, TexFormat, TexRole, Texture, Texture
 use primase_texcodec::{Decoder, TexDecoder};
 
 use crate::texture::level_dimensions;
+use crate::{Error, Image, Samples, texture_level_rgba8};
 
 /// Whether every texel of `format` decodes to 8-bit RGBA without changing its value: 8-bit unsigned normalized
 /// channels (missing ones read as 0, a missing alpha as 1); 4-bit ones (`v * 17`); BC1-BC5 unsigned and BC7, decoded
@@ -54,6 +55,55 @@ pub(crate) fn conversion(format: TexFormat) -> Option<Conversion> {
         | EacRg11Unorm
         | Astc { .. } => Some(Conversion::Rounded),
     }
+}
+
+/// The largest finite value among the red, green and blue channels of level `level` of `t` when its format is floating
+/// point (16- and 32-bit float, BC6H), `None` for every other format.
+pub fn float_peak(t: &Texture, level: usize) -> Result<Option<f32>, Error> {
+    if conversion(t.format) != Some(Conversion::Clamped) {
+        return Ok(None);
+    }
+    let (w, h) = level_dimensions(t, level)?;
+    let values = Decoder::default().decode_rgba32f(t.format, w, h, &t.levels[level])?;
+    Ok(Some(
+        values
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|p| p[..3].iter().copied())
+            .filter(|v| v.is_finite())
+            .fold(0.0, f32::max),
+    ))
+}
+
+/// Level `level` of `t` as RGBA8 with the colour channels of a floating-point format divided by `divisor` first, so that
+/// a peak of `divisor` ([`float_peak`]) is 255 and the ratios between values survive; the alpha is not divided. Any
+/// other format is decoded as [`texture_level_rgba8`] does (`divisor` is not used).
+pub fn texture_level_rgba8_divided(t: &Texture, level: usize, divisor: f32) -> Result<Image, Error> {
+    if conversion(t.format) != Some(Conversion::Clamped) {
+        return texture_level_rgba8(t, level);
+    }
+    let (width, height) = level_dimensions(t, level)?;
+    let values = Decoder::default().decode_rgba32f(t.format, width, height, &t.levels[level])?;
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let rgba = values
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|p| {
+            [
+                byte(p[0] / divisor),
+                byte(p[1] / divisor),
+                byte(p[2] / divisor),
+                byte(p[3]),
+            ]
+        })
+        .collect();
+    Ok(Image {
+        width,
+        height,
+        samples: Samples::U8(rgba),
+    })
 }
 
 /// What `lower-textures-rgba8` does with a signed texture that is not a normal map.

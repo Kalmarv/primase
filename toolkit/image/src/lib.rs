@@ -30,7 +30,10 @@ mod rebase;
 pub use rebase::{MAX_GROUPS, PADDING, REBASE_TEXCOORD_SET, RebaseTexcoordSet};
 mod rgba8;
 pub use qoi::{Qoi, QoiChannels, QoiColorspace, read_qoi};
-pub use rgba8::{LOWER_TEXTURES_RGBA8, LowerTexturesRgba8, SignedData, rgba8_exact};
+pub use rgba8::{
+    LOWER_TEXTURES_RGBA8, LowerTexturesRgba8, SignedData, float_peak, rgba8_exact,
+    texture_level_rgba8_divided,
+};
 mod texture;
 mod tga;
 mod upscale;

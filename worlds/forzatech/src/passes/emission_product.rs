@@ -26,7 +26,7 @@ use primase_core::pbr::{PbrMaterial, TextureRef};
 use primase_core::{Component, Entity, MaterialVariants, Mesh, Name, Texture, World};
 
 use crate::components::EmissionByBaseColour;
-use crate::passes::materials::{decode, painted};
+use crate::passes::materials::{HDR_EMISSION, decode, painted};
 
 /// See the module documentation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -93,7 +93,8 @@ impl Pass for BakeForzaEmissionProduct {
                 }
             }
         }
-        let mut products: BTreeMap<(Entity, Entity), Entity> = BTreeMap::new();
+        // each (base colour map, emission map) product with the factor the emission map was divided by
+        let mut products: BTreeMap<(Entity, Entity), (Entity, f32)> = BTreeMap::new();
         for m in marked {
             w.remove::<EmissionByBaseColour>(m);
             let tris = triangles.get(&m).copied().unwrap_or(0);
@@ -134,11 +135,19 @@ impl Pass for BakeForzaEmissionProduct {
                 leave_out(w, log, m, LEFT_OUT, tris);
                 continue;
             }
-            let product = match products.get(&(base.texture, emission.texture)) {
+            let (product, peak) = match products.get(&(base.texture, emission.texture)) {
                 Some(&t) => t,
                 None => {
+                    // a floating-point emission map is divided by its largest value, which the strength takes back
+                    let peak = match w.get::<Texture>(emission.texture) {
+                        Some(e) => primase_image::float_peak(e, 0)
+                            .map_err(|e| format!("reading an emission map: {e}"))?
+                            .filter(|p| *p > 1.0)
+                            .unwrap_or(1.0),
+                        None => 1.0,
+                    };
                     let made = match (w.get::<Texture>(base.texture), w.get::<Texture>(emission.texture)) {
-                        (Some(b), Some(e)) if !b.levels.is_empty() => match decode(e)? {
+                        (Some(b), Some(e)) if !b.levels.is_empty() => match decode(e, peak)? {
                             Some(image) => Some(painted(b, None, Some((e.color_space, &image)))?),
                             None => None,
                         },
@@ -161,15 +170,19 @@ impl Pass for BakeForzaEmissionProduct {
                     let t = w.spawn();
                     w.insert(t, Name(format!("{name} (emission by base colour)")));
                     w.insert(t, texture);
-                    products.insert((base.texture, emission.texture), t);
+                    products.insert((base.texture, emission.texture), (t, peak));
                     log.count(
                         "emission maps made as the emission map times the base colour map",
                         1,
                     );
-                    t
+                    if peak > 1.0 {
+                        log.count(HDR_EMISSION, 1);
+                    }
+                    (t, peak)
                 }
             };
             if let Some(pbr) = w.get_mut::<PbrMaterial>(m) {
+                pbr.emissive_strength *= peak;
                 pbr.emissive_texture = Some(TextureRef {
                     texture: product,
                     texcoord: base.texcoord,

@@ -124,9 +124,11 @@
 //! all 140 are rebased (64 split into groups of non-overlapping triangles, 136 primitives made by the splits; 212
 //! materials, 499 atlas textures of 26,214,400 texels, 23 primitives with an atlas smaller than their textures' density
 //! asks), none is left as it is, none is left without its emission, and 212 emission maps are made (the emission map
-//! times the base colour map). 101 of the textures read are BC6H (floating point): clamped to 0-1 in 8 bits, 3,020,122
-//! of their texels with a channel above 1 (counted: the highlights of the emission map are held at 1). 6 triangles
-//! have no tangent frame in a coordinate set and keep their normal texels. The emission's unit and the sky preset's scale are not in the files (see
+//! times the base colour map). The emission maps are BC6H (floating point radiance: of the 21 the box's EmissiveAltUV
+//! materials bind, the largest value is 3.5 to 3,808, and many lit texels are above 1): each is divided by its largest
+//! value and the material's emissive strength multiplied by it (101 uses by the rebasing pass, 17 maps baked by the
+//! lowering of the box's other emissive materials, none by the emission product; counted, no texel is clamped), so the ratios between the map's values are kept. 6 triangles have no
+//! tangent frame in a coordinate set and keep their normal texels. The emission's unit and the sky preset's scale are not in the files (see
 //! [`crate::passes::ApplyForzaEmissionVariation`] for the instance variation, which is applied per placement).
 mod anim_flag;
 mod anim_ledflipbookpanel;
@@ -136,7 +138,7 @@ mod emissiveonly;
 mod environment;
 mod environment_plot;
 mod environment_signage;
-pub(crate) use environment_signage::{decode, painted};
+pub(crate) use environment_signage::{HDR_EMISSION, decode, painted};
 mod environmentdeferreddecal;
 mod foliage;
 mod glass;
@@ -290,6 +292,8 @@ struct Lowering {
     rooms: BTreeMap<(Entity, [u32; 2]), RoomMeans>,
     /// Whether an emission texture holds any light (a texel with a colour other than black), by texture.
     lit: BTreeMap<Entity, bool>,
+    /// The largest value of each floating-point emission texture above 1 (an emission map holds radiance), read once.
+    peaks: BTreeMap<Entity, f32>,
     /// The largest tilt of a signed normal map that is flat (see [`FLAT_TILT`]), by texture; `None` for one that is not.
     flat: BTreeMap<Entity, Option<f64>>,
 }
@@ -394,6 +398,18 @@ impl Lowering {
             transform,
             ..TextureRef::new(texture)
         }
+    }
+
+    /// What the emission texture `texture` is divided by to be read as 8-bit RGBA: its largest colour value when the
+    /// texture is floating point and that exceeds 1, else 1. The emissive strength takes it back, so the ratios between
+    /// the map's values are kept ([`primase_image::float_peak`]). Read once per texture.
+    fn emission_peak(&mut self, w: &World, texture: Entity) -> f32 {
+        *self.peaks.entry(texture).or_insert_with(|| {
+            w.get::<Texture>(texture)
+                .and_then(|t| primase_image::float_peak(t, 0).ok().flatten())
+                .filter(|p| *p > 1.0)
+                .unwrap_or(1.0)
+        })
     }
 
     /// Whether the emission texture `texture` holds any light: a texel of level 0 whose colour is not black. Read once per
@@ -871,6 +887,7 @@ impl Pass for LowerForzaMaterials {
             reflected: BTreeSet::new(),
             rooms: BTreeMap::new(),
             lit: BTreeMap::new(),
+            peaks: BTreeMap::new(),
             flat: BTreeMap::new(),
         };
         let mut left: BTreeMap<String, (u64, u64)> = BTreeMap::new();

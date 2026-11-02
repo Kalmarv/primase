@@ -333,26 +333,73 @@ fn two_set_material(w: &mut World) -> Entity {
     m
 }
 
-/// A floating-point source is read clamped to 0-1 (the texels outside it counted) and drawn; a signed one is left as it is.
+/// A floating-point emission map is divided by its largest value, which the emissive strength takes back; any other
+/// floating-point map is read clamped to 0-1 (the texels outside it counted); a signed one is left as it is.
 #[test]
-fn a_floating_point_source_is_read_clamped_and_counted_and_a_signed_one_is_refused() {
+fn a_floating_point_source_is_read_with_its_range_kept_or_clamped_and_a_signed_one_is_refused() {
+    let floats =
+        |texels: &[[f32; 4]]| -> Vec<u8> { texels.iter().flatten().flat_map(|v| v.to_le_bytes()).collect() };
+    // the emission map: peak 2, so 255 is 2
     let mut w = World::new();
     let m = two_set_material(&mut w);
     let glow = w.get::<PbrMaterial>(m).unwrap().emissive_texture.unwrap().texture;
-    let texels: [[f32; 4]; 4] = [
+    let mut hdr = w.get::<Texture>(glow).unwrap().clone();
+    hdr.format = TexFormat::Rgba32Float;
+    hdr.levels = vec![floats(&[
         [2.0, 0.5, 0.0, 1.0],
         [0.0, 1.0, 0.0, 1.0],
         [0.0, 0.0, 1.0, 1.0],
         [1.0; 4],
-    ];
-    let mut hdr = w.get::<Texture>(glow).unwrap().clone();
-    hdr.format = TexFormat::Rgba32Float;
-    hdr.levels = vec![texels.iter().flatten().flat_map(|v| v.to_le_bytes()).collect()];
+    ])];
     w.insert(glow, hdr);
     let e = mesh_of(&mut w, vec![square(m, false)]);
     let report = run(&mut w).unwrap();
-    assert_ne!(material_of(&w, e, 0).0, m);
+    let (made, material) = material_of(&w, e, 0);
+    assert_ne!(made, m);
     assert_eq!(count(&report, "primitives rebased"), 1);
+    assert_eq!(material.emissive_strength, 2.0);
+    let atlas = texture_of(&w, material.emissive_texture.unwrap());
+    let peak = |channel: usize| {
+        atlas.levels[0]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[channel])
+            .max()
+            .unwrap()
+    };
+    assert_eq!(
+        [peak(0), peak(1), peak(2)],
+        [255, 128, 128],
+        "the ratios of the map are kept"
+    );
+    let approximations = &report.steps[0].log.approximations;
+    assert_eq!(
+        approximations["floating-point emission maps divided by their largest value, which multiplies the emissive strength"],
+        1
+    );
+    assert!(
+        !approximations
+            .contains_key("floating-point texels of those textures with a channel outside 0-1, clamped"),
+        "nothing is clamped: {approximations:?}"
+    );
+
+    // a base colour map above 1: clamped, counted, the strength left alone
+    let mut w = World::new();
+    let m = two_set_material(&mut w);
+    let base = w
+        .get::<PbrMaterial>(m)
+        .unwrap()
+        .base_color_texture
+        .unwrap()
+        .texture;
+    let mut hdr = w.get::<Texture>(base).unwrap().clone();
+    hdr.format = TexFormat::Rgba32Float;
+    hdr.levels = vec![floats(&[[2.0, 0.5, 0.0, 1.0]; 16])];
+    w.insert(base, hdr);
+    let e = mesh_of(&mut w, vec![square(m, false)]);
+    let report = run(&mut w).unwrap();
+    assert_eq!(material_of(&w, e, 0).1.emissive_strength, 1.0);
     let approximations = &report.steps[0].log.approximations;
     assert_eq!(
         approximations["floating-point textures read clamped to 0-1 in 8-bit RGBA"],
@@ -360,7 +407,7 @@ fn a_floating_point_source_is_read_clamped_and_counted_and_a_signed_one_is_refus
     );
     assert_eq!(
         approximations["floating-point texels of those textures with a channel outside 0-1, clamped"],
-        1
+        16
     );
 
     let mut w = World::new();
