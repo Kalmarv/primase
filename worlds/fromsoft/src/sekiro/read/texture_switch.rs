@@ -238,7 +238,7 @@ fn asset_row(model: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fromsoft_formats::param::{AssetGeometry, DrawDistScale, PartsDraw};
+    use fromsoft_formats::param::{AssetGeometry, DrawDistScale, LodBoundary, PartsDraw};
 
     fn params(scale: [f32; 21], new_rows: &[i32]) -> Params {
         Params {
@@ -249,12 +249,24 @@ mod tests {
                         tex_lv01_border: 80.0,
                         tex_lv01_play: 5.0,
                         lod_type: 1,
+                        lod_boundaries: [LodBoundary {
+                            border: 0.0,
+                            play: 0.0,
+                        }; 5],
+                        cross_fade: false,
+                        shadow_lod_offset: 0,
                     },
                     PartsDraw {
                         id: 7,
                         tex_lv01_border: 0.0,
                         tex_lv01_play: 1.0,
                         lod_type: 0,
+                        lod_boundaries: [LodBoundary {
+                            border: 0.0,
+                            play: 0.0,
+                        }; 5],
+                        cross_fade: false,
+                        shadow_lod_offset: 0,
                     },
                 ],
             },
