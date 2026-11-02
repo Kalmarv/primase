@@ -273,6 +273,12 @@ pub fn over_as_sum(weights: [f32; 4], slots: usize) -> [f32; 4] {
 /// redistributing its weight. Referenced materials must not themselves be layered.
 /// Consumers validate each referenced entity's material dialect; core checks
 /// entity existence and disallows nested blends independently of dialect.
+///
+/// A `pbr.material` on the same entity is its host, as for `pbr.detail`: it states the material's alpha mode and
+/// sidedness, which the blend does not, and it is the complete material for every target that does not draw the blend.
+/// A consumer that draws the blend draws the layers with the host's alpha mode and sidedness. A layered material
+/// without a host is not drawn with a default a writer picks: the writer leaves it out and reports it, and a program
+/// that wants it drawn states a pass that gives it a `pbr.material`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct LayeredMaterial {
     pub layers: Vec<Option<Layer>>,
