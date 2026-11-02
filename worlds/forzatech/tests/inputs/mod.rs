@@ -24,6 +24,12 @@ primase_testdata::inputs! {
             about: r#"the Tokyo track's folder (`media/Tracks/Brio`: four GeoChunks with their chunk maps and contents lists, `Ribbon_00`'s `.pvs` and template libraries, `bin.zip` with its asset manifest, materials and shaders) and, through it, the install's texture library (`media/_library/Textures.zip` and the `TexturesPG` zips); tests/shibuya.rs"#,
             source: r#"the user's own install"#,
         },
+        Query::Install(Game::Fh6, Some("media/TimeOfDay")) => {
+            status: Live,
+            gate: true,
+            about: r#"the sky presets' folder (Steam build 25588841): `TimeOfDay_Brio.ppr`, the Tokyo track's, of which the `Forte_Summer_01` sky is read; tests/sky.rs"#,
+            source: r#"the user's own install"#,
+        },
     }
     debug {}
 }

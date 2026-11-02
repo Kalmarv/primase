@@ -5,7 +5,8 @@ Forza Horizon 6 (ForzaTech) over the format readers of `forzatech-formats`: the 
 their material chains (instance, material and shader, through the track's `bin.zip` and its asset manifest) and the
 textures those name, from the track's GeoChunks and the install's texture library. The reader keeps every LOD and
 draw-distance band as stored; passes select what is drawn at a distance and from the main view, and build collision
-from the drawn triangles.
+from the drawn triangles. A sky's emissive scale (`EmissiveScales.TrackEmissiveEV` in the track's time-of-day file) is
+read apart, for the sky the caller names (`read::sky`).
 
 ## Example
 

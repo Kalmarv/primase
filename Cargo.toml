@@ -56,7 +56,7 @@ ruzstd = { version = "=0.7.3", default-features = false, features = ["std", "has
 libloading = { version = "=0.9.0", default-features = false, features = ["std"] }
 oozextract = { version = "=0.5.7", default-features = false, features = ["verbose_errors"] }
 primase-core = { path = "core" }
-primase-testdata = { git = "https://github.com/Kalmarv/primase-testdata", rev = "23727033cd9d3926c26138bacca15d745b849418" }
+primase-testdata = { git = "https://github.com/Kalmarv/primase-testdata", rev = "58da6ba4850893424278d1331ae669c4e75b4f6e" }
 primase-texcodec = { path = "toolkit/texcodec" }
 primase-dds = { path = "toolkit/dds" }
 primase-image = { path = "toolkit/image" }
@@ -102,7 +102,7 @@ primase-forzatech = { path = "worlds/forzatech" }
 anvil-formats = { git = "https://github.com/Kalmarv/anvil-formats", rev = "77b898230d491dcdfc8c8fcdb858801132e4ca40" }
 dxil-reader = { git = "https://github.com/Kalmarv/dx", rev = "39883bd084ad1db1f66416f41b25cf2529f9eec1" }
 frostbite-formats = { git = "https://github.com/Kalmarv/frostbite-formats", rev = "c362662975d4cc57a1b4e836c7f1e96740bc8a5a" }
-forzatech-formats = { git = "https://github.com/Kalmarv/forzatech-formats", rev = "a3c1e5c5b1fdd0c0c4115e9925695b46a703e061", version = "0.1.0" }
+forzatech-formats = { git = "https://github.com/Kalmarv/forzatech-formats", rev = "ee318b957c97127b1c5eef1f8af6983c39038208", version = "0.1.0" }
 rage-engine-formats = { git = "https://github.com/Kalmarv/rage-engine-formats", rev = "b3705f7bb24c2151ae7df827f6cf9dae8be1d703" }
 
 thiserror = { version = "=2.0.21", default-features = false, features = ["std"] }

@@ -15,6 +15,7 @@ use primase_forzatech::passes::{
 use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
 use primase_forzatech::read::placements::Scope;
+use primase_forzatech::read::sky::SkyEmission;
 use primase_forzatech::read::textures::TextureScope;
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_image::{
@@ -55,6 +56,9 @@ fn main() -> Result<()> {
         f64::from(region[3] + margin),
     );
     let track = Track::open(fh6.join("media/Tracks/Brio"))?;
+    // the sky whose emissive scale the level takes (the program's choice, as the season is): the summer sky of the open
+    // world, by the name its time-of-day file gives it
+    let sky = SkyEmission::open(fh6.join("media/TimeOfDay/TimeOfDay_Brio.ppr"), "Forte_Summer_01")?;
     // of each texture's stored tiers (its halvings) only the one 256 on its larger side: the larger tiers are not
     // loaded and the lowerings derive their maps at that size. The far-field terrain textures, every tier: the cell's
     // ground and the roads' painted markings are in them, 0.25 m a texel at their finest (2048 for a 512 m cell)
@@ -129,11 +133,12 @@ fn main() -> Result<()> {
             // metallic-roughness map's size
             Box::new(PackOrm::new(OrmSize::MetallicRoughness, MissingLevels::Generate)),
             // collision surfaces have no class yet: concrete, the city's most common ground (the program's choice).
-            // Emission at 50 cd/m2 per unit of emissive strength (the program's choice): the track-emissive exposure of
-            // the summer sky over the day, the season and time of the level; the game's own unit is inferred, not read
+            // Emission at the summer sky's track-emissive scale, its peak (the day value) read from the time-of-day file
+            // and taken as cd/m2 per unit of emissive strength (the program's choice; the notice below names it: the
+            // game's own unit is inferred, not read)
             Box::new(RaiseSkate::new(
                 RaiseOptions::new("shibuya", LightCalibration::Standard, Unclassified::Surface("concrete".into()))?
-                    .with_emission(50.0)?,
+                    .with_emission(sky.peak()?)?,
             )),
             // skate blends by vertex weights: a road's blend mask and layer heights are evaluated at its vertices and
             // interpolated between them (counted)
@@ -161,6 +166,7 @@ fn main() -> Result<()> {
             .ok_or("no threads")?,
     };
     let report = convert(&mut reader, writer, &PassManager::new(registry).with_settings(settings), &select, &prepare)?;
+    println!("{}", sky.notice("fh6_to_reskate"));
     for notice in report.notices() {
         println!("{notice}");
     }

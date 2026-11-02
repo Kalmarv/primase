@@ -36,6 +36,8 @@ pub enum Error {
     Track(String),
     #[error("{0}")]
     Model(String),
+    #[error("sky: {0}")]
+    Sky(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
