@@ -116,7 +116,7 @@ Every piece of code has one of these roles. Each rule is checked by the checks l
 | **writer** | encode the prepared data its format supports, laying it out as its encoding needs (files, tiles, splits by encoded size) without changing what it means; omit and report what it doesn't support; refuse invalid prepared data with the reason | lower, approximate, resize, select, merge, generate or move content (a pass does that first), choose among alternatives or fall back, carry other namespaces' data (component dumps in extras or private extensions), read other files, change the world | writer entry points take `&World` (`checks/tests/architecture.rs`); I/O only in modules that opt in as `writer I/O` |
 | **core** | shared meanings, the store, frames, the pass machinery and its generic passes, gates | game or destination names, renderer tuning, file access, dependencies on other crates | crate dependencies, game names, clippy's file ban (`checks/tests/architecture.rs`) |
 | **toolkit** | shared mechanisms that games supply data to | game branches, depending on formats or worlds | crate dependencies, game names |
-| **formats** | file formats that are not one game's: their readers, writers and passes | depending on worlds or on formats other than `formats/gltf`; encoding one destination's needs (that destination's writer does, through the format writer's extension hook) | crate dependencies, game names |
+| **formats** | file formats that are not one game's: their readers, writers and passes | depending on worlds or on formats other than `formats/gltf`; encoding one destination's needs (that destination's own writer does, in its own crate, building on the format's writer: law 5) | crate dependencies, game names |
 | **test-input registry** (primase-testdata) | name and describe the real-data inputs tests read, games and third-party tools included; resolve them | game logic, depending on workspace crates, being a normal dependency of any crate | crate dependencies (not excusable in `architecture.toml`); `real_data_variables_are_declared` |
 | **examples** | compose readers, passes, writers and `convert` as a program does, to show the library | data logic of their own (reimplementing a step, querying or editing world components, reading a format, running a pass past the manager); hiding a recipe's choices | `checks/tests/architecture.rs` (`entry_points`) |
 
@@ -198,7 +198,8 @@ examples/             programs using the library, quoted by the README (no libra
 Dependencies point down only: `worlds/formats -> toolkit -> core` (`checks` and `examples` may use any of them). primase is a
 library: a program that converts something (a game's map to a destination) lives in its own repository and composes
 these crates; primase has no command line. A world crate depends on the toolkit and
-core, never on a format. Each says what it is in its manifest (`[package.metadata.primase] kind`): a `game` crate (a
+core, and on no format, except that a `destination` crate may build on the glTF writer, `formats/gltf` (law 5), and on no
+other format. Each says what it is in its manifest (`[package.metadata.primase] kind`): a `game` crate (a
 game or a game family) or a `destination` crate may depend on its engine family's `engine` crate (`engine = "<package>"`),
 never the other way round, and an engine crate never depends on a game, a destination or a recipe; no other world
 depends on another. A format crate depends on the toolkit, core and `formats/gltf` (the GLB codec itself is

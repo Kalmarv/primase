@@ -404,8 +404,9 @@ fn code(path: &str) -> Vec<Tok> {
 const TEST_INPUT_REGISTRY: &str = "primase-testdata";
 
 /// Whether `from` may depend on `to`; `dev` for dev-dependencies. A game or destination crate may depend on the
-/// engine crate it names, never the other way round. The format crates in their own repositories are not members:
-/// any crate may use them.
+/// engine crate it names, never the other way round. A destination crate may build on the glTF writer (law 5: a richer
+/// output may build on its format's writer), and no other worlds crate depends on a format. The format crates in their
+/// own repositories are not members: any crate may use them.
 fn edge_allowed(from: &Member, to: &Member, dev: bool) -> bool {
     let to_layer = to.layer();
     let normal = match from.layer() {
@@ -415,6 +416,7 @@ fn edge_allowed(from: &Member, to: &Member, dev: bool) -> bool {
         "worlds" => {
             matches!(to_layer, "core" | "toolkit")
                 || (to.kind.as_deref() == Some("engine") && from.engine.as_deref() == Some(to.name.as_str()))
+                || (from.kind.as_deref() == Some("destination") && to.path == "formats/gltf")
         }
         // they hold no library: tests and example programs may compose anything
         "checks" | "examples" => true,
@@ -428,6 +430,30 @@ fn enables(spec: &toml::Value, feature: &str) -> bool {
     spec.get("features")
         .and_then(|f| f.as_array())
         .is_some_and(|f| f.iter().any(|f| f.as_str() == Some(feature)))
+}
+
+/// The worlds row of the rule on synthetic crates: only a destination builds on the glTF writer, and on no other
+/// format; a game crate builds on neither.
+#[test]
+fn only_a_destination_builds_on_the_gltf_writer() {
+    let crate_ = |path: &str, kind: &str| Member {
+        path: path.into(),
+        name: format!("primase-{}", path.rsplit('/').next().unwrap()),
+        kind: Some(kind.into()),
+        names: Vec::new(),
+        source_names: Vec::new(),
+        engine: None,
+        stages: Vec::new(),
+    };
+    let gltf = crate_("formats/gltf", "format");
+    let other = crate_("formats/other", "format");
+    let destination = crate_("worlds/target", "destination");
+    let game = crate_("worlds/game", "game");
+    assert!(edge_allowed(&destination, &gltf, false));
+    assert!(!edge_allowed(&destination, &other, false));
+    assert!(!edge_allowed(&game, &gltf, false));
+    // a round-trip gate may still read through any format
+    assert!(edge_allowed(&game, &other, true));
 }
 
 #[test]
