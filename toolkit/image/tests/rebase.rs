@@ -333,6 +333,52 @@ fn two_set_material(w: &mut World) -> Entity {
     m
 }
 
+/// A floating-point source is read clamped to 0-1 (the texels outside it counted) and drawn; a signed one is left as it is.
+#[test]
+fn a_floating_point_source_is_read_clamped_and_counted_and_a_signed_one_is_refused() {
+    let mut w = World::new();
+    let m = two_set_material(&mut w);
+    let glow = w.get::<PbrMaterial>(m).unwrap().emissive_texture.unwrap().texture;
+    let texels: [[f32; 4]; 4] = [
+        [2.0, 0.5, 0.0, 1.0],
+        [0.0, 1.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0, 1.0],
+        [1.0; 4],
+    ];
+    let mut hdr = w.get::<Texture>(glow).unwrap().clone();
+    hdr.format = TexFormat::Rgba32Float;
+    hdr.levels = vec![texels.iter().flatten().flat_map(|v| v.to_le_bytes()).collect()];
+    w.insert(glow, hdr);
+    let e = mesh_of(&mut w, vec![square(m, false)]);
+    let report = run(&mut w).unwrap();
+    assert_ne!(material_of(&w, e, 0).0, m);
+    assert_eq!(count(&report, "primitives rebased"), 1);
+    let approximations = &report.steps[0].log.approximations;
+    assert_eq!(
+        approximations["floating-point textures read clamped to 0-1 in 8-bit RGBA"],
+        1
+    );
+    assert_eq!(
+        approximations["floating-point texels of those textures with a channel outside 0-1, clamped"],
+        1
+    );
+
+    let mut w = World::new();
+    let m = two_set_material(&mut w);
+    let glow = w.get::<PbrMaterial>(m).unwrap().emissive_texture.unwrap().texture;
+    let mut signed = w.get::<Texture>(glow).unwrap().clone();
+    signed.format = TexFormat::Rg8Snorm;
+    signed.levels = vec![vec![0; 8]];
+    w.insert(glow, signed);
+    let e = mesh_of(&mut w, vec![square(m, false)]);
+    let report = run(&mut w).unwrap();
+    assert_eq!(
+        count(&report, "primitives not rebased: a texture is signed (Rg8Snorm)"),
+        1
+    );
+    assert_eq!(material_of(&w, e, 0).0, m);
+}
+
 /// Triangles that overlap in set 4 are put in groups that do not, each its own primitive with an atlas of its own.
 #[test]
 fn overlapping_coordinates_are_split_into_groups_of_triangles_that_do_not_overlap() {

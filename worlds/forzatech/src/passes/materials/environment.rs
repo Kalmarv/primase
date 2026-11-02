@@ -29,7 +29,9 @@
 //! sampler reads it once; a source stored sRGB (BC1 `_SRGB` in the track) is decoded first, as the shader's view does.
 //!
 //! The simplifications: the surface the permutation makes dry and unlit (wetness, the lightmap and light probes are
-//! run-time state); the albedo's occlusion product is carried by the occlusion slot instead; and, named per material,
+//! run-time state); the albedo's occlusion product is carried by the occlusion slot instead, the raw map's blue, since
+//! the scene power and strength are not held by any material (named per material: "occlusion strength of the scene
+//! left out"); and, named per material,
 //! swatch tint, modulate, deposits, triplanar, relaxed cone-step mapping, mega-skirt, retro-reflection and
 //! per-instance random UV offset are left out, because each needs a vertex colour, the instance variation, the world
 //! position or a run-time constant that no material holds.
@@ -253,6 +255,8 @@ impl Lowering {
                     pbr.occlusion_texture = Some(slot);
                     pbr.metallic = 1.0;
                     pbr.roughness = 1.0;
+                    // the power and strength are scene constants that no material, settings file or shader holds
+                    approximate(log, e, "occlusion strength of the scene left out", triangles);
                 }
                 None => approximate(
                     log,

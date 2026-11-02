@@ -23,7 +23,7 @@ pub fn rgba8_exact(format: TexFormat) -> bool {
 
 /// How a format not exact in 8-bit RGBA is converted to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Conversion {
+pub(crate) enum Conversion {
     /// Unsigned values wider than 8 bits, rounded.
     Rounded,
     /// Floating point: clamped to 0-1, then rounded.
@@ -34,7 +34,7 @@ enum Conversion {
 
 /// How `format` is converted to 8-bit RGBA, `None` for the formats it holds exactly ([`rgba8_exact`]). Every format
 /// is named: none is exact, rounded or clamped by default.
-fn conversion(format: TexFormat) -> Option<Conversion> {
+pub(crate) fn conversion(format: TexFormat) -> Option<Conversion> {
     use TexFormat::*;
     match format {
         R8Unorm | A8Unorm | Rg8Unorm | Rgba8Unorm | Bgra8Unorm | Bgrx8Unorm | B4g4r4a4Unorm => None,

@@ -13,7 +13,9 @@
 //! - no emission map left (folded into the factor): the base colour map is the emission map, the factor is the colour;
 //! - no base colour map: the emission map as it is;
 //! - the maps still on different sets (the rebasing pass left the primitive as it was, counted there): the emission is
-//!   left out, counted by material and by triangle, as a material is sampled through one coordinate set.
+//!   left out, counted by material and by triangle, as a material is sampled through one coordinate set;
+//! - a marked material no primitive draws (the rebased primitives draw copies of it, a variant of a prototype may
+//!   still draw it): its emission cleared, counted apart, no triangle losing anything.
 //!
 //! Run after `rebase-texcoord-set` and before `bake-forzatech-swatch-tint`.
 
@@ -21,7 +23,7 @@ use std::collections::BTreeMap;
 
 use primase_core::pass::{Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, TextureRef};
-use primase_core::{Component, Entity, Mesh, Name, Texture, World};
+use primase_core::{Component, Entity, MaterialVariants, Mesh, Name, Texture, World};
 
 use crate::components::EmissionByBaseColour;
 use crate::passes::materials::{decode, painted};
@@ -75,11 +77,18 @@ impl Pass for BakeForzaEmissionProduct {
         if marked.is_empty() {
             return Ok(());
         }
+        // the triangles each material draws, as a primitive's own or as a placement's variant of it
         let mut triangles: BTreeMap<Entity, u64> = BTreeMap::new();
-        for (_, mesh) in w.iter::<Mesh>() {
-            for p in mesh.primitives() {
-                if let Some(m) = p.material {
-                    let corners = p.indices.as_ref().map_or_else(|| p.vertex_count(), Vec::len);
+        for (mesh_entity, mesh) in w.iter::<Mesh>() {
+            let variants = w.get::<MaterialVariants>(mesh_entity);
+            for (i, p) in mesh.primitives().iter().enumerate() {
+                let corners = p.indices.as_ref().map_or_else(|| p.vertex_count(), Vec::len);
+                let own = p.material.into_iter();
+                let swapped = variants
+                    .and_then(|v| v.0.get(i))
+                    .into_iter()
+                    .flat_map(|choices| choices.values().copied());
+                for m in own.chain(swapped) {
                     *triangles.entry(m).or_default() += corners as u64 / 3;
                 }
             }
@@ -91,6 +100,18 @@ impl Pass for BakeForzaEmissionProduct {
             let Some(pbr) = w.get::<PbrMaterial>(m).cloned() else {
                 continue;
             };
+            if tris == 0 {
+                if let Some(pbr) = w.get_mut::<PbrMaterial>(m) {
+                    pbr.emissive_texture = None;
+                    pbr.emissive = [0.0; 3];
+                    pbr.emissive_strength = 1.0;
+                }
+                log.count(
+                    "EmissiveAltUV materials drawn by no primitive: emission cleared",
+                    1,
+                );
+                continue;
+            }
             let Some(base) = pbr.base_color_texture else {
                 log.count(
                     "EmissiveAltUV emission with no base colour map: the emission map alone",

@@ -15,7 +15,8 @@
 //!   texture's value raises a layer over the ones before it where it passes the layer's height;
 //! - the albedo is then blended with `TintTexture` (`TEXCOORD2`) as an overlay (`2 t d` below one half, `1 - 2 (1 - t)
 //!   (1 - d)` above), taken to gamma 1/2.2, mixed with frost and snow by `UberRoadLFrost`, `UberRoadLSnow`,
-//!   `FrostAmount`, the terrain gloss texture and scene constants, and back by 2.2, times the scene's occlusion factor;
+//!   `FrostAmount`, the terrain gloss texture and scene constants, and back by 2.2, times the scene's occlusion factor (a
+//!   scene constant: no material or settings file holds it, so the occlusion slots carry the raw blue, named);
 //! - the metalness (target 0 W) is not written: 0.
 //!
 //! The rule: one layer is a `pbr.material` whose slots take the layer's coordinates; two to four are a
@@ -110,6 +111,10 @@ impl Lowering {
         };
         if matches!(p.texture("TintTexture"), Binding::Texture(_)) {
             approximate(log, e, "tint overlay left out", triangles);
+        }
+        // the albedo times the scene's occlusion factor: carried by the occlusion slots, the raw map's blue
+        if layers.iter().any(Option::is_some) {
+            approximate(log, e, "occlusion strength of the scene left out", triangles);
         }
         for &(switch, what) in LEFT_OUT {
             left_out(log, &p, e, switch, what, triangles);

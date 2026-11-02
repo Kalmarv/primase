@@ -118,7 +118,15 @@
 //! materials of those families bind a texture with no light and emit nothing (counted), 3 name an emission
 //! texture no archive holds, and the 30 materials drawn that read it on `TEXCOORD4` (`EmissiveAltUV`: 12 `environment`,
 //! 1,572 triangles, and 18 `environment_signage`, 580) keep it there for `rebase-texcoord-set` and
-//! `bake-forzatech-emission-product` (`tests/shibuya_altuv.rs` counts what they make of it). The emission's unit and the sky preset's scale are not in the files (see
+//! `bake-forzatech-emission-product` (`tests/shibuya_altuv.rs`). Run after `select-lod`, `select-forzatech-main-view`,
+//! `cap-textures` at 256 and `specialize-material-variants` (a primitive with variants is not rebased), the 30 materials
+//! are drawn by 2,152 triangles and, once the variants have prototypes of their own, 4,354 triangles of 140 primitives;
+//! all 140 are rebased (64 split into groups of non-overlapping triangles, 136 primitives made by the splits; 212
+//! materials, 499 atlas textures of 26,214,400 texels, 23 primitives with an atlas smaller than their textures' density
+//! asks), none is left as it is, none is left without its emission, and 212 emission maps are made (the emission map
+//! times the base colour map). 101 of the textures read are BC6H (floating point): clamped to 0-1 in 8 bits, 3,020,122
+//! of their texels with a channel above 1 (counted: the highlights of the emission map are held at 1). 6 triangles
+//! have no tangent frame in a coordinate set and keep their normal texels. The emission's unit and the sky preset's scale are not in the files (see
 //! [`crate::passes::ApplyForzaEmissionVariation`] for the instance variation, which is applied per placement).
 mod anim_flag;
 mod anim_ledflipbookpanel;

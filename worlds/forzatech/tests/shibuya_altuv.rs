@@ -27,6 +27,7 @@ use primase_forzatech::read::open::Track;
 use primase_forzatech::read::placements::Scope;
 use primase_forzatech::read::textures::TextureScope;
 use primase_image::{Beyond, CapMode, CapTextures, NormalDownscale, RebaseTexcoordSet};
+use primase_meshops::{SpecializeMaterialVariants, UnusedVariants};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn drawn(part: &primase_core::World) -> BTreeMap<Entity, u64> {
@@ -88,6 +89,10 @@ fn shibuya_altuv_emission() {
     .unwrap()
     .run(&mut part, &mut log)
     .unwrap();
+    let mut specialize = PassLog::default();
+    SpecializeMaterialVariants::new(UnusedVariants::Discard)
+        .run(&mut part, &mut specialize)
+        .unwrap();
     let mut rebase = PassLog::default();
     RebaseTexcoordSet::new(4, 256)
         .unwrap()
@@ -96,7 +101,12 @@ fn shibuya_altuv_emission() {
     let mut product = PassLog::default();
     BakeForzaEmissionProduct.run(&mut part, &mut product).unwrap();
 
-    for (what, n) in rebase.counts.iter().chain(&product.counts) {
+    for (what, n) in specialize
+        .counts
+        .iter()
+        .chain(&rebase.counts)
+        .chain(&product.counts)
+    {
         println!("count: {what}: {n}");
     }
     for (what, n) in rebase.approximations.iter().chain(&product.approximations) {
@@ -137,4 +147,18 @@ fn shibuya_altuv_emission() {
         "primitives: rebased {rebased}, folded {folded}, left as they are {refused}, meshes failing {meshes_not_rebased}"
     );
     assert!(rebased + folded > 0, "the pass draws something");
+    assert_eq!(
+        refused, 0,
+        "every primitive drawn is rebased or folded: {:?}",
+        rebase.counts
+    );
+    assert_eq!(meshes_not_rebased, 0, "every mesh is rewritten");
+    assert!(
+        product
+            .approximations
+            .keys()
+            .all(|what| !what.contains("left out")),
+        "no emission is left out: {:?}",
+        product.approximations
+    );
 }

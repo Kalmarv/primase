@@ -99,6 +99,8 @@ fn main() -> Result<()> {
             Box::new(CapTextures::new(2048, CapMode { beyond: Beyond::Filter, normals: NormalDownscale::Box })?),
             // a material that samples two coordinate sets (the emission map of EmissiveAltUV is on TEXCOORD4) is drawn through
             // the one set: its maps re-rasterised in that set's space, then the emission map times the base colour map
+            // (a prototype's material variants get prototypes of their own first: a primitive with variants is not rebased)
+            Box::new(SpecializeMaterialVariants::new(UnusedVariants::Discard)),
             Box::new(RebaseTexcoordSet::new(4, 256)?),
             Box::new(BakeForzaEmissionProduct),
             // the swatch tint is a material variant of each (model variant, tint byte) a prototype's placements use, its base colour baked

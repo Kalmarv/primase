@@ -7,8 +7,10 @@
 //! set. Every other slot of the material samples one same set `s`; a primitive left as it is, counted by reason and
 //! by triangle, when its slots sample three sets, it has material variants (`specialize-material-variants` first), the
 //! material is layered (`core.layered`), it is not a triangle list with the streams of both sets (float2) and
-//! positions, a texture is not loaded as pixels exact in 8-bit RGBA (`load-textures`, `lower-textures-rgba8`), or the
-//! normal map's convention is not X in red along the tangent (a normal map is turned between the sets' frames, below).
+//! positions, a texture is not loaded as pixels (`load-textures`) or is signed (`lower-textures-rgba8` remaps those),
+//! or the normal map's convention is not X in red along the tangent (a normal map is turned between the sets' frames,
+//! below). A texture wider than 8 bits or floating point is read as 8-bit RGBA, the atlases being 8-bit: rounded, or
+//! clamped to 0-1, and counted with the floating-point texels that lay outside 0-1.
 //!
 //! **A set the texture is constant over.** When every slot sampling set `N` is the emissive one and its texture, read
 //! through the slot's transform and wrap over every texel any triangle's coordinates touch (a bilinear sample reads
@@ -49,10 +51,11 @@
 //! The pass is approximate in what it resamples: bilinear sampling at the atlas' texel density; the neighbouring
 //! texels of a triangle's edge are its own colours, not the neighbour triangle's. It knows no game.
 
+use crate::rgba8::{Conversion, conversion};
+use crate::texture::level_dimensions;
 use crate::uv_resample::wrapped;
 use crate::{
-    Canvas, Image, Samples, Source, UvTriangle, claimed_texels, rebake, rgba8_exact, srgb8_to_linear,
-    texture_level_rgba8,
+    Canvas, Image, Samples, Source, UvTriangle, claimed_texels, rebake, srgb8_to_linear, texture_level_rgba8,
 };
 use iridia_interface::Filters;
 use primase_core::layered::LayeredMaterial;
@@ -64,10 +67,11 @@ use primase_core::{
 };
 use primase_meshops::frames::uv_axes;
 use primase_meshops::subset_primitive;
+use primase_texcodec::{Decoder, TexDecoder};
 use std::collections::BTreeMap;
 
 /// The most groups of non-overlapping triangles a primitive is split into; a primitive needing more is left as it is.
-pub const MAX_GROUPS: usize = 4;
+pub const MAX_GROUPS: usize = 16;
 /// Rounds of padding around the triangles of an atlas.
 pub const PADDING: u32 = 4;
 /// A texture is constant when its texels differ from one another by at most this, in 8-bit channel values.
@@ -125,12 +129,17 @@ struct Meta {
     normal: Option<NormalConvention>,
 }
 
+/// The approximations of reading textures as 8-bit RGBA, each with its count.
+type Loss = Vec<(&'static str, u64)>;
+
 /// A slot of the primitive's material with its pixels.
 struct Slot {
     slot: TextureSlot,
     reference: TextureRef,
     image: Image,
     meta: Meta,
+    /// The approximations reading the texture as 8-bit RGBA made, each with its count.
+    loss: Loss,
 }
 
 /// The value of a texel nothing reached.
@@ -269,6 +278,7 @@ enum Plan {
     Fold {
         material: Entity,
         colour: [u8; 3],
+        loss: Loss,
     },
     Rebase {
         material: Entity,
@@ -277,6 +287,7 @@ enum Plan {
         /// Whether the limit made an atlas smaller than the density asks.
         clamped: bool,
         groups: Vec<GroupPlan>,
+        loss: Loss,
     },
 }
 
@@ -287,14 +298,44 @@ fn refuse(log: &mut PassLog, why: &str, triangles: u64) {
 }
 
 impl RebaseTexcoordSet {
-    fn load(w: &World, r: TextureRef) -> Result<(Image, Meta), &'static str> {
+    fn load(w: &World, r: TextureRef) -> Result<(Image, Meta, Loss), String> {
         let Some(t) = w.get::<Texture>(r.texture) else {
-            return Err("a texture is not loaded as pixels");
+            return Err("a texture is not loaded as pixels".to_owned());
         };
-        if !rgba8_exact(t.format) {
-            return Err("a texture is not exact in 8-bit RGBA");
+        // the atlases are 8-bit, so a wider or floating-point source is read as 8-bit RGBA, each counted
+        let mut loss = Vec::new();
+        match conversion(t.format) {
+            None => {}
+            Some(Conversion::Signed) => return Err(format!("a texture is signed ({:?})", t.format)),
+            Some(Conversion::Rounded) => {
+                loss.push((
+                    "textures with channels wider than 8 bits, read rounded to 8-bit RGBA",
+                    1,
+                ));
+            }
+            Some(Conversion::Clamped) => {
+                let (width, height) =
+                    level_dimensions(t, 0).map_err(|_| "a texture does not decode".to_owned())?;
+                let level = t.levels.first().ok_or("a texture does not decode")?;
+                let values = Decoder::default()
+                    .decode_rgba32f(t.format, width, height, level)
+                    .map_err(|_| "a texture does not decode".to_owned())?;
+                let outside = values
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter(|p| p.iter().any(|v| !(0.0..=1.0).contains(v)))
+                    .count() as u64;
+                loss.push(("floating-point textures read clamped to 0-1 in 8-bit RGBA", 1));
+                if outside > 0 {
+                    loss.push((
+                        "floating-point texels of those textures with a channel outside 0-1, clamped",
+                        outside,
+                    ));
+                }
+            }
         }
-        let image = texture_level_rgba8(t, 0).map_err(|_| "a texture does not decode")?;
+        let image = texture_level_rgba8(t, 0).map_err(|_| "a texture does not decode".to_owned())?;
         Ok((
             image,
             Meta {
@@ -302,6 +343,7 @@ impl RebaseTexcoordSet {
                 role: t.role,
                 normal: t.normal,
             },
+            loss,
         ))
     }
 
@@ -363,14 +405,15 @@ impl RebaseTexcoordSet {
         let mut loaded: Vec<Slot> = Vec::with_capacity(slots.len());
         for (slot, reference) in slots.drain(..) {
             match Self::load(w, reference) {
-                Ok((image, meta)) => loaded.push(Slot {
+                Ok((image, meta, loss)) => loaded.push(Slot {
                     slot,
                     reference,
                     image,
                     meta,
+                    loss,
                 }),
                 Err(why) => {
-                    refuse(log, why, count);
+                    refuse(log, &why, count);
                     return None;
                 }
             }
@@ -388,6 +431,7 @@ impl RebaseTexcoordSet {
             return Some(Plan::Fold {
                 material: m,
                 colour: mean.map(|c| c.round().clamp(0.0, 255.0) as u8),
+                loss: loaded.iter().flat_map(|s| s.loss.iter().copied()).collect(),
             });
         }
         // the window
@@ -558,6 +602,7 @@ impl RebaseTexcoordSet {
             size,
             clamped,
             groups: plans,
+            loss: loaded.iter().flat_map(|s| s.loss.iter().copied()).collect(),
         })
     }
 }
@@ -657,7 +702,12 @@ impl Pass for RebaseTexcoordSet {
             // the last primitive first, so a split does not move the ones still to come
             for (i, plan) in edits.into_iter().rev() {
                 match plan {
-                    Plan::Fold { material, colour } => {
+                    Plan::Fold {
+                        material,
+                        colour,
+                        loss,
+                    } => {
+                        approximations.extend(loss);
                         let copy = match folded.get(&(material, colour)) {
                             Some(&c) => c,
                             None => {
@@ -690,7 +740,9 @@ impl Pass for RebaseTexcoordSet {
                         size,
                         clamped,
                         groups,
+                        loss,
                     } => {
+                        approximations.extend(loss);
                         let whole = primitives[i].clone();
                         let indices = triangles(&whole).ok_or("a planned primitive that is not triangles")?;
                         let mut pieces: Vec<Primitive> = Vec::with_capacity(groups.len());
