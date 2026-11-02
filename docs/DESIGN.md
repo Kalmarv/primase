@@ -137,7 +137,7 @@ tested as a surface in its own crate (the fromsoft `gbuffer_surface` tests, the 
 core/         world, core components (among them what a shader program's values stand for, core::shader), TexFormat,
               frame conversions, pass manager, gates, serialisation (v2)
 toolkit/      texcodec (TexFormat decoders/encoders and gates), dds, image (PNG, JPEG, sRGB, mips), glb, meshops
-              (weld, split, meshopt), animation, lighting, exactsum, havok (Havok data lowered), cache
+              (weld, split), animation, lighting, exactsum, havok (Havok data lowered), cache
 worlds/       one crate per game, engine family or destination: fromsoft, gta, frostbite, anvil, shaunwhite, unity,
               skatebird, peak, monogame, stuntboost, shred, reskate (the skate. map writer, its preparation and
               compile)
@@ -161,8 +161,7 @@ two-way where it makes sense: a `reskate` reader lets a skate. map round-trip or
 trait (`TexDecoder`, `Compressor`, ...), so swapping it is local, and each is held to the same gates as our code.
 Versions are pinned and default features off.
 - **In (by role):** BCn decode `bcdec_rs`, BCn encode `block_compression` (CPU path, default features off, no `wgpu`) or `texpresso`, both pure Rust (`intel_tex_2` is out: its prebuilt C++/ISPC kernels need a native runtime to link and dispatch per CPU), DDS header `ddsfile`, PNG `png`,
-  LZ4 `lz4_flex`, deflate/zlib `flate2`, binary layouts `binrw`, casts `bytemuck`, f16 `half`, mesh optimisation
-  `meshopt`, bindings `pyo3` and `csbindgen`. Oodle is never bundled: on Windows the game's own `oo2core` DLL is loaded at run
+  LZ4 `lz4_flex`, deflate/zlib `flate2`, binary layouts `binrw`, casts `bytemuck`, f16 `half`, bindings `pyo3` and `csbindgen`. Oodle is never bundled: on Windows the game's own `oo2core` DLL is loaded at run
   time from the install the user points at; off Windows (no game library to load) `oozextract` is the decoder, a
   target-specific dependency of `primase-foundations` that refuses by name what it cannot decode, and the gates hold
   it equal to the DLL on Windows. ETC/ASTC via
