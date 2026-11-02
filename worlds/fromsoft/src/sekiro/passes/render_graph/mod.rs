@@ -8,11 +8,14 @@ use primase_core::render_graph::{
 use primase_core::shader::{
     BufferSource, ConstantRole, InputRole, ScreenTriangleValue, Shader, TextureSource,
 };
+mod producers;
 mod sun;
 
 use crate::sekiro::{PreparedLighting, source::ReadScope};
 use primase_core::Resource;
 use primase_core::pass::{Pass, PassLog, PassSpec};
+use producers::Producers;
+use std::collections::BTreeSet;
 
 /// Choose the supported lighting subgraph and supply its explicitly reported approximations.
 /// The reader's full recorded graph and unknown inputs are retained until this pass is selected.
@@ -37,7 +40,7 @@ impl Pass for LowerFromSoftRenderGraph {
         &[RenderGraph::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "supported lighting stages; conservative light lists; reconstructed screen triangle; finite directional stand-ins; assumed geometry stencil; unexecuted native shadow and ambient stages named per pipeline"
+        "supported lighting stages; conservative light lists; reconstructed screen triangle; finite directional stand-ins; assumed geometry stencil; the recorded steps they depend on that are not executed, named and counted"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         if let Some(prepared) = world.resource::<PreparedLighting>() {
@@ -69,60 +72,84 @@ impl Pass for LowerFromSoftRenderGraph {
     }
 }
 
+/// The recorded steps the consumer executes, by the source's name, and whether a lighting graph must have it.
+const SELECTED: &[(&str, bool)] = &[
+    (LOCAL_SHADOW_CASTERS, false),
+    ("GXLightAcc_DDirLightShadowed1", false),
+    ("GXRend_TileBasedLighting", true),
+    ("GXLightAcc_DPointLightShadowed1", false),
+    ("GXLightCmbAlbedo", true),
+    ("GXLightComposite", true),
+];
+
+/// The step the reader states for the local lights' shadow casters, where the graph has their atlas.
+const LOCAL_SHADOW_CASTERS: &str = "local light shadow casters";
+
+/// The recorded steps the selected lighting depends on, directly or through what they read, that are not executed.
+pub const UNEXECUTED: &str = "recorded lighting steps not executed";
+
+/// Trace what the pipeline's steps read back to the recorded steps that last drew it ([`Producers`]): select the clears
+/// and import the ports it needs, and state the recorded steps it does not execute, in place of an earlier account.
+/// Every pass that changes the pipeline's steps accounts for them again.
+pub(crate) fn account(
+    graph: &RenderGraph,
+    pipeline: &mut LightingPipeline,
+    log: &mut PassLog,
+) -> Result<(), String> {
+    let selected: BTreeSet<u32> = pipeline.passes.iter().copied().collect();
+    let atlas = graph.local_shadow_atlas.as_ref().map(|a| a.target);
+    let producers = Producers::trace(graph, &selected, atlas)?;
+    pipeline.passes.extend(&producers.clears);
+    pipeline.passes.sort_unstable();
+    pipeline.passes.dedup();
+    for (port, view, _) in &producers.ports {
+        if !pipeline.imports.iter().any(|(_, v)| v == view) {
+            pipeline.imports.push((*port, *view));
+        }
+    }
+    pipeline.notices.retain(|n| !producers::is_notice(n));
+    pipeline.notices.extend(producers.notices());
+    for (name, n) in &producers.unexecuted {
+        log.omit(&format!("{UNEXECUTED}: {name}"), *n);
+    }
+    Ok(())
+}
+
 fn describe(
     game: Game,
     graph: &mut RenderGraph,
     world: &World,
     log: &mut primase_core::pass::PassLog,
 ) -> Result<LightingPipeline, String> {
-    let selected_names: &[&str] = if game == Game::EldenRing {
-        &[
-            "local light shadow casters",
-            "GXLightAcc_DDirLightShadowed1",
-            "GXRend_TileBasedLighting",
-            "GXLightAcc_DPointLightShadowed1",
-            "GXLightCmbAlbedo",
-            "GXLightComposite",
-        ]
-    } else {
-        &["GXRend_TileBasedLighting", "GXLightCmbAlbedo", "GXLightComposite"]
-    };
-    let mut passes = Vec::new();
-    for &name in selected_names {
-        let index = graph
-            .passes
-            .iter()
-            .position(|p| p.name == name)
-            .ok_or_else(|| format!("lighting graph has no {name}"))?;
-        passes.push(index as u32);
-    }
-    // the targets the selected steps draw: their clears before the last of them are selected with them
-    let mut output_views = Vec::new();
-    for index in &passes {
-        match &graph.passes[*index as usize].work {
-            PassWork::Screen { outputs, .. } => {
-                output_views.extend(outputs.colour.iter().map(|(_, view)| *view))
+    // the recorded steps the consumer executes, those the graph has
+    let mut selected = BTreeSet::new();
+    for &(name, required) in SELECTED {
+        match graph.passes.iter().position(|p| p.name == name) {
+            Some(index) => {
+                selected.insert(index as u32);
             }
-            PassWork::Scene {
-                bucket: DrawBucket::ShadowCaster,
-                outputs,
-                ..
-            } => output_views.extend(outputs.depth.iter().map(|d| d.view)),
-            _ => return Err("lighting stage is neither a screen draw nor a shadow caster step".into()),
+            None if required => return Err(format!("lighting graph has no {name}")),
+            None => {}
         }
     }
+    for index in &selected {
+        let pass = &graph.passes[*index as usize];
+        if !matches!(
+            pass.work,
+            PassWork::Screen { .. }
+                | PassWork::Scene {
+                    bucket: DrawBucket::ShadowCaster,
+                    ..
+                }
+        ) {
+            return Err(format!(
+                "lighting stage {} is neither a screen draw nor a shadow caster step",
+                pass.name
+            ));
+        }
+    }
+    let passes: Vec<u32> = selected.iter().copied().collect();
     let atlas = graph.local_shadow_atlas.as_ref().map(|a| a.target);
-    let last = *passes.last().ok_or("no lighting stage")? as usize;
-    for (index, pass) in graph.passes.iter().enumerate() {
-        if let PassWork::Clear { target, .. } = &pass.work
-            && output_views.contains(target)
-            && index < last
-        {
-            passes.push(index as u32);
-        }
-    }
-    passes.sort_unstable();
-    passes.dedup();
     let mut imports = Vec::new();
     let mut scene_depth = None;
     for pass in &graph.passes {
@@ -141,6 +168,7 @@ fn describe(
     }
     let scene_depth = scene_depth.ok_or("lighting has no G-buffer scene depth")?;
     imports.push((LightingPort::SceneDepth, scene_depth));
+    let mut sun_notice = None;
     let mut buffers = Vec::new();
     let mut diffuse = None;
     let mut specular = None;
@@ -173,12 +201,10 @@ fn describe(
             let shader = world
                 .get::<Shader>(stage.shader)
                 .ok_or("lighting program absent")?;
-            if game == Game::EldenRing
-                && pass.name == "GXLightAcc_DDirLightShadowed1"
-                && stage.stage == Stage::Pixel
-            {
-                let added = sun::bind(stage, shader)?;
+            if pass.name == "GXLightAcc_DDirLightShadowed1" && stage.stage == Stage::Pixel {
+                let (added, zero) = sun::bind(stage, shader)?;
                 log.count("directional constant roles supplied", added as u64);
+                sun_notice = Some(zero);
             }
             if stage.stage == Stage::Vertex {
                 // The native GXLightAcc vertex program copies POSITION.xy/w to clip position and TEXCOORD.xy to
@@ -241,26 +267,10 @@ fn describe(
                     // the local lights' shadow atlas: drawn by the selected caster step
                     continue;
                 }
-                if graph.targets[view.target as usize].format.is_depth() {
-                    if !imports.iter().any(|(_, v)| *v == view) {
-                        imports.push((LightingPort::SceneDepth, view));
-                    }
-                } else if let Some(register) = shader
-                    .interface
-                    .resource(texture.resource)
-                    .and_then(|r| r.provenance.d3d)
-                    .map(|d| d.register)
+                if graph.targets[view.target as usize].format.is_depth()
+                    && !imports.iter().any(|(_, v)| *v == view)
                 {
-                    let port = match (game, register) {
-                        (Game::EldenRing, 32) => Some(LightingPort::ScreenSpaceShadows),
-                        (Game::Sekiro, 33) => Some(LightingPort::AmbientOcclusion),
-                        _ => None,
-                    };
-                    if let Some(port) = port
-                        && !imports.iter().any(|(_, v)| *v == view)
-                    {
-                        imports.push((port, view));
-                    }
+                    imports.push((LightingPort::SceneDepth, view));
                 }
             }
             for binding in &stage.buffers {
@@ -282,18 +292,24 @@ fn describe(
             }
         }
     }
-    let mut notices = vec!["light lists conservatively include every light in every tile and depth slice; native culling is not reproduced".into(),
-        "native environment, ambient occlusion and shadow producer stages remain unexecuted".into(),
+    let mut notices: Vec<String> = vec!["light lists conservatively include every light in every tile and depth slice; native culling is not reproduced".into(),
         "full-screen vertex inputs are reconstructed from the native lighting vertex program's clip-position and UV reads, not captured vertex-buffer bytes".into()];
-    if game == Game::EldenRing {
+    if selected
+        .iter()
+        .any(|i| graph.passes[*i as usize].name == LOCAL_SHADOW_CASTERS)
+    {
         notices.push("local lights' shadows: the consumer chooses which shadow-casting lights to shadow and draws their faces' casters into the atlas; the lights it does not shadow are lit by the tile pass without one, and the packing names each".into());
-        notices.push(sun::NOTICE.into());
-        notices.push("sun shadows: one generic cascade fitted to the view, all opaque geometry casts; native casters and cascade splits not traced".into());
     } else {
         notices.push("local lights that cast shadows are lit by the tile pass without them: no local-light shadow atlas or shadowed per-light pass is selected, so every light packs unshadowed (LightType 0) and the packing names each shadow-casting one".into());
-        notices.push("native directional lighting is not yet selected for this source".into());
     }
-    let pipeline = LightingPipeline {
+    match sun_notice {
+        Some(zero) => {
+            notices.push(sun::NOTICE.into());
+            notices.push(zero);
+        }
+        None => notices.push("the recorded graph has no directional lighting step: no sun light".into()),
+    }
+    let mut pipeline = LightingPipeline {
         frame: None,
         imports,
         buffers,
@@ -313,6 +329,7 @@ fn describe(
                 .into(),
         }),
     };
+    account(graph, &mut pipeline, log)?;
     pipeline.check(graph)?;
     Ok(pipeline)
 }

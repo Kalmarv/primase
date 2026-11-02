@@ -639,12 +639,84 @@ fn lighting_boundary(graph: &RenderGraph, game: FsGame) {
             matches!(pass.work, PassWork::Screen { .. }).then_some(pass.name.as_str())
         })
         .collect();
-    let mut expected = vec!["GXRend_TileBasedLighting", "GXLightCmbAlbedo", "GXLightComposite"];
+    let mut expected = vec![
+        "GXLightAcc_DDirLightShadowed1",
+        "GXRend_TileBasedLighting",
+        "GXLightCmbAlbedo",
+        "GXLightComposite",
+    ];
+    // the shadow mask the sun reads (and Elden Ring's tiled pass), and Sekiro's tiled pass's ambient occlusion, are
+    // imported by the recorded step that draws them
+    let mut ports = vec![LightingPort::ScreenSpaceShadows];
+    if game == FsGame::Sekiro {
+        ports.push(LightingPort::AmbientOcclusion);
+    }
+    let imported: Vec<_> = pipeline
+        .imports
+        .iter()
+        .map(|(port, _)| *port)
+        .filter(|port| {
+            matches!(
+                port,
+                LightingPort::ScreenSpaceShadows | LightingPort::AmbientOcclusion
+            )
+        })
+        .collect();
+    assert_eq!(imported, ports);
+    // every recorded step the lighting reads from that it does not execute is named
+    let unexecuted = pipeline
+        .notices
+        .iter()
+        .find(|n| n.starts_with(sekiro::passes::render_graph::UNEXECUTED))
+        .expect("the unexecuted steps are named");
+    for step in [
+        "GXLightDeferredAOWithSsr",
+        "GXEnvMapRegion[Stencil]",
+        "GXSssBlurX",
+        "GXSssBlurY",
+        "GXRend_CompositeShadowMask",
+        "GXScreenSpaceCascadedShadow_PCF9",
+        "GXRend_CopyShadowMapDepth",
+        "ScreenSpaceAO2_BilateralUpScale",
+        "GXSsrTexBlur2",
+    ] {
+        assert!(unexecuted.contains(step), "{step} is not named: {unexecuted}");
+    }
+    // and no recorded step among the selected ones is left out silently: each the pipeline does not run is named
+    let screens: Vec<u32> = pipeline
+        .passes
+        .iter()
+        .copied()
+        .filter(|i| matches!(graph.passes[*i as usize].work, PassWork::Screen { .. }))
+        .collect();
+    let (first, last) = (screens[0], *screens.last().unwrap());
+    for index in first..last {
+        let pass = &graph.passes[index as usize];
+        if pipeline.passes.contains(&index)
+            || matches!(pass.work, PassWork::Clear { .. } | PassWork::Scene { .. })
+        {
+            continue;
+        }
+        assert!(
+            pipeline.notices.iter().any(|n| n.contains(&pass.name)),
+            "recorded step {index} {} is neither executed nor named",
+            pass.name
+        );
+    }
+    let organize = if game == FsGame::Sekiro {
+        "GXLightOrganize16"
+    } else {
+        "GXLightOrganize8"
+    };
+    assert!(
+        pipeline
+            .notices
+            .iter()
+            .any(|n| n == &format!("the consumer's light lists replace what the recorded {organize} write"))
+    );
     if game == FsGame::EldenRing {
-        expected.insert(0, "GXLightAcc_DDirLightShadowed1");
         // the shadowed point lights, one run each, after the tiled pass that leaves them out
         expected.insert(2, "GXLightAcc_DPointLightShadowed1");
-        assert!(pipeline.notices.iter().any(|notice| notice == "sun shadows: one generic cascade fitted to the view, all opaque geometry casts; native casters and cascade splits not traced"));
         // and their casters, one run per face, into the atlas the graph states
         use primase_core::render_graph::{Items, Runs};
         let atlas = graph
@@ -768,12 +840,15 @@ fn sun_camera_inputs(graph: &RenderGraph, world: &World) {
     );
 }
 
-/// Execute the installed ER directional program with both light-set selectors.
-/// The disabled secondary must remain finite even when the primary is off too.
-fn sun_outputs_are_finite(graph: &RenderGraph, world: &World) {
+/// Execute the installed directional program with both light-set selectors (the `w` of the G-buffer at `t4` in Elden
+/// Ring, `t5` in Sekiro). The disabled secondary must remain finite even when the primary is off too.
+fn sun_outputs_are_finite(graph: &RenderGraph, world: &World, game: FsGame) {
     use iridia_exec::{Layout, Load, PixelShader, ProgramShader, Sample, Sampler};
     use primase_core::shader::FrameParameter;
-    struct GBuffer(u32);
+    struct GBuffer {
+        selector: u32,
+        register: u32,
+    }
     impl Sampler for GBuffer {
         fn sample(&mut self, request: Sample) -> Result<[f32; 4], String> {
             assert_eq!(request.texture, 32);
@@ -781,15 +856,16 @@ fn sun_outputs_are_finite(graph: &RenderGraph, world: &World) {
         }
         fn load(&mut self, request: Load) -> Result<[u32; 4], String> {
             let value: [f32; 4] = match request.texture {
+                t if t == self.register => [0.4, 0.5, 0.6, self.selector as f32 / 255.],
                 0 => [0.5, 1., 0.5, 0.],
                 1 => [0.5, 0., 0., 0.],
                 3 => [0., 0.5, 0., 1.],
-                4 => [0.4, 0.5, 0.6, self.0 as f32 / 255.],
                 other => return Err(format!("unexpected native sun texture t{other}")),
             };
             Ok(value.map(f32::to_bits))
         }
     }
+    let register = if game == FsGame::Sekiro { 5 } else { 4 };
     let index = graph
         .lighting
         .as_ref()
@@ -830,7 +906,11 @@ fn sun_outputs_are_finite(graph: &RenderGraph, world: &World) {
         .find(|s| s.stage == iridia_interface::Stage::Pixel)
         .unwrap();
     let stored = world.get::<Shader>(stage.shader).unwrap();
-    let shader = ProgramShader::new(iridia_dxil::lift(&stored.bytecode).unwrap()).unwrap();
+    let lifted = match stored.format {
+        iridia_interface::ShaderFormat::Dxbc => iridia_dxbc::lift(&stored.bytecode),
+        _ => iridia_dxil::lift(&stored.bytecode),
+    };
+    let shader = ProgramShader::new(lifted.unwrap()).unwrap();
     let layout = Layout::of(&shader).unwrap();
     for active in [false, true] {
         let mut constants = iridia_exec::evaluate::Constants::new(&layout);
@@ -876,7 +956,9 @@ fn sun_outputs_are_finite(graph: &RenderGraph, world: &World) {
         inputs[0] = [0.5f32, 0.5, 0., 1.].map(f32::to_bits);
         inputs[1] = [0.5f32, 0.5, 0., 0.].map(f32::to_bits);
         for selector in [0, 1] {
-            let result = shader.execute(&inputs, &buffers, &mut GBuffer(selector)).unwrap();
+            let result = shader
+                .execute(&inputs, &buffers, &mut GBuffer { selector, register })
+                .unwrap();
             for output in &result.outputs[..2] {
                 assert!(
                     output.iter().all(|v| f32::from_bits(*v).is_finite()),
@@ -926,6 +1008,7 @@ fn sekiros_render_graph_is_its_recorded_frames() -> Result<(), Box<dyn std::erro
     let graph = world.resource::<RenderGraph>().unwrap();
     sun_camera_inputs(graph, &world);
     lighting_boundary(graph, FsGame::Sekiro);
+    sun_outputs_are_finite(graph, &world, FsGame::Sekiro);
     // nine frames of four sessions at 1920 x 1080; the picture the last tone map's RGB10A2 target
     assert_eq!(
         (report.render_graph.frames, report.render_graph.view),
@@ -1198,7 +1281,7 @@ fn the_reader_keeps_the_native_graph_without_lighting_choices() -> Result<(), Bo
     let run = common::run(&mut world, "lower-fromsoft-render-graph")?;
     let graph = world.resource::<RenderGraph>().unwrap();
     lighting_boundary(graph, FsGame::EldenRing);
-    sun_outputs_are_finite(graph, &world);
+    sun_outputs_are_finite(graph, &world, FsGame::EldenRing);
     assert!(world.resource::<sekiro::PreparedLighting>().is_some());
     assert!(
         run.steps[0]
@@ -1249,7 +1332,7 @@ fn elden_rings_render_graph_is_its_recorded_frames() -> Result<(), Box<dyn std::
         primase_core::render_graph::TargetFormat::Rgb10A2Unorm
     );
     // No captured vertex bytes are asserted: only the selected native lighting VS reads have a labelled reconstruction.
-    sun_outputs_are_finite(graph, &world);
+    sun_outputs_are_finite(graph, &world, FsGame::EldenRing);
     // the selected lighting steps that draw a full-screen triangle through GXLightAcc.vpo, each its POSITION and
     // TEXCOORD0: er3 frame 6993 records five such draws in this order (seq 1958, 1963, 1965, 1967, 1975), each with that
     // input layout, the shadowed point light's at seq 1965 (pso 9112, ps 9db1aa8c894a6a8e)

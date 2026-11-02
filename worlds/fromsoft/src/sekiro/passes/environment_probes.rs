@@ -355,9 +355,9 @@ impl Pass for BindFromSoftEnvironmentProbes {
         use primase_core::shader::NormalEncoding;
         let mut render = world.resource::<RenderGraph>().ok_or("no source graph")?.clone();
         let index = graph::select(&mut render, world)?.ok_or("no core environment probe regions")?;
-        let pipeline = render
+        let mut pipeline = render
             .lighting
-            .as_mut()
+            .take()
             .ok_or("base lighting pipeline has not been prepared")?;
         pipeline.passes.push(index);
         pipeline.passes.sort_unstable();
@@ -376,18 +376,15 @@ impl Pass for BindFromSoftEnvironmentProbes {
                 },
             )],
         });
-        for notice in &mut pipeline.notices {
-            if notice == "native environment, ambient occlusion and shadow producer stages remain unexecuted"
-            {
-                *notice = "native ambient occlusion and shadow producer stages remain unexecuted".into();
-            }
-        }
+        // the region step reads and draws over what the recorded graph drew before it
+        super::render_graph::account(&render, &mut pipeline, log)?;
         for notice in [graph::DIRECT, graph::LUMINANCE, graph::MASKS] {
             if !pipeline.notices.iter().any(|n| n == notice) {
                 pipeline.notices.push(notice.into());
             }
             log.approximate(notice, 1);
         }
+        render.lighting = Some(pipeline);
         render.check()?;
         world.insert_resource(render);
         log.count(
