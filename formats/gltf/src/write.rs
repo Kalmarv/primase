@@ -60,6 +60,14 @@
 //!   light's own; its highlights' are not written, counted (`lights_specular_unwritten`).
 //! - **Unlit materials** (`Shading::Unlit`) carry `KHR_materials_unlit` (in `extensionsUsed`, not required), their
 //!   other slots written as glTF's fallback for a viewer without it.
+//! - **Water** (`core.water_body`): what passes the surface as `KHR_materials_transmission` (factor 1), the extinction
+//!   as `KHR_materials_volume`'s attenuation (`attenuationColor` the light left after `attenuationDistance` 1 m,
+//!   `exp(-extinction)`) and the ior as `KHR_materials_ior`, the surface opaque (glTF's transmission draws what is
+//!   behind) and its base colour white (glTF tints what passes by it: the water's colour is its volume's). Where
+//!   `pbr.material` has no normal texture the first wave is written as it, at its strength. What glTF has no form for is
+//!   counted per material by name (`water_unwritten`): the volume's thickness (a surface's water has the depth of what
+//!   is behind it, which a mesh's thickness does not state: viewers draw it thin-walled), the scatter, the waves'
+//!   motion and the waves past the normal texture, the shore fade, and the base colour and alpha mode set aside.
 //! - **Samplers**: a texture's wrap and its stated filters (`magFilter`; `minFilter` from the minification and mip
 //!   filters together). A data texture with no filter stated is sampled nearest without mips (it is read exactly).
 //!   glTF's `minFilter` names both filters at once: a texture stating only one of the two has no `minFilter`
@@ -102,7 +110,7 @@ use primase_core::{
     Texture, TextureFile, Tile, Topology, Transform, TransformKind, World,
 };
 use primase_core::{
-    pbr::AlphaMode, pbr::PbrMaterial, pbr::Shading, pbr::TextureRef, pbr::UvTransform, pbr::Wrap,
+    WaterBody, pbr::AlphaMode, pbr::PbrMaterial, pbr::Shading, pbr::TextureRef, pbr::UvTransform, pbr::Wrap,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -236,6 +244,11 @@ pub struct WriteReport {
     pub clips_looping: u64,
     /// `core.environment`'s ambient, 1 when the world has one: glTF has no ambient light, so nothing is lit by it.
     pub ambient_unlit: u64,
+    /// Materials with `core.water_body` written as transmission, volume and ior.
+    pub water_bodies: u64,
+    /// What those water bodies state that glTF has no form for, by what it is (see the module docs), counted per
+    /// material.
+    pub water_unwritten: BTreeMap<String, u64>,
     /// Materials whose base colour has a channel past 1, which glTF's `baseColorFactor` (0-1) cannot hold: written
     /// with those channels at 1, by `"<material name>: <base colour>"`.
     pub base_colours_past_one: BTreeMap<String, u64>,
@@ -390,6 +403,11 @@ impl fmt::Display for WriteReport {
         writeln!(f, "ambient not lit (no glTF form) {}", self.ambient_unlit)?;
         writeln!(
             f,
+            "water bodies {}: unwritten {:?}",
+            self.water_bodies, self.water_unwritten
+        )?;
+        writeln!(
+            f,
             "base colours past 1, written at 1 (glTF's factor is 0-1) {:?}",
             self.base_colours_past_one
         )?;
@@ -406,6 +424,18 @@ const TEXTURE_TRANSFORM: &str = "KHR_texture_transform";
 const EMISSIVE_STRENGTH: &str = "KHR_materials_emissive_strength";
 const SPECULAR: &str = "KHR_materials_specular";
 const UNLIT: &str = "KHR_materials_unlit";
+const TRANSMISSION: &str = "KHR_materials_transmission";
+const VOLUME: &str = "KHR_materials_volume";
+const IOR: &str = "KHR_materials_ior";
+/// What a water body states that glTF has no form for ([`WriteReport::water_unwritten`]).
+pub const WATER_THICKNESS: &str =
+    "water depth behind the surface (KHR_materials_volume thickness 0: drawn thin-walled)";
+pub const WATER_SCATTER: &str = "water scatter (no glTF form)";
+pub const WATER_MOTION: &str = "wave motion (no glTF form)";
+pub const WATER_WAVES: &str = "wave layers past the normal texture";
+pub const WATER_SHORE: &str = "shore fade (glTF's transmission is drawn opaque)";
+pub const WATER_BASE_COLOUR: &str = "base colour of a water material (glTF tints what passes by it)";
+pub const WATER_ALPHA: &str = "alpha mode of a water material (glTF's transmission is drawn opaque)";
 /// The extension lights are written as.
 const LIGHTS: &str = "KHR_lights_punctual";
 /// The components the glTF object made from an entity expresses, per kind of object: every other one is without a
@@ -427,7 +457,13 @@ const EXPRESSED_PROTOTYPE: &[&str] = &[
     Morphs::NAME,
 ];
 // a material's `core.vertex_color` is expressed by its primitives' COLOR_0: written where it takes it, not where not
-const EXPRESSED_MATERIAL: &[&str] = &[Name::NAME, PbrMaterial::NAME, primase_core::VertexColor::NAME];
+// a material's `core.water_body` is expressed by its transmission, volume and ior, what has no form counted
+const EXPRESSED_MATERIAL: &[&str] = &[
+    Name::NAME,
+    PbrMaterial::NAME,
+    primase_core::VertexColor::NAME,
+    WaterBody::NAME,
+];
 const EXPRESSED_TEXTURE: &[&str] = &[Name::NAME, TextureFile::NAME, Texture::NAME];
 
 /// Write the world as GLB bytes.
@@ -516,6 +552,7 @@ fn write_glb(
         emissive_strength_used: false,
         specular_used: false,
         unlit_used: false,
+        water_used: false,
         handled: BTreeSet::new(),
         left_out: Vec::new(),
         expressed: BTreeMap::new(),
@@ -709,6 +746,8 @@ struct Writer<'w> {
     emissive_strength_used: bool,
     specular_used: bool,
     unlit_used: bool,
+    /// A written material is water: transmission, volume and ior are used ([`TRANSMISSION`], [`VOLUME`], [`IOR`]).
+    water_used: bool,
     /// Entities whose components are written, or counted in the report as not written.
     handled: BTreeSet<Entity>,
     /// Entities left out whole under a counted cause, with what they reach.
@@ -890,6 +929,9 @@ impl Writer<'_> {
         }
         if self.unlit_used {
             used.push(UNLIT);
+        }
+        if self.water_used {
+            used.extend([TRANSMISSION, VOLUME, IOR]);
         }
         if !lights.is_empty() {
             used.push(LIGHTS);
@@ -1320,11 +1362,17 @@ impl Writer<'_> {
             self.material_index.insert(e, None);
             return Ok(None);
         };
+        let water = self.world.get::<WaterBody>(e).cloned();
         let mut m = Map::new();
         let name = self.name_of(e, "material");
         m.insert("name".into(), Value::String(name.clone()));
         let mut pmr = Map::new();
-        if pbr.base_color != [1.0; 4] {
+        if water.is_some() {
+            // glTF tints what passes by the base colour: the water's colour is its volume's
+            if pbr.base_color != [1.0; 4] || pbr.base_color_texture.is_some() {
+                self.water_unwritten(WATER_BASE_COLOUR);
+            }
+        } else if pbr.base_color != [1.0; 4] {
             let mut factor = pbr.base_color;
             if factor.iter().any(|&c| c > 1.0) {
                 // glTF's factor is 0-1: written at 1, said with the material and the colour it holds
@@ -1337,7 +1385,9 @@ impl Writer<'_> {
             }
             pmr.insert("baseColorFactor".into(), self.factors(e, &factor)?);
         }
-        if let Some(t) = self.texture_info(pbr.base_color_texture, &mut sets)? {
+        if water.is_none()
+            && let Some(t) = self.texture_info(pbr.base_color_texture, &mut sets)?
+        {
             pmr.insert("baseColorTexture".into(), t);
         }
         if pbr.metallic != 1.0 {
@@ -1358,9 +1408,15 @@ impl Writer<'_> {
         if !pmr.is_empty() {
             m.insert("pbrMetallicRoughness".into(), Value::Object(pmr));
         }
-        if let Some(Value::Object(mut t)) = self.texture_info(pbr.normal_texture, &mut sets)? {
-            if pbr.normal_scale != 1.0 {
-                t.insert("scale".into(), self.factors(e, &[pbr.normal_scale])?[0].clone());
+        // a water material without a normal texture of its own is drawn with its first wave
+        let first_wave = water.as_ref().and_then(|w| w.waves.first());
+        let (normal, normal_scale) = match (pbr.normal_texture, first_wave) {
+            (None, Some(wave)) => (Some(wave.normal), wave.strength),
+            _ => (pbr.normal_texture, pbr.normal_scale),
+        };
+        if let Some(Value::Object(mut t)) = self.texture_info(normal, &mut sets)? {
+            if normal_scale != 1.0 {
+                t.insert("scale".into(), self.factors(e, &[normal_scale])?[0].clone());
             }
             m.insert("normalTexture".into(), Value::Object(t));
         }
@@ -1407,10 +1463,21 @@ impl Writer<'_> {
             extensions.insert(UNLIT.into(), json!({}));
             self.unlit_used = true;
         }
+        if let Some(w) = &water {
+            self.water(e, w, pbr.normal_texture.is_some(), &mut extensions)?;
+        }
         if !extensions.is_empty() {
             m.insert("extensions".into(), Value::Object(extensions));
         }
-        match pbr.alpha_mode {
+        let alpha_mode = if water.is_some() {
+            if pbr.alpha_mode != AlphaMode::Opaque {
+                self.water_unwritten(WATER_ALPHA);
+            }
+            AlphaMode::Opaque
+        } else {
+            pbr.alpha_mode
+        };
+        match alpha_mode {
             AlphaMode::Opaque => {}
             AlphaMode::Mask { cutoff } => {
                 m.insert("alphaMode".into(), json!("MASK"));
@@ -1431,6 +1498,47 @@ impl Writer<'_> {
         let i = self.materials.len() - 1;
         self.material_index.insert(e, Some((i, sets.clone())));
         Ok(Some((i, sets)))
+    }
+
+    /// A water body's transmission, volume and ior into `extensions`, what glTF has no form for counted. `normal`: the
+    /// material has a normal texture of its own (else its first wave is written as it).
+    fn water(
+        &mut self,
+        e: Entity,
+        w: &WaterBody,
+        normal: bool,
+        extensions: &mut Map<String, Value>,
+    ) -> Result<()> {
+        extensions.insert(TRANSMISSION.into(), json!({ "transmissionFactor": 1.0 }));
+        let attenuation = w.extinction.map(|s| (-s).exp());
+        extensions.insert(
+            VOLUME.into(),
+            json!({ "attenuationColor": self.factors(e, &attenuation)?, "attenuationDistance": 1.0 }),
+        );
+        extensions.insert(
+            IOR.into(),
+            json!({ "ior": self.factors(e, &[w.ior])?[0].clone() }),
+        );
+        self.water_used = true;
+        self.report.water_bodies += 1;
+        self.water_unwritten(WATER_THICKNESS);
+        if w.scatter != [0.0; 3] {
+            self.water_unwritten(WATER_SCATTER);
+        }
+        if w.waves.iter().any(|wave| wave.velocity != [0.0; 2]) {
+            self.water_unwritten(WATER_MOTION);
+        }
+        if w.waves.len() > usize::from(!normal) {
+            self.water_unwritten(WATER_WAVES);
+        }
+        if w.shore_fade > 0.0 {
+            self.water_unwritten(WATER_SHORE);
+        }
+        Ok(())
+    }
+
+    fn water_unwritten(&mut self, what: &str) {
+        *self.report.water_unwritten.entry(what.to_owned()).or_default() += 1;
     }
 
     /// A light as `KHR_lights_punctual` writes it, named.
