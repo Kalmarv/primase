@@ -1154,6 +1154,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-blender"
+version = "0.1.0"
+dependencies = [
+ "iridia-interface",
+ "primase-core",
+ "primase-gltf",
+ "primase-image",
+ "primase-testdata",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-cache"
 version = "0.1.0"
 dependencies = [
@@ -1586,7 +1601,7 @@ dependencies = [
 [[package]]
 name = "primase-testdata"
 version = "0.1.7"
-source = "git+https://github.com/Kalmarv/primase-testdata?rev=58da6ba4850893424278d1331ae669c4e75b4f6e#58da6ba4850893424278d1331ae669c4e75b4f6e"
+source = "git+https://github.com/Kalmarv/primase-testdata?rev=f8d3b75c39e8b5946a78654c084335aeb78756c2#f8d3b75c39e8b5946a78654c084335aeb78756c2"
 dependencies = [
  "blake3",
  "serde_json",

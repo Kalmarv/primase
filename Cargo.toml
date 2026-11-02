@@ -29,6 +29,7 @@ members = [
     "worlds/shaunwhite",
     "worlds/trackmania",
     "worlds/forzatech",
+    "worlds/blender",
 ]
 
 [workspace.package]
@@ -56,7 +57,7 @@ ruzstd = { version = "=0.7.3", default-features = false, features = ["std", "has
 libloading = { version = "=0.9.0", default-features = false, features = ["std"] }
 oozextract = { version = "=0.5.7", default-features = false, features = ["verbose_errors"] }
 primase-core = { path = "core" }
-primase-testdata = { git = "https://github.com/Kalmarv/primase-testdata", rev = "58da6ba4850893424278d1331ae669c4e75b4f6e" }
+primase-testdata = { git = "https://github.com/Kalmarv/primase-testdata", rev = "f8d3b75c39e8b5946a78654c084335aeb78756c2" }
 primase-texcodec = { path = "toolkit/texcodec" }
 primase-dds = { path = "toolkit/dds" }
 primase-image = { path = "toolkit/image" }
@@ -88,6 +89,7 @@ iridia-mojo = { git = "https://github.com/Kalmarv/iridia", rev = "bf29905ec1d75d
 primase-frostbite = { path = "worlds/frostbite" }
 primase-gltf = { path = "formats/gltf" }
 primase-reskate = { path = "worlds/reskate" }
+primase-blender = { path = "worlds/blender" }
 primase-unity = { path = "worlds/unity" }
 primase-skatebird = { path = "worlds/skatebird" }
 primase-peak = { path = "worlds/peak" }
