@@ -21,7 +21,10 @@
 //!
 //! - two depth-writing surfaces closer than the depth buffer can tell apart fight ([`Check::DepthWriting`]): they need
 //!   a clearance ([`Limits::clearance`]); two copies of the very same triangles draw one of them cleanly (which one is
-//!   the build's draw order) and are counted apart ([`Check::Duplicate`]);
+//!   the build's draw order) and are counted apart ([`Check::Duplicate`]). A source that lays two opaque surfaces
+//!   coplanar leaves that fight in the build: Forza Horizon 6's data holds nothing that separates such a pair (its
+//!   roof caps, facades and kits are in one draw bucket, flags `0x19` and order 0, and its files carry no depth bias or
+//!   comparison), so the lowering reports these and does not move them;
 //! - a decal-class layer shows over its base when it lies on it or slightly above it; it hides where a depth-writing
 //!   surface lies in front of it by more than the bias ([`Check::Behind`] near it, [`Check::Covered`] further), and it
 //!   shows *through* such a surface where the surface is within the bias: the leak ([`Check::Covered`]). One with no
