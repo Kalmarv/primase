@@ -39,6 +39,8 @@ const RENDER_GRAPH: &str = "lower-fromsoft-render-graph";
 const SKY_PASS: &str = "lower-fromsoft-sky";
 /// The release of the read's stored models and texture files ([`AreaPreparation::release_sources`]).
 const RELEASE_SOURCES: &str = "release-fromsoft-sources";
+/// The water bodies measured from each material's resolved program ([`super::passes::water`]).
+const WATER: &str = "derive-fromsoft-water";
 /// The pass that keeps the form of a part a read was asked for: the first of a character's preparation.
 const REQUESTED_FORM: &str = "select-fromsoft-requested-form";
 
@@ -96,7 +98,7 @@ pub struct IrradiancePackage {
 /// The order: the render graph (with the environment probes, where the read took them), the map's collision and the
 /// objects' collision, Sekiro's distant backdrop dropped, the rigid skinning, the geometry, the level of detail, the
 /// environment (after the draw-param sample, where there is one), the game's tone mapping, the shader resolution, the
-/// layer bake (Sekiro, where the program bakes), the materials, the release of the read's stored models and texture
+/// water bodies measured from the resolved programs, the layer bake (Sekiro, where the program bakes), the materials, the release of the read's stored models and texture
 /// files (where the program releases them), the materials' surface bake, the lights, the sky (where the read brought it
 /// in), the extras, the map records; then the irradiance, the effects and the entities' names. The
 /// environment states the hour of the day (`core.time_of_day`) and runs before the first bake: a bake gives a program
@@ -191,6 +193,8 @@ impl AreaPreparation {
             .to_owned(),
         );
         texts.push(pass_text(&self.resolve_shaders));
+        // the materials whose program draws water, measured from it, before the materials are lowered with their class
+        texts.push(WATER.to_owned());
         if let AreaGame::Sekiro {
             materials: Materials::Bake(bake),
             ..

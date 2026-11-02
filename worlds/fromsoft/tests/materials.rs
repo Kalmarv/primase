@@ -124,6 +124,10 @@ fn foliage_cutoff_and_missing_albedo() {
 fn water_previews_its_own_normal_map_without_a_base_colour() {
     let mut d = definition();
     d.shader = "Tessellation_Water_a.sps".into();
+    d.parameters.push(fromsoft_formats::mtd::Parameter {
+        name: materials::STATED_WATER.into(),
+        value: fromsoft_formats::mtd::Value::Bool(true),
+    });
     d.textures = vec![
         Texture {
             kind: "Texture2D_3_NormalMap".into(),
@@ -164,6 +168,7 @@ fn water_previews_its_own_normal_map_without_a_base_colour() {
     assert_eq!(p.normal.as_deref(), Some("m99_water_n"));
     // the same textures on a material that is not water: no base colour, no normal map
     d.shader = "M[Multiple].sps".into();
+    d.parameters.retain(|p| p.name != materials::STATED_WATER);
     let other = materials::resolve(&s, Some(&d), |_| true);
     assert_ne!(other.class, "water");
     assert!(preview(&other).normal.is_none());

@@ -145,6 +145,16 @@ enum Class {
     Decal,
     Leaves,
 }
+
+/// The parameter by which a material's definition states that it is water: the surface the game's water simulation
+/// ripples (`g_GXFT_WaterInteraction` true), in both games' definitions. Elden Ring's material binaries state it on the
+/// lakes, rivers, seas, swamps and liquids (24 shader families, among them `M[PlacidLake]`, `M[Lake]`, `M[MuddyWater]`,
+/// `M[Water][river]`, `M[Water][ocean2]` to `[ocean7]`, `M[PoisonSwamp]`, `M[Oil_Liquid]`); Sekiro's MTDs on the
+/// tessellated sea and ponds (`M[Interaction]_Tessellation_Water`, `_PoisonWater`, `M[Interaction]_Water`). Exactly
+/// the families whose forward programs read the water simulation's normal (`g_WaterSimulationNormalTexture`). Water
+/// that is not rippled (Sekiro's rivers, Elden Ring's plain sea) is found from its program by
+/// `derive-fromsoft-water`.
+pub const STATED_WATER: &str = "g_GXFT_WaterInteraction";
 /// A game's shader-family names and what the game draws them as: a documented table from its source names to the
 /// shared classes, first match wins; a name no row matches is a surface, classed by its blend mode and alpha reference.
 type ClassTable = [(Target, Pattern, Class)];
@@ -181,10 +191,6 @@ const SEKIRO_CLASSES: &ClassTable = &[
         Pattern::Prefix("M[Shadow]"),
         Class::Skip(SkipClass::Shadow),
     ),
-    // water by the family's name, as Elden Ring's table has it: the tessellated sea and ponds
-    // (`M[Interaction]_Tessellation_Water`), and the rivers and waterfalls whose shaders the scroll policy names
-    // (`M[ARSN]_Water_3normaltet` on m25_00's `川` and `滝`, `M[Flow]_Water`)
-    (Target::Shader, Pattern::Contains("Water"), Class::Water),
     (Target::Shader, Pattern::Contains("MeshDecal"), Class::Decal),
     (Target::Material, Pattern::Suffix("_md"), Class::Decal),
     (Target::Shader, Pattern::Prefix("M[Translucency]"), Class::Leaves),
@@ -192,9 +198,9 @@ const SEKIRO_CLASSES: &ClassTable = &[
 
 /// Elden Ring's families, from its material binaries' shader names: skies and cloud cards (`M[Sky9]`,
 /// `M[Sky]_Cloudiness_A`, `M[Clouds5]`, `M[DistantClouds]_001`, `M[Atmosphere][Clouds]_001`), light shafts, shadow
-/// proxies (`C[AMSN]_Shadow`), SpeedTree's billboard cards (`SpeedTree_billboard`), water (`M[Water][river]`,
-/// `M[MuddyWater]`, `M[Waterfall2]`), mesh decals (`M[AMSN_V]_MeshDecalBlend`) and translucent foliage
-/// (`M[AMSN_V][Ov_N][Translucency]`).
+/// proxies (`C[AMSN]_Shadow`), SpeedTree's billboard cards (`SpeedTree_billboard`), mesh decals
+/// (`M[AMSN_V]_MeshDecalBlend`) and translucent foliage (`M[AMSN_V][Ov_N][Translucency]`). Water is not a family's
+/// name: it is what the definition states ([`STATED_WATER`]).
 const ELDEN_CLASSES: &ClassTable = &[
     (
         Target::Shader,
@@ -221,7 +227,6 @@ const ELDEN_CLASSES: &ClassTable = &[
         Pattern::Prefix("SpeedTree_billboard"),
         Class::Skip(SkipClass::Billboard),
     ),
-    (Target::Shader, Pattern::Contains("Water"), Class::Water),
     (Target::Shader, Pattern::Contains("MeshDecal"), Class::Decal),
     (
         Target::Shader,
@@ -313,13 +318,22 @@ pub fn resolve_definition(
         bindings,
         layered: None,
     };
-    let class = classes(game).iter().find_map(|(target, pattern, class)| {
-        let name = match target {
-            Target::Shader => m.shader.as_str(),
-            Target::Material => m.mtd.as_str(),
-        };
-        pattern.matches(name).then_some(*class)
+    let stated_water = definition.is_some_and(|d| {
+        matches!(
+            d.as_ref().parameter(STATED_WATER),
+            Some(ParameterValue::Bool(true))
+        )
     });
+    let class = classes(game)
+        .iter()
+        .find_map(|(target, pattern, class)| {
+            let name = match target {
+                Target::Shader => m.shader.as_str(),
+                Target::Material => m.mtd.as_str(),
+            };
+            pattern.matches(name).then_some(*class)
+        })
+        .or(stated_water.then_some(Class::Water));
     match class {
         Some(Class::Skip(skip @ (SkipClass::Sky | SkipClass::LightVolume))) => m.skip = Some(skip),
         // Sekiro: an additive blend draws a light volume whatever else the family's name says
@@ -790,11 +804,6 @@ mod tests {
             ("C[AMSN]_Shadow", "shadow"),
             ("GXFlver_Shadow", "shadow"),
             ("SpeedTree_billboard", "billboard"),
-            ("M[Water][river]", "water"),
-            ("M[MuddyWater]", "water"),
-            ("M[Waterfall2]_Transparent", "water"),
-            ("M[CutScene][WaterSurface]", "water"),
-            ("GXFlver_WaterBumpTri", "water"),
             ("M[AMSN]_MeshDecalBlend", "decal"),
             ("M[AMSN_V]_MeshDecalBlend_Emissive_Glow", "decal"),
             ("M[Flame_001]_MeshDecalBlend", "decal"),
@@ -819,6 +828,59 @@ mod tests {
             ("M[Translucency]x", "leaves"),
         ] {
             assert_eq!(class(shader), expected, "{shader}");
+        }
+    }
+
+    /// Water is what a definition states ([`STATED_WATER`]), in both games, whatever the family's name: a lake whose
+    /// family's name has no `Water` in it is water where its definition states water interaction, and a family named
+    /// water is a surface where its definition does not.
+    #[test]
+    fn water_is_what_the_definition_states() {
+        let class = |game: Game, shader: &str, stated: Option<bool>| {
+            resolve_definition(
+                &flver::Material {
+                    string_bytes: 0,
+                    index: 0,
+                    name: "fixture".into(),
+                    mtd: "fixture.mtd".into(),
+                    gx: vec![],
+                    textures: vec![],
+                },
+                Some(&Definition::Mtd(MaterialDefinition {
+                    shader: shader.into(),
+                    description: String::new(),
+                    parameters: stated
+                        .map(|b| fromsoft_formats::mtd::Parameter {
+                            name: STATED_WATER.into(),
+                            value: Value::Bool(b),
+                        })
+                        .into_iter()
+                        .collect(),
+                    textures: Vec::new(),
+                    block_lengths: Vec::new(),
+                    padding: Vec::new(),
+                })),
+                game,
+                |_| false,
+            )
+            .class
+        };
+        for game in [Game::EldenRing, Game::Sekiro] {
+            for shader in [
+                "M[PlacidLake]",
+                "M[Water][river]",
+                "M[Interaction]_Tessellation_Water",
+            ] {
+                assert_eq!(class(game, shader, Some(true)), "water", "{game:?} {shader}");
+                assert_eq!(class(game, shader, Some(false)), "opaque", "{game:?} {shader}");
+                assert_eq!(class(game, shader, None), "opaque", "{game:?} {shader}");
+            }
+            // a family a rule names keeps the rule's class
+            assert_eq!(
+                class(game, "M[AMSN]_MeshDecalBlend", Some(true)),
+                "decal",
+                "{game:?}"
+            );
         }
     }
 

@@ -43,6 +43,7 @@ pub mod sky;
 pub mod standalone;
 pub mod state;
 pub mod visibility;
+pub mod water;
 pub mod weapons;
 pub use crate::layer_bake::resolve::Unbound;
 pub use crate::sekiro::components::lowered::UvTiling;
@@ -114,6 +115,7 @@ pub fn register(registry: &mut PassRegistry) {
         &release::RELEASE_FROMSOFT_SOURCES,
         &resolve_shaders::RESOLVE_FROMSOFT_SHADERS,
         &detail::DERIVE_FROMSOFT_DETAIL,
+        &water::DERIVE_FROMSOFT_WATER,
         &bake::BAKE_FROMSOFT_LAYERS,
         &bake_materials::BAKE_FROMSOFT_MATERIALS,
         &materials::DROP_FROMSOFT_TEXTURE_TRANSFORMS,

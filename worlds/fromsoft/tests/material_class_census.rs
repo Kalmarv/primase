@@ -1,9 +1,10 @@
 //! A census of the shader families the install's map materials use, by the class the reader's table gives them
 //! (`water`, `decal`, `leaves`, `alpha`, `additive`, `cutout`, `opaque`, or skipped): every shader name of a kept
-//! material slot, its class and the slots it names, per map. It answers what the tables' patterns cannot: which
-//! shader names the game uses for water and decals that a pattern misses (`M[Flow]_Water`, a river's
-//! `M[ARSN]_Water_3normaltet`: a name containing `Water` or `Decal` that is not classed so is listed with `!`), and
-//! whether any name classed as water or decal is not one. It asserts only that every slot is counted once and prints
+//! material slot, its class and the slots it names, per map. It answers what the tables cannot: which shader names
+//! the game uses for decals that a pattern misses, and which named for water its definitions do not state water
+//! interaction for (`M[Flow]_Water`, a river's `M[ARSN]_Water_3normaltet`: a name containing `Water` or `Decal` that is
+//! not classed so is listed with `!`; such water is found from its program by `derive-fromsoft-water`), and whether any
+//! name classed as water or decal is not one. It asserts only that every slot is counted once and prints
 //! the rest, one line per shader: `game map class slots shader`.
 //!
 //! Maps of more than 1500 parts are read at the 100 m square the repository's other area tests use for Sekiro's

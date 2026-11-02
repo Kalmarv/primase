@@ -13,3 +13,5 @@ pub mod probe_accept;
 pub(crate) mod program_reads;
 pub mod rigid;
 pub(crate) mod sampler_pairs;
+pub mod water_derive;
+pub mod water_probe;

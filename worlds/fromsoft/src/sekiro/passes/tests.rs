@@ -313,7 +313,14 @@ fn a_lowered_material_carries_what_its_source_class_states_about_its_surfaces() 
     let mut world = World::new();
     let mut drawn = Vec::new();
     for (shader, parameters, class) in [
-        ("GXFlver_Tessellation_Water.spx", vec![], "water"),
+        (
+            "GXFlver_Tessellation_Water.spx",
+            vec![fromsoft_formats::mtd::Parameter {
+                name: materials::STATED_WATER.into(),
+                value: fromsoft_formats::mtd::Value::Bool(true),
+            }],
+            "water",
+        ),
         ("M[Translucency]_Leaves.spx", vec![], "leaves"),
         ("GXFlver_MeshDecal.spx", vec![], "decal"),
         ("M[ARSN].spx", vec![int("g_BlendMode", 2)], "alpha"),
@@ -375,46 +382,6 @@ fn a_lowered_material_carries_what_its_source_class_states_about_its_surfaces() 
     assert_eq!(log.counts["materials of class water given their usage"], 1);
     assert_eq!(log.counts["materials of class leaves given their usage"], 1);
     assert_eq!(log.counts["materials of class decal given their draw order"], 1);
-}
-
-/// Sekiro's water is a family by name, not only the tessellated sea: the river and waterfall shaders the layer bake's
-/// scroll policy names (`M[ARSN]_Water_3normaltet`, `M[Flow]_Water`) are water too, and a shader whose name only
-/// resembles one is not.
-#[test]
-fn sekiros_rivers_and_waterfalls_are_water_by_their_shader_family() {
-    let class = |shader: &str| {
-        materials::resolve(
-            &fromsoft_formats::flver::Material {
-                string_bytes: 0,
-                index: 0,
-                name: "fixture".into(),
-                mtd: "fixture.mtd".into(),
-                gx: vec![],
-                textures: vec![],
-            },
-            Some(&fromsoft_formats::mtd::MaterialDefinition {
-                shader: shader.into(),
-                description: String::new(),
-                parameters: vec![],
-                textures: vec![],
-                block_lengths: vec![],
-                padding: vec![],
-            }),
-            |_| false,
-        )
-        .class
-    };
-    for shader in [
-        "GXFlver_Tessellation_Water.spx",
-        "M[Interaction]_Tessellation_Water.spx",
-        "M[ARSN]_Water_3normaltet.spx",
-        "M[Flow]_Water.spx",
-    ] {
-        assert_eq!(class(shader), "water", "{shader}");
-    }
-    for shader in ["M[ARSN].spx", "M[AMSN].spx", "GXFlver_MeshDecal.spx"] {
-        assert_ne!(class(shader), "water", "{shader}");
-    }
 }
 
 /// `g_BlendMode` 4 is a light volume in Sekiro's table and, in Elden Ring's, a surface drawn added to what is behind it
@@ -739,6 +706,7 @@ fn the_fromsoft_passes_register_by_name() {
         "bind-fromsoft-animation",
         "bind-fromsoft-environment-probes",
         "derive-fromsoft-detail",
+        "derive-fromsoft-water",
         "drop-fromsoft-far",
         "drop-fromsoft-texture-transforms",
         "fromsoft-apply-rigid-skinning",
@@ -796,6 +764,7 @@ fn the_fromsoft_passes_register_by_name() {
         "lower-fromsoft-render-graph",
         "lower-elden-ring-reinhard",
         "derive-fromsoft-detail",
+        "derive-fromsoft-water",
         "drop-fromsoft-far",
         "drop-fromsoft-texture-transforms",
         "fromsoft-apply-rigid-skinning",

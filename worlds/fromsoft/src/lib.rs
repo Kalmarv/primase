@@ -13,7 +13,7 @@ pub use components::clip_source;
 pub use components::stored;
 pub use passes::{
     clip_events, detail_derive, detail_probe, display_masks, entity_names, geometry, layer_bake,
-    material_events, preview, probe_accept, rigid,
+    material_events, preview, probe_accept, rigid, water_derive, water_probe,
 };
 
 /// A refusal of this crate's own (a record that does not fit what a pass needs), as the format readers make theirs.
