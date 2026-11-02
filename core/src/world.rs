@@ -1616,21 +1616,26 @@ impl World {
     /// above every id of `self`, as a subset does; [`World::absorb`] moves it back. This world's resources keep their
     /// references to the moved entities, which come back with the part.
     ///
-    /// For a selection that keeps everything the world's render graph draws with, as [`World::subset`]: one that leaves
-    /// some of it out panics naming what the part dropped ([`World::split_part`]).
+    /// A loss is data that leaves the world and does not arrive. The part's render graph is a copy, and this world
+    /// keeps every step: the steps pruned from the copy (they draw with entities the part lacks) are not a loss, and
+    /// [`World::split_part`] counts them. The step bindings and step draws stripped from the moved entities (they named
+    /// draws only those steps made) leave with the entities and do not come back on [`World::absorb`]: a loss, and
+    /// split_off panics naming it (take the part with [`World::split_part`] and count it).
     #[track_caller]
     pub fn split_off(&mut self, keep: &BTreeSet<Entity>) -> World {
         let Part { world, dropped } = self.split_part(keep);
         assert!(
-            dropped.is_empty(),
-            "World::split_off left out what the render graph draws with, and the part dropped {dropped}: take it with \
-             World::split_part and count what it drops"
+            dropped.step_bindings.is_empty() && dropped.step_draws.is_empty(),
+            "World::split_off stripped from the entities it moved what named the draws of render graph steps the part \
+             could not keep, and the part dropped {dropped}: take it with World::split_part and count what it drops"
         );
         world
     }
 
-    /// [`World::split_off`]'s part, and what it dropped to stay whole ([`World::part`]). The step bindings and step
-    /// draws it dropped are its entities' own: absorbed back, they hold none of them.
+    /// [`World::split_off`]'s part, and what it dropped to stay whole ([`World::part`]). The render graph steps in it
+    /// are pruned from the part's copy (this world keeps them all): counted, not a loss. The step bindings and step
+    /// draws in it were stripped from the moved entities: a loss ([`World::split_off`]), since absorbed back the
+    /// entities hold none of them.
     pub fn split_part(&mut self, keep: &BTreeSet<Entity>) -> Part {
         let alive: BTreeSet<Entity> = self.alive.intersection(keep).copied().collect();
         for e in &alive {

@@ -1227,6 +1227,10 @@ pub struct RunReport {
     /// The stated pipeline a conversion ran, as text; empty for a bare run.
     pub pipeline: String,
     pub steps: Vec<StepReport>,
+    /// What the world dropped outside any pass ([`crate::Dropped`]: a retain, despawn or part made before the run or
+    /// between its passes), by the pass that ran next: losses no pass's log holds, recorded where the run first sees
+    /// them.
+    pub dropped_outside: Vec<(String, crate::Dropped)>,
 }
 
 impl fmt::Display for RunReport {
@@ -1262,6 +1266,9 @@ impl fmt::Display for RunReport {
                 write!(f, ")")?;
             }
             writeln!(f)?;
+        }
+        for (next, dropped) in &self.dropped_outside {
+            writeln!(f, "  outside any pass, before {next}: dropped {dropped}")?;
         }
         Ok(())
     }
@@ -1529,6 +1536,11 @@ impl PassManager {
                 .resource::<crate::convert::PartScope>()
                 .map(|s| s.owned(w))
                 .unwrap_or_default();
+            // what the world dropped since the last pass ran is not this pass's: the run records it
+            let outside = w.take_dropped();
+            if !outside.is_empty() {
+                report.dropped_outside.push((text.clone(), outside));
+            }
             let mut log = PassLog::default();
             let started = Instant::now();
             let mut run = Duration::ZERO;
@@ -1904,7 +1916,7 @@ impl PassManager {
         let mut report = RunReport {
             target: target.name.clone(),
             pipeline: pipeline.to_string(),
-            steps: Vec::new(),
+            ..RunReport::default()
         };
         self.run_instrumented(w, pipeline, &mut report, instrument)?;
         let refused = w

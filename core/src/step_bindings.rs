@@ -460,13 +460,21 @@ mod tests {
         );
     }
 
-    /// A part that leaves out what a step of the graph draws with drops that step whole (a group with all its steps),
-    /// the picture it wrote, and the step bindings and step draws naming the draws only it made, and says so; the part
-    /// verifies. `subset` panics naming them; a despawn drops the same and records it for the pass manager. The
-    /// lighting pipeline's selections are renumbered past a dropped step, and it goes where it selected one.
-    #[test]
-    fn a_part_drops_the_steps_reaching_outside_it_and_the_bindings_naming_their_draws() {
-        use crate::render_graph::LightingPipeline;
+    /// A binding of draw `draw` with no program.
+    fn unbound(draw: &str) -> StepBinding {
+        StepBinding {
+            draw: draw.into(),
+            pass: None,
+            program: StepProgram::Unbound {
+                why: "a fixture".into(),
+            },
+        }
+    }
+
+    /// A world whose graph draws `forward` on its own and `depth_normals` in a group after a screen step of `program`
+    /// (which writes the picture): `lit` binds both draws, `depth_only` the depth normals one, and `placement` is drawn
+    /// by it. Returns the world, [program, lit, depth_only, placement], and the group step.
+    fn grouped() -> (World, [Entity; 4], RenderPass) {
         use iridia_interface::Stage;
         let mut w = World::new();
         let program = w.spawn();
@@ -515,13 +523,6 @@ mod tests {
         g.picture = Some(0);
         let group = g.passes[1].clone();
         w.insert_resource(g);
-        let unbound = |draw: &str| StepBinding {
-            draw: draw.into(),
-            pass: None,
-            program: StepProgram::Unbound {
-                why: "a fixture".into(),
-            },
-        };
         w.insert(
             lit,
             StepBindings(vec![unbound("forward"), unbound("depth_normals")]),
@@ -529,6 +530,18 @@ mod tests {
         w.insert(depth_only, StepBindings(vec![unbound("depth_normals")]));
         w.insert(placement, Mesh::new(Vec::new()));
         w.insert(placement, StepDraws(vec!["depth_normals".into()]));
+        (w, [program, lit, depth_only, placement], group)
+    }
+
+    /// A part that leaves out what a step of the graph draws with drops that step whole (a group with all its steps),
+    /// the picture it wrote, and the step bindings and step draws naming the draws only it made, and says so; the part
+    /// verifies. `subset` panics naming them; a despawn drops the same and records it for the pass manager. The
+    /// lighting pipeline's selections are renumbered past a dropped step, and it goes where it selected one.
+    #[test]
+    fn a_part_drops_the_steps_reaching_outside_it_and_the_bindings_naming_their_draws() {
+        use crate::render_graph::LightingPipeline;
+        let (w, [program, lit, depth_only, placement], group) = grouped();
+        let stated = |placements| SceneMembers::Stated { placements };
 
         let keep = std::collections::BTreeSet::from([lit, depth_only, placement]);
         let part = w.part(&keep);
@@ -579,6 +592,27 @@ mod tests {
         assert_eq!(despawned.verify_components(), Vec::new());
         assert!(despawned.take_dropped().is_empty());
 
+        // split_off: steps pruned from the part's copy of the graph are no loss (the world keeps every step), so moving
+        // an entity that names none of their draws goes through and is counted; stripping the moved entities' bindings
+        // is a loss, and panics naming it
+        let mut split = w.clone();
+        let plain = split.spawn();
+        split.insert(plain, Mesh::new(Vec::new()));
+        let mut moved = split.clone();
+        let counted = moved.split_part(&std::collections::BTreeSet::from([plain]));
+        assert_eq!(counted.dropped.graph.steps, part.dropped.graph.steps);
+        assert!(counted.dropped.step_bindings.is_empty() && counted.dropped.step_draws.is_empty());
+        let off = split.split_off(&std::collections::BTreeSet::from([plain]));
+        assert_eq!(split.resource::<RenderGraph>().map(|g| g.passes.len()), Some(2));
+        split.absorb(off).unwrap();
+        let panicked =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| split.split_off(&keep))).unwrap_err();
+        let message = panicked.downcast_ref::<String>().unwrap();
+        assert!(
+            message.contains("split_off stripped") && message.contains("depth_normals"),
+            "{message}"
+        );
+
         // the lighting pipeline: renumbered past a dropped step, gone where it selected one
         let mut g = graph(&[
             ("a", stated(ScenePlacements::All)),
@@ -598,5 +632,74 @@ mod tests {
         });
         assert!(g.retain_steps(&|e| e != program).lighting);
         assert_eq!(g.lighting, None);
+    }
+
+    /// What the world drops outside any pass (a despawn before the run) is recorded in the run's report by the pass that
+    /// ran next, and not in that pass's log; what a pass's own despawn drops is counted in its log, and the removals of
+    /// the step bindings and step draws it took are its, with the pass checks on.
+    #[test]
+    fn a_run_records_what_the_world_dropped_outside_its_passes() {
+        use crate::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, RunReport};
+        struct Despawns(Entity);
+        impl Pass for Despawns {
+            fn name(&self) -> &'static str {
+                "despawn-program"
+            }
+            fn despawns_entities(&self) -> bool {
+                true
+            }
+            fn run(&self, w: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
+                w.despawn(self.0);
+                Ok(())
+            }
+        }
+        struct Nothing;
+        impl Pass for Nothing {
+            fn name(&self) -> &'static str {
+                "nothing"
+            }
+            fn run(&self, _: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
+                Ok(())
+            }
+        }
+        let manager = PassManager::new(PassRegistry::new()).with_pass_checks(true);
+        let steps = "render graph steps dropped: they drew with an entity that left the world";
+        let bindings = "step bindings dropped: only dropped render graph steps made their draws";
+
+        // in a pass: counted in its log
+        let (mut w, [program, ..], _) = grouped();
+        let mut report = RunReport::default();
+        let pipeline = Pipeline {
+            passes: vec![Box::new(Despawns(program))],
+        };
+        manager.run(&mut w, &pipeline, &mut report).unwrap();
+        let counts = &report.steps[0].log.counts;
+        assert_eq!((counts.get(steps), counts.get(bindings)), (Some(&1), Some(&2)));
+        assert!(report.dropped_outside.is_empty());
+
+        // outside any pass: the run records it before the next pass, whose log holds none of it
+        let (mut w, [program, ..], _) = grouped();
+        w.despawn(program);
+        let mut report = RunReport::default();
+        let pipeline = Pipeline {
+            passes: vec![Box::new(Nothing)],
+        };
+        manager.run(&mut w, &pipeline, &mut report).unwrap();
+        assert_eq!(report.dropped_outside.len(), 1);
+        let (next, dropped) = &report.dropped_outside[0];
+        assert_eq!(
+            (
+                next.as_str(),
+                dropped.graph.steps.len(),
+                dropped.step_bindings.len()
+            ),
+            ("nothing", 1, 2)
+        );
+        assert!(!report.steps[0].log.counts.contains_key(steps));
+        assert!(
+            report
+                .to_string()
+                .contains("outside any pass, before nothing: dropped render graph steps depth group")
+        );
     }
 }
