@@ -11,7 +11,7 @@ mod cx;
 mod draws;
 mod gpu;
 mod lower;
-mod units;
+pub mod units;
 pub mod value;
 
 use super::lights::Disabled;

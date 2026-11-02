@@ -652,15 +652,21 @@ pub struct Lit {
     pub shadow: f32,
 }
 
-/// Several textured layers on one quad (masks, noise, scrolling detail).
+/// Several textured layers on one quad (masks, noise, scrolling detail), composed into one colour before the quad's own
+/// tint applies: the base layer gives a colour and an opacity, and each laid layer then changes one of the two by its
+/// operation, weighted by its own opacity ([`compose_layers`]).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct LayeredQuad {
-    /// The quad's own colour and shape; its `map` is unused.
+    /// The quad's shape, blend, tint and limits. Its `map` is `None`: the layers are its texture. Its `premultiply_alpha`
+    /// multiplies each layer's colour by that layer's own opacity before the layers are composed.
     pub quad: Quad,
-    pub layers: Vec<Layer>,
+    /// The first layer: the colour and opacity the others are laid onto.
+    pub base: Layer,
+    /// The layers laid onto the base, in order.
+    pub layers: Vec<LaidLayer>,
 }
 
-/// One layer of a [`LayeredQuad`].
+/// One textured layer of a [`LayeredQuad`]: its sample is its texture's texel (white without one) times its tint.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Layer {
     pub map: Option<Map>,
@@ -669,6 +675,91 @@ pub struct Layer {
     pub scroll: [Value; 2],
     pub offset: [Value; 2],
     pub scale: [Value; 2],
+}
+
+/// A layer laid onto those below it in a [`LayeredQuad`].
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LaidLayer {
+    pub layer: Layer,
+    /// What the layer changes.
+    pub target: LayerTarget,
+    /// How it combines with what it changes.
+    pub operation: LayerOperation,
+}
+
+/// What a [`LaidLayer`] changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum LayerTarget {
+    /// The colour, by the layer's colour; the opacity is left as it is.
+    Colour,
+    /// The opacity, by the layer's brightness (the mean of its red, green and blue, clamped to 0..1); the colour is left
+    /// as it is.
+    Opacity,
+}
+
+/// How a [`LaidLayer`]'s value `l` combines with the value `b` it changes (per channel), weighted by the layer's own
+/// opacity `w`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum LayerOperation {
+    /// `b * (1 + (l - 1) * w)`: `b * l` where the layer is opaque, `b` where it is clear.
+    Multiply,
+    /// `b + l * w`.
+    Add,
+    /// `b + (overlay(b, l) - b) * w`, where `overlay(b, l)` is `2 b l` for `b` below 0.5 and `1 - 2 (1 - b) (1 - l)`
+    /// otherwise.
+    Overlay,
+}
+
+impl LayerOperation {
+    /// `b` changed by `l` at weight `w`.
+    pub fn apply(self, b: f32, l: f32, w: f32) -> f32 {
+        match self {
+            LayerOperation::Multiply => b * (1.0 + (l - 1.0) * w),
+            LayerOperation::Add => b + l * w,
+            LayerOperation::Overlay => {
+                let overlay = if b < 0.5 {
+                    2.0 * b * l
+                } else {
+                    1.0 - 2.0 * (1.0 - b) * (1.0 - l)
+                };
+                b + (overlay - b) * w
+            }
+        }
+    }
+}
+
+/// The colour (straight red, green, blue and opacity) of a [`LayeredQuad`]'s layers before the quad's tint: `base` is the
+/// base layer's sample and `laid` each laid layer's target, operation and sample, in order (a sample being the layer's
+/// texel times its tint, opacity in 0..1). With `premultiply_alpha` each sample's colour is first multiplied by its own
+/// opacity. The base gives the colour and the opacity; each laid layer then changes its target by its operation, with its
+/// colour or its brightness as `l` and its opacity as the weight.
+pub fn compose_layers(
+    premultiply_alpha: bool,
+    base: [f32; 4],
+    laid: &[(LayerTarget, LayerOperation, [f32; 4])],
+) -> [f32; 4] {
+    let colour = |s: [f32; 4]| {
+        let k = if premultiply_alpha { s[3] } else { 1.0 };
+        [s[0] * k, s[1] * k, s[2] * k]
+    };
+    let [r, g, b] = colour(base);
+    let mut out = [r, g, b, base[3]];
+    for &(target, operation, sample) in laid {
+        let c = colour(sample);
+        let w = sample[3];
+        match target {
+            LayerTarget::Colour => {
+                for (o, l) in out.iter_mut().zip(c) {
+                    *o = operation.apply(*o, l, w);
+                }
+            }
+            LayerTarget::Opacity => {
+                let brightness = ((c[0] + c[1] + c[2]) / 3.0).clamp(0.0, 1.0);
+                out[3] = operation.apply(out[3], brightness, w);
+            }
+        }
+    }
+    out
 }
 
 /// A point sprite: a screen-aligned textured square.
@@ -1014,7 +1105,7 @@ pub struct Ripples {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum Draw {
     Quad(Quad),
-    LayeredQuad(LayeredQuad),
+    LayeredQuad(Box<LayeredQuad>),
     Point(Point),
     Mesh(MeshParticle),
     Trail(Trail),
@@ -1324,8 +1415,9 @@ impl Draw {
                     push_map(out, &l.normal_map);
                     push_map(out, &l.specular_map);
                 }
+                push_map(out, &q.base.map);
                 for l in &q.layers {
-                    push_map(out, &l.map);
+                    push_map(out, &l.layer.map);
                 }
             }
             Draw::Point(p) => push_map(out, &p.map),
@@ -1384,7 +1476,7 @@ impl Draw {
             Draw::Quad(q) => quad_values(out, q),
             Draw::LayeredQuad(q) => {
                 quad_values(out, &q.quad);
-                for l in &q.layers {
+                for l in std::iter::once(&q.base).chain(q.layers.iter().map(|l| &l.layer)) {
                     out.push(("layer tint", &l.tint));
                     out.extend(l.scroll.iter().map(|v| ("layer scroll", v)));
                     out.extend(l.offset.iter().map(|v| ("layer offset", v)));
@@ -1501,9 +1593,9 @@ impl Draw {
             return Err("a trail time that is not finite".into());
         }
         if let Draw::LayeredQuad(q) = self
-            && q.layers.is_empty()
+            && q.quad.map.is_some()
         {
-            return Err("a layered quad of no layers".into());
+            return Err("a layered quad with a texture of its own (its layers are its texture)".into());
         }
         Ok(())
     }
@@ -1627,5 +1719,45 @@ mod tests {
             stream: 3,
         });
         assert!(!w.is_fixed());
+    }
+
+    #[test]
+    fn laid_layers_change_their_target_by_their_operation_at_their_opacity() {
+        use LayerOperation::{Add, Multiply, Overlay};
+        use LayerTarget::{Colour, Opacity};
+        let base = [0.8, 0.4, 0.2, 0.5];
+        // hand-worked: multiply at half weight, 0.8 * (1 + (0.5 - 1) * 0.5) = 0.6
+        let c = compose_layers(false, base, &[(Colour, Multiply, [0.5, 0.5, 0.5, 0.5])]);
+        for (got, want) in c.iter().zip([0.6, 0.3, 0.15, 0.5]) {
+            assert!((got - want).abs() < 1e-6, "{c:?}");
+        }
+        // add at full weight; the opacity is left as it is
+        let c = compose_layers(false, base, &[(Colour, Add, [0.1, 0.2, 0.3, 1.0])]);
+        assert!(
+            (c[0] - 0.9).abs() < 1e-6
+                && (c[1] - 0.6).abs() < 1e-6
+                && (c[2] - 0.5).abs() < 1e-6
+                && c[3] == 0.5
+        );
+        // overlay at full weight: 0.8 is above 0.5 (1 - 2 * 0.2 * 0.5 = 0.8), 0.4 below (2 * 0.4 * 0.5 = 0.4)
+        let c = compose_layers(false, base, &[(Colour, Overlay, [0.5, 0.5, 0.5, 1.0])]);
+        assert!((c[0] - 0.8).abs() < 1e-6 && (c[1] - 0.4).abs() < 1e-6);
+        // an opacity layer: brightness (0.2 + 0.4 + 0.6) / 3 = 0.4 multiplies the opacity at full weight; colour kept
+        let c = compose_layers(false, base, &[(Opacity, Multiply, [0.2, 0.4, 0.6, 1.0])]);
+        assert_eq!(c[..3], base[..3]);
+        assert!((c[3] - 0.2).abs() < 1e-6);
+        // premultiplied: the base's colour by its opacity, the laid layer's (and so its brightness) by its own
+        let c = compose_layers(true, base, &[(Opacity, Add, [1.0, 1.0, 1.0, 0.5])]);
+        assert!((c[0] - 0.4).abs() < 1e-6 && (c[3] - 0.75).abs() < 1e-6);
+        // layers apply in order
+        let c = compose_layers(
+            false,
+            base,
+            &[
+                (Colour, Add, [0.2, 0.2, 0.2, 1.0]),
+                (Colour, Multiply, [0.5, 0.5, 0.5, 1.0]),
+            ],
+        );
+        assert!((c[0] - 0.5).abs() < 1e-6);
     }
 }

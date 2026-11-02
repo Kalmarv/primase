@@ -7,7 +7,8 @@
 
 use super::value::Notes;
 use primase_core::particles::{
-    Anchor, Attachment, Blend, DistanceFade, Follow, Heading, MeshOrientation, Orientation, TrailOrientation,
+    Anchor, Attachment, Blend, DistanceFade, Follow, Heading, LayerOperation, LayerTarget, MeshOrientation,
+    Orientation, TrailOrientation,
 };
 
 /// A direction the file states, in core's axes.
@@ -40,6 +41,47 @@ pub fn blend(mode: i32, notes: &mut Notes) -> Blend {
         _ => {
             notes.lose("a blend mode the project does not name, taken as normal");
             Blend::Alpha
+        }
+    }
+}
+
+/// What a multi-texture billboard's second and third layers change, by its layer word (`unk_ds3_f2_10`), the project's
+/// documented table: 0, both the colour (the opacity is the first layer's); 1, both the opacity by their brightness;
+/// 2, the second the opacity by its brightness and the third the colour. The effect pixel program reads the same three
+/// values (`g_ps_TexBlendType`) the same way. A value the table does not name is counted and taken as 0.
+pub fn layer_targets(word: i32, notes: &mut Notes) -> [LayerTarget; 2] {
+    match word {
+        0 => [LayerTarget::Colour, LayerTarget::Colour],
+        1 => [LayerTarget::Opacity, LayerTarget::Opacity],
+        2 => [LayerTarget::Opacity, LayerTarget::Colour],
+        _ => {
+            notes.lose(
+                "a multi-texture layer word the project does not name, taken as 0 (both layers the colour)",
+            );
+            [LayerTarget::Colour, LayerTarget::Colour]
+        }
+    }
+}
+
+/// How a multi-texture billboard's second or third layer combines, by its operation word (`unk_ds3_f2_11` for the second,
+/// `unk_ds3_f2_12` for the third): 0 multiply, 1 add, 2 overlay, as the effect pixel program's `g_ps_TexBlendType2` and
+/// `g_ps_TexBlendType3` choose them. The words are read as those two from the values they hold (0 to 2 in every Elden Ring
+/// effect file) and their place after the layer word: an inference, counted where a word is not 0. `None` for a value the
+/// program combines in no way: the layer then changes nothing.
+pub fn layer_operation(word: i32, notes: &mut Notes) -> Option<LayerOperation> {
+    if word != 0 {
+        notes.approximate(
+            "a multi-texture layer's operation read from its word (unk_ds3_f2_11, unk_ds3_f2_12) as the effect pixel \
+             program's TexBlendType2 and TexBlendType3 (an inference from their values and place)",
+        );
+    }
+    match word {
+        0 => Some(LayerOperation::Multiply),
+        1 => Some(LayerOperation::Add),
+        2 => Some(LayerOperation::Overlay),
+        _ => {
+            notes.lose("a multi-texture layer of an operation word the effect pixel program does not combine (left out)");
+            None
         }
     }
 }

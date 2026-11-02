@@ -13,9 +13,9 @@ use fromsoft_formats::fxr::actions::Typed;
 use fromsoft_formats::fxr::resources::TextureKind;
 use primase_core::particles::{
     Argument, Atlas, Blend, Channels, DistanceFade, Draw, Flare, FlareLayer, ForceField, ForceKind,
-    ForceVolume, Layer, LayeredQuad, LightDraw, LightKind, Lit, Map, MeshClip, MeshParticle, Orientation,
-    Point, Quad, RadialBlur, Reflection, Refraction, RefractionMode, RefractionShape, Ripples, SoftEdge,
-    Streak, Term, Trail, TrailDistortion, Value,
+    ForceVolume, LaidLayer, Layer, LayeredQuad, LightDraw, LightKind, Lit, Map, MeshClip, MeshParticle,
+    Orientation, Point, Quad, RadialBlur, Reflection, Refraction, RefractionMode, RefractionShape, Ripples,
+    SoftEdge, Streak, Term, Trail, TrailDistortion, Value,
 };
 
 /// 255 stored levels to a fraction.
@@ -258,41 +258,86 @@ impl Cx<'_> {
                     ),
                     premultiply: b.premultiply_alpha,
                 });
-                let mut layers = Vec::new();
-                let sources = [
+                let layer = |this: &mut Self,
+                             texture: i32,
+                             colour,
+                             speed: [&_; 2],
+                             offset: [&_; 2],
+                             scale: [&_; 2]| Layer {
+                    map: this.map_word(TextureKind::Albedo, texture),
+                    tint: this.age(colour),
+                    scroll: [this.age(speed[0]), this.age(speed[1])],
+                    offset: [this.fixed(offset[0]), this.fixed(offset[1])],
+                    scale: [this.age(scale[0]), this.age(scale[1])],
+                };
+                let base = layer(
+                    self,
+                    b.layer1,
+                    &b.layer1_color,
+                    [&b.layer1_speed_u, &b.layer1_speed_v],
+                    [&b.layer1_offset_u, &b.layer1_offset_v],
+                    [&b.layer1_scale_u, &b.layer1_scale_v],
+                );
+                let targets = units::layer_targets(b.unk_ds3_f2_10, &mut self.notes);
+                let laid = [
                     (
-                        b.layer1,
-                        &b.layer1_color,
-                        [&b.layer1_speed_u, &b.layer1_speed_v],
-                        [&b.layer1_offset_u, &b.layer1_offset_v],
-                        [&b.layer1_scale_u, &b.layer1_scale_v],
+                        layer(
+                            self,
+                            b.layer2,
+                            &b.layer2_color,
+                            [&b.layer2_speed_u, &b.layer2_speed_v],
+                            [&b.layer2_offset_u, &b.layer2_offset_v],
+                            [&b.layer2_scale_u, &b.layer2_scale_v],
+                        ),
+                        targets[0],
+                        b.unk_ds3_f2_11,
                     ),
                     (
-                        b.layer2,
-                        &b.layer2_color,
-                        [&b.layer2_speed_u, &b.layer2_speed_v],
-                        [&b.layer2_offset_u, &b.layer2_offset_v],
-                        [&b.layer2_scale_u, &b.layer2_scale_v],
-                    ),
-                    (
-                        b.layer3,
-                        &b.layer3_color,
-                        [&b.layer3_speed_u, &b.layer3_speed_v],
-                        [&b.layer3_offset_u, &b.layer3_offset_v],
-                        [&b.layer3_scale_u, &b.layer3_scale_v],
+                        layer(
+                            self,
+                            b.layer3,
+                            &b.layer3_color,
+                            [&b.layer3_speed_u, &b.layer3_speed_v],
+                            [&b.layer3_offset_u, &b.layer3_offset_v],
+                            [&b.layer3_scale_u, &b.layer3_scale_v],
+                        ),
+                        targets[1],
+                        b.unk_ds3_f2_12,
                     ),
                 ];
-                for (texture, colour, speed, offset, scale) in sources {
-                    let map = self.map_word(TextureKind::Albedo, texture);
-                    layers.push(Layer {
-                        map,
-                        tint: self.age(colour),
-                        scroll: [self.age(speed[0]), self.age(speed[1])],
-                        offset: [self.fixed(offset[0]), self.fixed(offset[1])],
-                        scale: [self.age(scale[0]), self.age(scale[1])],
+                let mut layers = Vec::new();
+                for (layer, target, word) in laid {
+                    let Some(operation) = units::layer_operation(word, &mut self.notes) else {
+                        continue;
+                    };
+                    if layer.map.is_none() {
+                        self.notes.approximate(
+                            "a multi-texture layer with no texture laid as white (the texture the engine binds in its \
+                             place is not established)",
+                        );
+                    }
+                    layers.push(LaidLayer {
+                        layer,
+                        target,
+                        operation,
                     });
                 }
-                Draw::LayeredQuad(LayeredQuad { quad: q, layers })
+                match b.unk_ds3_f2_13 {
+                    0 => {}
+                    2 => self.notes.approximate(
+                        "a multi-texture billboard whose particle colour overlays its layers (unk_ds3_f2_13 2, read as \
+                             the effect pixel program's ColorBlendType 2) with the colour multiplied",
+                    ),
+                    _ => self.notes.lose(
+                        "a multi-texture billboard's particle colour word (unk_ds3_f2_13) other than 0 and 2, the colour \
+                             multiplied",
+                    ),
+                }
+                Draw::LayeredQuad(Box::new(LayeredQuad {
+                    quad: q,
+                    base,
+                    layers,
+                }))
             }
             Typed::PointSprite(p) => {
                 let map = self.map_prop(TextureKind::Albedo, &p.texture);

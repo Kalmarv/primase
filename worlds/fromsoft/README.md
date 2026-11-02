@@ -685,7 +685,11 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   choose, the node's children hanging from the first), with the emitter action as its spawn, the shape and direction
   actions as where and which way particles start, the movement actions as their law, and the appearance as the draw
   (billboards and multi-texture billboards, point sprites, lines, trails, mesh particles, distortion, radial blur,
-  lights, force fields, lens flares, water ripples; a GPU particle system as an ordinary emitter and quad). The effects an
+  lights, force fields, lens flares, water ripples; a GPU particle system as an ordinary emitter and quad). A
+  multi-texture billboard is a layered quad: its first layer the base, its second and third laid on by the layer word
+  (`unk_ds3_f2_10`, the project's table) and the operation words read as the effect pixel program's (`unk_ds3_f2_11` and
+  `unk_ds3_f2_12`, an inference, counted), checked against Elden Ring's own multi-texture pixel program run by iridia
+  (tests/layered_quad_program.rs). The effects an
   effect spawns (`SFXReference`) are systems of their own that its emitters name; a cycle is cut where it closes. A
   Hermite property is sampled into a line (counted); the fxr project's reading of the parameters is the meaning used
   (sourced, not checked in a running game); what core has no place for (the flicker of a light, sounds, the conditions
