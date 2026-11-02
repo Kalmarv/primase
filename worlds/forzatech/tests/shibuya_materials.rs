@@ -10,18 +10,18 @@
 )]
 
 mod inputs;
+mod lowering;
 
 use forzatech_formats::world::{Area, Season};
 use inputs::{Game, install_file};
 use primase_core::Component;
 use primase_core::convert::Reader;
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::PassLog;
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::{
     ColorSpace, DrawLayer, DrawOrder, Entity, Instance, LayeredMaterial, Mesh, TexFormat, TexRole, Texture,
 };
 use primase_forzatech::components::{ForzaMaterial, MaterialTextures, Value};
-use primase_forzatech::passes::LowerForzaMaterials;
 use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
 use primase_forzatech::read::placements::Scope;
@@ -64,7 +64,7 @@ fn shibuya_materials() {
         }
     }
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut part, &mut log).unwrap();
+    lowering::lower(&mut part, &mut log);
 
     // triangles by family, lowered or not
     let mut lowered: BTreeMap<String, (u64, u64)> = BTreeMap::new();

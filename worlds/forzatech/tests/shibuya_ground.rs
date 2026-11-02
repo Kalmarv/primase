@@ -10,6 +10,7 @@
 )]
 
 mod inputs;
+mod lowering;
 
 use forzatech_formats::world::{Area, Season};
 use inputs::{Game, install_file};
@@ -18,7 +19,7 @@ use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Component, Entity, LayeredMaterial, Mesh, Semantic, Stream, Texture};
 use primase_forzatech::components::{ForzaMaterial, MaterialTextures, Value};
-use primase_forzatech::passes::{LowerForzaMaterials, LowerForzaPlanarUv};
+use primase_forzatech::passes::LowerForzaPlanarUv;
 use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
 use primase_forzatech::read::placements::Scope;
@@ -76,7 +77,7 @@ fn shibuya_ground() {
         }
     }
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut part, &mut log).unwrap();
+    lowering::lower(&mut part, &mut log);
 
     let mut lowered: BTreeMap<String, (u64, u64)> = BTreeMap::new();
     let mut unlowered: BTreeMap<String, (u64, u64)> = BTreeMap::new();

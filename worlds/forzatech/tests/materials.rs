@@ -6,17 +6,18 @@
     reason = "a test over data it builds itself"
 )]
 
-use primase_core::pass::{Pass, PassLog};
+mod lowering;
+
+use primase_core::pass::PassLog;
 use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform, Wrap};
 use primase_core::{
-    ColorSpace, DrawLayer, DrawOrder, Entity, Mesh, Name, NormalGreen, NormalZ, Primitive, TexFormat,
-    TexRole, Texture, Topology, World,
+    ColorSpace, DrawLayer, DrawOrder, Entity, Mesh, Name, NormalGreen, NormalZ, Primitive, Semantic, Stream,
+    TexFormat, TexRole, Texture, Topology, World,
 };
 use primase_forzatech::components::{
     EmissionByBaseColour, ForzaMaterial, InstanceLevel, MaterialLevel, MaterialTexture, MaterialTextures,
     Parameter, ShaderLevel, Value,
 };
-use primase_forzatech::passes::LowerForzaMaterials;
 
 fn texture(world: &mut World, name: &str, space: ColorSpace, texel: [u8; 4]) -> Entity {
     let e = world.spawn();
@@ -138,7 +139,7 @@ fn environment_maps_tilings_and_packing() {
         ]),
     );
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
 
     let pbr = world.get::<PbrMaterial>(e).unwrap();
     // tiling * (uv + offset)
@@ -195,7 +196,7 @@ fn srgb_packed_source_is_decoded_as_the_shader_sees_it() {
     );
     world.insert(e, MaterialTextures(vec![bound(3, Some(rma))]));
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
     let pbr = world.get::<PbrMaterial>(e).unwrap();
     let packed = world
         .get::<Texture>(pbr.metallic_roughness_texture.unwrap().texture)
@@ -224,7 +225,7 @@ fn absent_textures_are_counted_not_guessed() {
     // hash 1 is in no archive
     world.insert(e, MaterialTextures(vec![bound(1, None)]));
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
     let pbr = world.get::<PbrMaterial>(e).unwrap();
     assert!(pbr.base_color_texture.is_none());
     assert!(pbr.normal_texture.is_none());
@@ -242,7 +243,7 @@ fn a_family_without_a_rule_is_left_and_counted() {
     let e = world.spawn();
     world.insert(e, material("terr_cube", "Standard", Vec::new()));
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
     assert!(!world.has::<PbrMaterial>(e));
     assert_eq!(
         log.omitted["materials of shader family terr_cube left unlowered"],
@@ -265,13 +266,18 @@ fn a_material_of_no_family_is_left_only_when_something_draws_it() {
         mesh,
         Mesh::new(vec![Primitive {
             topology: Topology::Triangles,
-            streams: Default::default(),
+            streams: [(
+                Semantic::Position,
+                Stream::F32x3(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+            )]
+            .into_iter()
+            .collect(),
             indices: Some(vec![0, 1, 2]),
             material: Some(drawn),
         }]),
     );
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
     assert_eq!(
         log.omitted["materials of shader family no shader family left unlowered"],
         1
@@ -327,7 +333,7 @@ fn foliage_bush_roughness_normal_occlusion_and_alpha_step() {
         ]),
     );
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
 
     let pbr = world.get::<PbrMaterial>(e).unwrap();
     assert_eq!(pbr.base_color_texture.unwrap().texture, diffuse);
@@ -387,7 +393,7 @@ fn foliage_tree_has_no_normal_and_an_impostor_is_one_horizon_frame() {
     );
     world.insert(impostor, MaterialTextures(vec![bound(1, Some(atlas))]));
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
 
     let pbr = world.get::<PbrMaterial>(tree).unwrap();
     assert!(pbr.normal_texture.is_none());
@@ -464,7 +470,7 @@ fn branch_maps_tilings_roughness_and_occlusion() {
         MaterialTextures(vec![bound(1, Some(diffuse)), bound(2, Some(normal))]),
     );
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
 
     let pbr = world.get::<PbrMaterial>(e).unwrap();
     assert_eq!(
@@ -535,7 +541,7 @@ fn projection_lod_reads_its_atlas_cell_and_signed_roughness_metalness() {
         ]),
     );
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
 
     let pbr = world.get::<PbrMaterial>(e).unwrap();
     let cell = UvTransform {
@@ -584,7 +590,7 @@ fn projection_lod_with_a_black_emission_map_emits_nothing() {
     );
     world.insert(e, MaterialTextures(vec![bound(4, Some(black))]));
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
     let pbr = world.get::<PbrMaterial>(e).unwrap();
     assert!(pbr.emissive_texture.is_none());
     assert_eq!(pbr.emissive_strength, PbrMaterial::default().emissive_strength);
@@ -628,7 +634,7 @@ fn uberlod_is_its_diffuse_and_emission_maps() {
     let plain = make(&mut world, 0);
     let normal = make(&mut world, 1);
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
     let pbr = world.get::<PbrMaterial>(plain).unwrap();
     assert_eq!(pbr.base_color_texture.unwrap().texture, diffuse);
     assert_eq!(pbr.emissive_texture.unwrap().texture, lit);
@@ -695,7 +701,7 @@ fn environment_emission_is_the_base_colour_times_the_emission_map() {
     );
     let dark = make(&mut world, Vec::new(), black);
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
 
     let pbr = world.get::<PbrMaterial>(plain).unwrap();
     // the tint times 1.5: (1.5, 0.75, 3): the strength is the largest channel, the factor the rest
@@ -779,7 +785,7 @@ fn road_decal_bakes_mask_tint_and_roughness_metalness_and_draws_as_a_decal() {
         [Some(diffuse), Some(mask), Some(metal), Some(normal)],
     );
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
 
     let pbr = world.get::<PbrMaterial>(e).unwrap();
     assert_eq!(pbr.alpha_mode, AlphaMode::Mask { cutoff: 0.5 });
@@ -836,7 +842,7 @@ fn road_decal_without_an_alpha_mask_is_opaque_and_keeps_its_diffuse() {
         [Some(diffuse), Some(mask), None, None],
     );
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
     let pbr = world.get::<PbrMaterial>(e).unwrap();
     assert_eq!(pbr.alpha_mode, AlphaMode::Opaque);
     assert_eq!(pbr.base_color_texture.unwrap().texture, diffuse);
@@ -871,7 +877,7 @@ fn retro_road_decal_height_alpha_is_the_mask_over_its_range() {
         [Some(diffuse), Some(mask), None, None],
     );
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
     let pbr = world.get::<PbrMaterial>(e).unwrap();
     assert_eq!(pbr.alpha_mode, AlphaMode::Mask { cutoff: 0.5 });
     let colour = world
@@ -934,7 +940,7 @@ fn deferred_decal_is_blended_in_the_decal_layer_and_projected_ones_are_left() {
     let plain = build(&mut world, 1.0, 0, 0);
     let projected = build(&mut world, 1.0, 1, 1);
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
 
     let pbr = world.get::<PbrMaterial>(with_normal).unwrap();
     assert_eq!(pbr.alpha_mode, AlphaMode::Blend);
@@ -995,7 +1001,7 @@ fn signed_normal(texel: [u8; 4]) -> (World, Entity, Entity, PassLog) {
     );
     world.insert(e, MaterialTextures(vec![bound(3, Some(normal))]));
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
     (world, e, normal, log)
 }
 

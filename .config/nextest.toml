@@ -22,7 +22,7 @@ filter = "binary(effect_lights_census)"
 threads-required = 17
 
 [[profile.default.overrides]]
-filter = "binary(shibuya_swatch) | binary(shibuya_ground)"
+filter = "binary(shibuya_swatch) | binary(shibuya_ground) | binary(shibuya_altuv)"
 threads-required = 14
 
 [[profile.default.overrides]]

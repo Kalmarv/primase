@@ -6,17 +6,19 @@
     reason = "a test over data it builds itself"
 )]
 
+mod lowering;
+
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
     ColorSpace, Entity, Instance, Lods, MaterialVariants, Mesh, Name, Primitive, Semantic, Stream, TexFormat,
-    TexRole, Texture, Topology, World,
+    TexRole, Texture, Topology, Transform, World,
 };
 use primase_forzatech::components::{
     ForzaMaterial, InstanceLevel, MaterialLevel, MaterialTexture, MaterialTextures, Parameter, Placement,
     PlacementOrigin, ShaderLevel, SwatchTint, Value,
 };
-use primase_forzatech::passes::{BakeForzaSwatchTint, LowerForzaMaterials};
+use primase_forzatech::passes::BakeForzaSwatchTint;
 use primase_foundations::color::{linear_to_srgb8, srgb8_to_linear};
 use std::collections::BTreeSet;
 
@@ -161,6 +163,7 @@ fn place(world: &mut World, prototype: Entity, origin: PlacementOrigin) -> Entit
             material_variant: 0,
         },
     );
+    world.insert(e, Transform::IDENTITY);
     e
 }
 
@@ -212,7 +215,7 @@ fn the_palette_is_read_at_the_vertex_green_and_the_placements_byte() {
     let b0 = place(&mut world, b, rule(0));
 
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
     assert!(world.has::<SwatchTint>(material));
     let mut log = PassLog::default();
     BakeForzaSwatchTint.run(&mut world, &mut log).unwrap();
@@ -324,7 +327,7 @@ fn a_base_colour_texture_is_baked_with_the_tint_by_its_alpha() {
     let a = prototype(&mut world, material, &[[0.0, 1.0]]);
     let a0 = place(&mut world, a, rule(0));
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
     let mut log = PassLog::default();
     BakeForzaSwatchTint.run(&mut world, &mut log).unwrap();
 
@@ -381,7 +384,7 @@ fn a_prototype_with_levels_of_detail_is_left_untinted_and_counted() {
     );
     place(&mut world, a, rule(0));
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
     let mut log = PassLog::default();
     BakeForzaSwatchTint.run(&mut world, &mut log).unwrap();
     assert!(!world.has::<MaterialVariants>(a));

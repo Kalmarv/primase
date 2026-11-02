@@ -140,7 +140,9 @@ mod uber_roaddecal;
 mod uberlod;
 mod window_linecastroom;
 
-use crate::components::{EmissionVariation, ForzaMaterial, MaterialTextures, PlanarUv, SwatchTint, Value};
+use crate::components::{
+    EmissionByBaseColour, EmissionVariation, ForzaMaterial, MaterialTextures, PlanarUv, SwatchTint, Value,
+};
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
@@ -775,6 +777,7 @@ impl Pass for LowerForzaMaterials {
             PlanarUv::NAME,
             SwatchTint::NAME,
             EmissionVariation::NAME,
+            EmissionByBaseColour::NAME,
             Texture::NAME,
             Name::NAME,
             DrawOrder::NAME,

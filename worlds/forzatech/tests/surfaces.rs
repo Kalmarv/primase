@@ -6,7 +6,9 @@
     reason = "a test over data it builds itself"
 )]
 
-use primase_core::pass::{Pass, PassLog};
+mod lowering;
+
+use primase_core::pass::PassLog;
 use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform, Wrap};
 use primase_core::{
     ColorSpace, Entity, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, Topology, World,
@@ -15,7 +17,6 @@ use primase_forzatech::components::{
     EmissionVariation, ForzaMaterial, InstanceLevel, MaterialLevel, MaterialTexture, MaterialTextures,
     Parameter, ShaderLevel, Value,
 };
-use primase_forzatech::passes::LowerForzaMaterials;
 use std::collections::BTreeMap;
 
 fn texture(world: &mut World, name: &str, space: ColorSpace, width: u32, texels: &[[u8; 4]]) -> Entity {
@@ -126,7 +127,7 @@ fn triangle(world: &mut World, material: Entity, sets: &[u8]) {
 
 fn run(world: &mut World) -> PassLog {
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(world, &mut log).unwrap();
+    lowering::lower(world, &mut log);
     log
 }
 

@@ -12,6 +12,7 @@
 )]
 
 mod inputs;
+mod lowering;
 
 use forzatech_formats::world::{Area, Season};
 use inputs::{Game, install_file};
@@ -20,7 +21,7 @@ use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, LodChoice, Mesh, SelectLod};
 use primase_forzatech::components::EmissionByBaseColour;
-use primase_forzatech::passes::{BakeForzaEmissionProduct, LowerForzaMaterials, SelectForzaMainView};
+use primase_forzatech::passes::{BakeForzaEmissionProduct, SelectForzaMainView};
 use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
 use primase_forzatech::read::placements::Scope;
@@ -62,7 +63,7 @@ fn shibuya_altuv_emission() {
     .run(&mut part, &mut log)
     .unwrap();
     SelectForzaMainView.run(&mut part, &mut log).unwrap();
-    LowerForzaMaterials.run(&mut part, &mut log).unwrap();
+    lowering::lower(&mut part, &mut log);
 
     let before = drawn(&part);
     let marked: BTreeSet<Entity> = part

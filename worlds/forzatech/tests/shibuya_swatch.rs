@@ -10,6 +10,7 @@
 )]
 
 mod inputs;
+mod lowering;
 
 use forzatech_formats::world::{Area, Season};
 use inputs::{Game, install_file};
@@ -18,9 +19,7 @@ use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Component, Entity, Instance, LodChoice, Mesh, SelectLod, Semantic};
 use primase_forzatech::components::{EmissionVariation, SwatchTint};
-use primase_forzatech::passes::{
-    ApplyForzaEmissionVariation, BakeForzaSwatchTint, LowerForzaMaterials, SelectForzaMainView,
-};
+use primase_forzatech::passes::{ApplyForzaEmissionVariation, BakeForzaSwatchTint, SelectForzaMainView};
 use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
 use primase_forzatech::read::placements::Scope;
@@ -60,7 +59,7 @@ fn run(folder: &std::path::Path, bake: bool) -> Prepared {
     .unwrap();
     // what the main view does not draw is gone before materials are made of it
     SelectForzaMainView.run(&mut part, &mut log).unwrap();
-    LowerForzaMaterials.run(&mut part, &mut log).unwrap();
+    lowering::lower(&mut part, &mut log);
     if bake {
         for (what, n) in log
             .counts

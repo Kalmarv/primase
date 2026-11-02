@@ -7,6 +7,8 @@
     reason = "a test over data it builds itself"
 )]
 
+mod lowering;
+
 use primase_core::layered::{Channel, Composition, Source};
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::{PbrMaterial, UvTransform};
@@ -18,7 +20,7 @@ use primase_forzatech::components::{
     ForzaMaterial, InstanceLevel, MaterialLevel, MaterialTexture, MaterialTextures, Parameter, PlanarUv,
     ShaderLevel, Value,
 };
-use primase_forzatech::passes::{LowerForzaMaterials, LowerForzaPlanarUv};
+use primase_forzatech::passes::LowerForzaPlanarUv;
 use std::collections::BTreeMap;
 
 fn texture(world: &mut World, name: &str, space: ColorSpace, texel: [u8; 4]) -> Entity {
@@ -141,7 +143,7 @@ fn environment_plot_is_the_environment_rule_with_its_own_run_time_terms_named() 
         ]),
     );
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
 
     let pbr = world.get::<PbrMaterial>(e).unwrap();
     let base = pbr.base_color_texture.unwrap();
@@ -214,7 +216,7 @@ fn terrain_is_mapped_by_position_and_its_world_normal_becomes_a_planar_tangent_o
         ]),
     );
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
 
     let pbr = world.get::<PbrMaterial>(e).unwrap();
     assert_eq!(world.get::<PlanarUv>(e).unwrap().texcoord, 3);
@@ -317,7 +319,7 @@ fn terrain_albedo_follows_the_larger_map() {
         ]),
     );
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
     let pbr = world.get::<PbrMaterial>(e).unwrap();
     let lit = world
         .get::<Texture>(pbr.base_color_texture.unwrap().texture)
@@ -398,7 +400,7 @@ fn planar_coordinates_are_each_placements_own() {
     let a = at(&mut world, [100.0, 0.0, -200.0]);
     let b = at(&mut world, [-3000.0, 50.0, 7000.0]);
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
     LowerForzaPlanarUv.run(&mut world, &mut log).unwrap();
 
     let pa = world.get::<Instance>(a).unwrap().prototype;
@@ -473,7 +475,7 @@ fn a_two_layer_road_is_a_layered_material_over_its_layers_coordinates() {
     world.insert(e, road(vec![parameter("Blend2", 30, Value::Int(1))]));
     world.insert(e, textures.clone());
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
 
     let layered = world.get::<LayeredMaterial>(e).unwrap();
     layered.verify(e, &world).unwrap();
@@ -562,7 +564,7 @@ fn a_one_layer_road_is_a_plain_material_with_its_layers_coordinates_on_its_slots
     world.insert(e, road(Vec::new()));
     world.insert(e, textures);
     let mut log = PassLog::default();
-    LowerForzaMaterials.run(&mut world, &mut log).unwrap();
+    lowering::lower(&mut world, &mut log);
     assert!(!world.has::<LayeredMaterial>(e));
     let pbr = world.get::<PbrMaterial>(e).unwrap();
     for slot in [
