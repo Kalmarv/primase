@@ -828,7 +828,7 @@ impl Pass for LowerForzaMaterials {
                     tally[1] += count as u64;
                     continue;
                 };
-                for t in indices.chunks_exact(3) {
+                for t in indices.as_chunks::<3>().0 {
                     let red = t.iter().map(|i| c.get(*i as usize).map_or(1.0, |v| v[0]));
                     let (low, high) =
                         red.fold((true, true), |(low, high), x| (low && x == 0.0, high && x >= 1.0));
