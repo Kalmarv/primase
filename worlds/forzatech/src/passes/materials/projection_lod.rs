@@ -20,7 +20,9 @@
 //! the same cell, `v = sat((y - EmissiveVariationMin) / (EmissiveVariationMax - EmissiveVariationMin))` of the
 //! instance variation's second value `y` and `g(d)` the distance encoding (see `emissiveonly`). The rule: the texture at
 //! the cell as the emissive map, the scale as the emissive factor (what is above 1 in `emissive_strength`), when the
-//! texture holds any light: most materials bind the black `ubershader_default_emissive`, and those emit nothing. `v` is
+//! texture holds any light: most materials bind the black `ubershader_default_emissive`, and those emit nothing. A
+//! floating-point map holds radiance: its 8-bit copy is divided by its largest value and the strength takes that back,
+//! counted (as in `environment`). `v` is
 //! the placement's: the material carries its ramp ([`crate::components::EmissionVariation`]) and
 //! `apply-forzatech-emission-variation` applies it. Left out, named: `g(d)` and the sky preset's emissive scale
 //! (run-time).

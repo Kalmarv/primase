@@ -294,6 +294,8 @@ struct Lowering {
     lit: BTreeMap<Entity, bool>,
     /// The largest value of each floating-point emission texture above 1 (an emission map holds radiance), read once.
     peaks: BTreeMap<Entity, f32>,
+    /// The 8-bit copy of each floating-point emission texture divided by its peak, made once.
+    divided: BTreeMap<Entity, Entity>,
     /// The largest tilt of a signed normal map that is flat (see [`FLAT_TILT`]), by texture; `None` for one that is not.
     flat: BTreeMap<Entity, Option<f64>>,
 }
@@ -412,6 +414,21 @@ impl Lowering {
         })
     }
 
+    /// The 8-bit copy of the floating-point emission texture `texture` divided by `peak`, made once.
+    fn divided_emission(&mut self, w: &mut World, texture: Entity, peak: f32) -> Result<Entity, String> {
+        if let Some(&copy) = self.divided.get(&texture) {
+            return Ok(copy);
+        }
+        let source = w.get::<Texture>(texture).ok_or("it has no pixels")?;
+        let made = primase_image::texture_rgba8_divided(source, peak).map_err(|e| e.to_string())?;
+        let name = w.get::<Name>(texture).map(|n| n.0.clone()).unwrap_or_default();
+        let copy = w.spawn();
+        w.insert(copy, Name(format!("{name} (emission / peak)")));
+        w.insert(copy, made);
+        self.divided.insert(texture, copy);
+        Ok(copy)
+    }
+
     /// Whether the emission texture `texture` holds any light: a texel of level 0 whose colour is not black. Read once per
     /// texture; a texture with no pixels counts as dark.
     fn emits_light(&mut self, w: &World, texture: Entity) -> bool {
@@ -420,6 +437,8 @@ impl Lowering {
         }
         let mut lit = false;
         if let Some(t) = w.get::<Texture>(texture) {
+            // radiance below 1/510 would round to black as 8-bit: a floating-point map is lit by any positive value
+            let peak = primase_image::float_peak(t, 0).ok().flatten();
             let found = primase_image::map_rgba8_levels(
                 t,
                 0..1,
@@ -433,7 +452,9 @@ impl Lowering {
                     Ok(texel.rgba)
                 },
             );
-            if found.is_err() {
+            if let Some(peak) = peak {
+                lit = peak > 0.0;
+            } else if found.is_err() {
                 lit = false;
             }
         }
@@ -468,10 +489,32 @@ impl Lowering {
                     {
                         tex.role = TexRole::Color;
                     }
+                    // a floating-point map holds radiance: its 8-bit copy is divided by its largest value, which the
+                    // strength takes back
+                    let peak = self.emission_peak(w, t);
+                    let map = if peak > 1.0 {
+                        match self.divided_emission(w, t, peak) {
+                            Ok(copy) => {
+                                log.count(HDR_EMISSION, 1);
+                                copy
+                            }
+                            Err(why) => {
+                                approximate(
+                                    log,
+                                    e,
+                                    &format!("{family} emission map not read: {why}"),
+                                    triangles,
+                                );
+                                return;
+                            }
+                        }
+                    } else {
+                        t
+                    };
                     let strength = scale.max(1.0);
-                    pbr.emissive_texture = Some(TextureRef::new(t));
+                    pbr.emissive_texture = Some(TextureRef::new(map));
                     pbr.emissive = [scale / strength; 3];
-                    pbr.emissive_strength = strength;
+                    pbr.emissive_strength = strength * if map == t { 1.0 } else { peak };
                     approximate(
                         log,
                         e,
@@ -888,6 +931,7 @@ impl Pass for LowerForzaMaterials {
             rooms: BTreeMap::new(),
             lit: BTreeMap::new(),
             peaks: BTreeMap::new(),
+            divided: BTreeMap::new(),
             flat: BTreeMap::new(),
         };
         let mut left: BTreeMap<String, (u64, u64)> = BTreeMap::new();

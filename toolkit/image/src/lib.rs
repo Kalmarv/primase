@@ -32,7 +32,7 @@ mod rgba8;
 pub use qoi::{Qoi, QoiChannels, QoiColorspace, read_qoi};
 pub use rgba8::{
     LOWER_TEXTURES_RGBA8, LowerTexturesRgba8, SignedData, float_peak, rgba8_exact,
-    texture_level_rgba8_divided,
+    texture_level_rgba8_divided, texture_rgba8_divided,
 };
 mod texture;
 mod tga;

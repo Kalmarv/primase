@@ -106,6 +106,23 @@ pub fn texture_level_rgba8_divided(t: &Texture, level: usize, divisor: f32) -> R
     })
 }
 
+/// `t` as an [`TexFormat::Rgba8Unorm`] texture, every stored level read by [`texture_level_rgba8_divided`] with
+/// `divisor`; its colour space, role and normal convention are kept.
+pub fn texture_rgba8_divided(t: &Texture, divisor: f32) -> Result<Texture, Error> {
+    let mut levels = Vec::with_capacity(t.levels.len());
+    for i in 0..t.levels.len() {
+        match texture_level_rgba8_divided(t, i, divisor)?.samples {
+            Samples::U8(bytes) => levels.push(bytes),
+            _ => return Err(Error::Invalid("a level that is not 8-bit".into())),
+        }
+    }
+    Ok(Texture {
+        format: TexFormat::Rgba8Unorm,
+        levels,
+        ..t.clone()
+    })
+}
+
 /// What `lower-textures-rgba8` does with a signed texture that is not a normal map.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SignedData {

@@ -17,7 +17,7 @@ use inputs::{Game, install_file};
 use primase_core::convert::Reader;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
-use primase_core::{Component, Entity, Instance, LodChoice, Mesh, SelectLod, Semantic};
+use primase_core::{Component, Entity, Instance, LodChoice, Mesh, SelectLod, Semantic, Texture};
 use primase_forzatech::components::{EmissionVariation, SwatchTint};
 use primase_forzatech::passes::{ApplyForzaEmissionVariation, BakeForzaSwatchTint, SelectForzaMainView};
 use primase_forzatech::read::convert::ForzaReader;
@@ -69,6 +69,17 @@ fn run(folder: &std::path::Path, bake: bool) -> Prepared {
             .filter(|(w, _)| w.contains("emi") || w.contains("uberlod"))
         {
             println!("lowering: {what}: {n}");
+        }
+    }
+    // an emission map is 8-bit by now (a floating-point one divided by its largest value, counted), except the ones
+    // `rebase-texcoord-set` has still to draw (on TEXCOORD4)
+    for (e, pbr) in part.iter::<PbrMaterial>() {
+        if let Some(r) = pbr.emissive_texture.filter(|r| r.texcoord != 4) {
+            let format = part.get::<Texture>(r.texture).map(|t| t.format);
+            assert!(
+                format.is_none_or(primase_image::rgba8_exact),
+                "{e:?} has a {format:?} emission map"
+            );
         }
     }
     // every material a primitive draws names its shader family (the undrawn Default.materialbin ones went with their

@@ -570,6 +570,61 @@ fn projection_lod_reads_its_atlas_cell_and_signed_roughness_metalness() {
     assert_eq!(log.counts["projection_lod materials lowered"], 1);
 }
 
+/// A floating-point emission map holds radiance: the material draws an 8-bit copy divided by its largest value, the
+/// emissive strength takes it back.
+#[test]
+fn a_floating_point_emission_map_is_divided_by_its_largest_value() {
+    let mut world = World::new();
+    let glow = world.spawn();
+    let texels: [[f32; 4]; 4] = [
+        [8.0, 2.0, 0.0, 1.0],
+        [4.0, 2.0, 0.0, 1.0],
+        [2.0, 2.0, 0.0, 1.0],
+        [0.0, 2.0, 0.0, 1.0],
+    ];
+    world.insert(
+        glow,
+        Texture {
+            width: 2,
+            height: 2,
+            format: TexFormat::Rgba32Float,
+            levels: vec![texels.iter().flatten().flat_map(|v| v.to_le_bytes()).collect()],
+            color_space: ColorSpace::Linear,
+            role: TexRole::Color,
+            normal: None,
+        },
+    );
+    let e = world.spawn();
+    world.insert(
+        e,
+        material(
+            "projection_lod",
+            "Standard",
+            vec![
+                tex("EmissiveTexture", 4),
+                parameter("Emissive", 12, Value::Int(1)),
+                float("EmissiveTextureScale", 13, 2.5),
+            ],
+        ),
+    );
+    world.insert(e, MaterialTextures(vec![bound(4, Some(glow))]));
+    let mut log = PassLog::default();
+    lowering::lower(&mut world, &mut log);
+    let pbr = world.get::<PbrMaterial>(e).unwrap();
+    // the scale 2.5 times the peak 8
+    assert_eq!((pbr.emissive, pbr.emissive_strength), ([1.0; 3], 20.0));
+    let copy = world
+        .get::<Texture>(pbr.emissive_texture.unwrap().texture)
+        .unwrap();
+    assert_eq!(copy.format, TexFormat::Rgba8Unorm);
+    let red: Vec<u8> = copy.levels[0].chunks(4).map(|t| t[0]).collect();
+    assert_eq!(red, vec![255, 128, 64, 0], "the ratios of the map are kept");
+    assert_eq!(
+        log.counts["floating-point emission maps divided by their largest value, which multiplies the emissive strength"],
+        1
+    );
+}
+
 /// A material whose emission map is black emits nothing, and says so as a count rather than an approximation.
 #[test]
 fn projection_lod_with_a_black_emission_map_emits_nothing() {
