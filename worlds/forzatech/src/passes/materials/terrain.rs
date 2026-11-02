@@ -19,18 +19,26 @@
 //!   scene (`scenet7[34]`), and the sand, wetness and snow terms.
 //!
 //! The rule: the three textures at the planar coordinates ([`PlanarUv`]: `TexCoord(3)` holds `(x, z)`, the slot's
-//! transform the family's `BlendMapScale` and `BlendMapOffset`); the albedo as it is, the occlusion
-//! `TerrainColourTexture.a` squared in its own slot, the roughness `r / 0.93` and no metal, and the normal as a
+//! transform the family's `BlendMapScale` and `BlendMapOffset`); the albedo `TerrainNormalTexture.rgb` times
+//! `TerrainColourTexture.a` squared, baked into one base colour map (the squared alpha is a factor of the shader's
+//! albedo, not an occlusion term of its own: it has no scene constant, so it is not carried by the occlusion slot,
+//! which a consumer may draw as ambient occlusion or not at all), the roughness `r / 0.93` and no metal, and the normal as a
 //! tangent-space map over the planar coordinates (see [`Derived::WorldNormalXz`]: red `x`, green `-z`). A glTF
 //! consumer rebuilds the tangent frame from those coordinates, so the normal agrees with the shader's world-space one
 //! where the terrain faces up and tilts with the surface elsewhere (named). Left out by name: the skirt, deformable
 //! tracks, the custom surfaces, snow, noise and parallax permutations' switches; wetness, snow, sand lighting and the
 //! twinkle are run-time state.
-use super::{Binding, Derived, Lowering, PLANAR_TEXCOORD, Params, approximate, left_out};
+use super::uber_roaddecal::{decoded_levels, texel_of};
+use super::{Binding, Derived, Lowering, PLANAR_TEXCOORD, Params, approximate, left_out, seen};
 use crate::components::{ForzaMaterial, MaterialTextures, PlanarUv};
 use primase_core::pass::PassLog;
 use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
-use primase_core::{ColorSpace, Entity, TexRole, Texture, World};
+use primase_core::{ColorSpace, Entity, Name, TexRole, Texture, World};
+use primase_foundations::color::linear_to_srgb8;
+use primase_image::{TextureMetadata, map_rgba8_levels};
+
+/// The key of a terrain albedo among the baked textures.
+const TERRAIN_ALBEDO: u32 = 0x7e44_a1b0;
 
 /// The roughness scale of the terrain shaders: `1 / 0.93`.
 const ROUGHNESS_SCALE: f32 = 1.075_268_9;
@@ -48,6 +56,72 @@ const LEFT_OUT: &[(&str, &str)] = &[
 ];
 
 impl Lowering {
+    /// The terrain's albedo: `colour`'s RGB (sRGB) times the squared alpha of `shade`, as an sRGB map, made once per
+    /// pair. `shade` is read at the nearest texel when its size differs (counted). `None` where a texture has no pixels.
+    fn terrain_albedo(
+        &mut self,
+        w: &mut World,
+        colour: Entity,
+        shade: Entity,
+        log: &mut PassLog,
+    ) -> Result<Option<Entity>, String> {
+        let key = (colour, vec![TERRAIN_ALBEDO], Some(shade));
+        if let Some(&e) = self.baked.get(&key) {
+            return Ok(Some(e));
+        }
+        let (Some(c), Some(s)) = (w.get::<Texture>(colour), w.get::<Texture>(shade)) else {
+            log.count("terrain albedo maps left out: no pixels", 1);
+            return Ok(None);
+        };
+        let shade_levels = decoded_levels(s).map_err(|e| format!("decoding a terrain colour source: {e}"))?;
+        if shade_levels.is_empty() || c.levels.is_empty() {
+            log.count("terrain albedo maps left out: no level", 1);
+            return Ok(None);
+        }
+        let resampled = (s.width, s.height) != (c.width, c.height);
+        let space = c.color_space;
+        let texture = map_rgba8_levels(
+            c,
+            0..c.levels.len(),
+            TextureMetadata {
+                color_space: ColorSpace::Srgb,
+                role: TexRole::Color,
+                normal: None,
+            },
+            |texel| {
+                let [r, g, b, _] = texel.rgba;
+                let alpha = texel_of(
+                    &shade_levels,
+                    texel.level,
+                    texel.x,
+                    texel.y,
+                    texel.width,
+                    texel.height,
+                );
+                let a2 = (f64::from(alpha[3]) / 255.0).powi(2);
+                let lit = |x: u8| linear_to_srgb8(seen(space, x) * a2);
+                Ok([lit(r), lit(g), lit(b), 255])
+            },
+        )
+        .map_err(|e| format!("baking a terrain albedo: {e}"))?;
+        let name = w.get::<Name>(colour).map(|n| n.0.clone()).unwrap_or_default();
+        let e = w.spawn();
+        w.insert(e, Name(format!("{name} (terrain albedo)")));
+        w.insert(e, texture);
+        log.count(
+            "terrain albedo textures made of the colour times the squared alpha of a second map",
+            1,
+        );
+        if resampled {
+            log.count(
+                "terrain albedo textures whose alpha map was read at the nearest texel of another size",
+                1,
+            );
+        }
+        self.baked.insert(key, e);
+        Ok(Some(e))
+    }
+
     /// The `terr_mega` and `terr_distant` families' material.
     pub(super) fn terrain(
         &mut self,
@@ -75,35 +149,45 @@ impl Lowering {
         }
         let mut pbr = PbrMaterial::default();
 
+        let shade = p.texture("TerrainColourTexture");
         match p.texture("TerrainNormalTexture") {
             Binding::Texture(t) => {
-                pbr.base_color_texture = Some(slot(t));
-                if let Some(tex) = w.get_mut::<Texture>(t)
-                    && tex.role == TexRole::Other
-                    && tex.color_space == ColorSpace::Srgb
-                {
-                    tex.role = TexRole::Color;
+                // the albedo is the colour times the squared alpha of the colour map; without that map, the colour alone
+                let baked = match shade {
+                    Binding::Texture(s) => self.terrain_albedo(w, t, s, log)?,
+                    Binding::Absent | Binding::None => None,
+                };
+                if let Some(baked) = baked {
+                    pbr.base_color_texture = Some(slot(baked));
+                } else {
+                    pbr.base_color_texture = Some(slot(t));
+                    if let Some(tex) = w.get_mut::<Texture>(t)
+                        && tex.role == TexRole::Other
+                        && tex.color_space == ColorSpace::Srgb
+                    {
+                        tex.role = TexRole::Color;
+                    }
+                    approximate(
+                        log,
+                        e,
+                        "terrain albedo without the colour map's squared alpha factor",
+                        triangles,
+                    );
                 }
             }
             Binding::Absent => approximate(log, e, "base colour texture in no archive: white", triangles),
             Binding::None => approximate(log, e, "no base colour texture: white", triangles),
         }
 
-        match p.texture("TerrainColourTexture") {
-            Binding::Texture(t) => {
-                match self.derive(w, t, Derived::WorldNormalXz, log)? {
-                    Some(normal) => {
-                        if let Some(map) = self.normal_slot(w, e, normal, triangles, log, slot)? {
-                            pbr.normal_texture = Some(map);
-                        }
+        match shade {
+            Binding::Texture(t) => match self.derive(w, t, Derived::WorldNormalXz, log)? {
+                Some(normal) => {
+                    if let Some(map) = self.normal_slot(w, e, normal, triangles, log, slot)? {
+                        pbr.normal_texture = Some(map);
                     }
-                    None => approximate(log, e, "normal map not lowered", triangles),
                 }
-                match self.derive(w, t, Derived::SquaredAlphaOcclusion, log)? {
-                    Some(occlusion) => pbr.occlusion_texture = Some(slot(occlusion)),
-                    None => approximate(log, e, "occlusion map not lowered", triangles),
-                }
-            }
+                None => approximate(log, e, "normal map not lowered", triangles),
+            },
             Binding::Absent | Binding::None => {
                 approximate(log, e, "no terrain colour map: no normal map", triangles)
             }

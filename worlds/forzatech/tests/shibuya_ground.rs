@@ -16,14 +16,34 @@ use inputs::{Game, install_file};
 use primase_core::convert::Reader;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
-use primase_core::{Component, Entity, LayeredMaterial, Mesh, Semantic, Stream};
-use primase_forzatech::components::ForzaMaterial;
+use primase_core::{Component, Entity, LayeredMaterial, Mesh, Semantic, Stream, Texture};
+use primase_forzatech::components::{ForzaMaterial, MaterialTextures, Value};
 use primase_forzatech::passes::{LowerForzaMaterials, LowerForzaPlanarUv};
 use primase_forzatech::read::convert::ForzaReader;
 use primase_forzatech::read::open::Track;
 use primase_forzatech::read::placements::Scope;
 use primase_forzatech::read::textures::TextureScope;
+use primase_image::{TextureMetadata, map_rgba8_levels};
 use std::collections::BTreeMap;
+
+/// The mean of each channel of the stored bytes of level 0 of `t`.
+fn mean_bytes(t: &Texture) -> [f64; 3] {
+    let (mut sum, mut n) = ([0f64; 3], 0f64);
+    let meta = TextureMetadata {
+        color_space: t.color_space,
+        role: t.role,
+        normal: None,
+    };
+    map_rgba8_levels(t, 0..1, meta, |texel| {
+        for (s, b) in sum.iter_mut().zip(texel.rgba) {
+            *s += f64::from(b);
+        }
+        n += 1.0;
+        Ok(texel.rgba)
+    })
+    .unwrap();
+    sum.map(|s| s / n)
+}
 
 fn scope() -> Scope {
     Scope {
@@ -99,6 +119,51 @@ fn shibuya_ground() {
     for (e, l) in part.iter::<LayeredMaterial>() {
         l.verify(e, &part).unwrap();
     }
+
+    // the terrain's albedo is the colour map times the squared alpha of its colour map, baked: the road's near-white
+    // colour (mean 254, 243, 233 over the box's one terrain map) is darkened to the asphalt the squared alpha makes of
+    // it (mean 86, 82, 78), and no terrain material carries an occlusion slot
+    let mut baked_terrain = 0;
+    for (e, pbr) in part.iter::<PbrMaterial>() {
+        let Some(m) = part.get::<ForzaMaterial>(e) else {
+            continue;
+        };
+        if !matches!(
+            m.shader.as_ref().map(|s| s.family.as_str()),
+            Some("terr_mega" | "terr_distant")
+        ) {
+            continue;
+        }
+        assert!(pbr.occlusion_texture.is_none(), "{e:?} has an occlusion slot");
+        let bound = part.get::<MaterialTextures>(e).unwrap();
+        let diffuse = m
+            .resolved()
+            .into_iter()
+            .find_map(|(_, p)| match (&p.name, &p.value) {
+                (Some(n), Value::Texture { path_hash, .. }) if n == "TerrainNormalTexture" => bound
+                    .0
+                    .iter()
+                    .find(|b| b.path_hash == *path_hash)
+                    .and_then(|b| b.texture),
+                _ => None,
+            })
+            .unwrap();
+        let baked = pbr.base_color_texture.unwrap().texture;
+        assert_ne!(baked, diffuse, "{e:?} is drawn with the unshaded colour map");
+        let (source, lit) = (
+            mean_bytes(part.get::<Texture>(diffuse).unwrap()),
+            mean_bytes(part.get::<Texture>(baked).unwrap()),
+        );
+        println!("terrain albedo mean {source:.0?} baked to {lit:.0?}");
+        for (s, l) in source.iter().zip(lit) {
+            assert!(
+                l < s * 0.5,
+                "{e:?}: baked {lit:?} from {source:?} is not darkened"
+            );
+        }
+        baked_terrain += 1;
+    }
+    assert!(baked_terrain > 0, "no terrain material was checked");
 
     // where the planar coordinates put the terrain on its textures: the family's own scale and offset, over each vertex
     let mut slots: BTreeMap<Entity, ([f32; 2], [f32; 2])> = BTreeMap::new();

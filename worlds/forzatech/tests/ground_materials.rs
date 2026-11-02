@@ -219,7 +219,6 @@ fn terrain_is_mapped_by_position_and_its_world_normal_becomes_a_planar_tangent_o
     let pbr = world.get::<PbrMaterial>(e).unwrap();
     assert_eq!(world.get::<PlanarUv>(e).unwrap().texcoord, 3);
     let base = pbr.base_color_texture.unwrap();
-    assert_eq!(base.texture, albedo);
     assert_eq!(base.texcoord, 3);
     assert_eq!(
         base.transform,
@@ -229,11 +228,20 @@ fn terrain_is_mapped_by_position_and_its_world_normal_becomes_a_planar_tangent_o
             rotation: 0.0
         })
     );
-    // the occlusion is the colour map's alpha squared: (128/255)^2 = 0.252
-    let occlusion = world
-        .get::<Texture>(pbr.occlusion_texture.unwrap().texture)
-        .unwrap();
-    assert_eq!(occlusion.levels[0], vec![64, 64, 64, 255]);
+    // the albedo is the colour times the colour map's alpha squared, (128/255)^2 = 0.252, in linear light: the sRGB bytes
+    // (200, 100, 50) are linear 0.578, 0.127, 0.032, which become 0.1456, 0.0321, 0.0081, bytes (106, 50, 22)
+    assert_ne!(base.texture, albedo);
+    let lit = world.get::<Texture>(base.texture).unwrap();
+    assert_eq!((lit.color_space, lit.role), (ColorSpace::Srgb, TexRole::Color));
+    for (got, want) in lit.levels[0][..4].iter().zip([106u8, 50, 22, 255]) {
+        assert!(got.abs_diff(want) <= 1, "{:?}", &lit.levels[0][..4]);
+    }
+    // and no occlusion slot: the squared alpha is the albedo's, not an occlusion
+    assert!(pbr.occlusion_texture.is_none());
+    assert_eq!(
+        log.counts["terrain albedo textures made of the colour times the squared alpha of a second map"],
+        1
+    );
     // the roughness is the gloss map's red over 0.93, no metal: 186/255 / 0.93 = 0.784
     let mr = pbr.metallic_roughness_texture.unwrap();
     assert_eq!(mr.texcoord, 3);

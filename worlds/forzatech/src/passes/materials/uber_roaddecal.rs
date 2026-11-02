@@ -76,14 +76,14 @@ fn overlay(a: f64, b: f64) -> f64 {
 }
 
 /// One decoded level of a map: its size and its RGBA8 texels, row by row.
-struct Level {
+pub(super) struct Level {
     width: u32,
     height: u32,
     texels: Vec<u8>,
 }
 
 /// The levels of `t` decoded to RGBA8 as stored (no colour transfer).
-fn decoded_levels(t: &Texture) -> Result<Vec<Level>, String> {
+pub(super) fn decoded_levels(t: &Texture) -> Result<Vec<Level>, String> {
     let mut levels: Vec<Level> = Vec::new();
     let identity = TextureMetadata {
         color_space: t.color_space,
@@ -107,7 +107,7 @@ fn decoded_levels(t: &Texture) -> Result<Vec<Level>, String> {
 
 /// The texel at (`x`, `y`) of a map of `width` by `height`, read nearest from the stored level of `levels` that stands
 /// for `level` (the last one when the map stores fewer).
-fn texel_of(levels: &[Level], level: usize, x: u32, y: u32, width: u32, height: u32) -> [u8; 4] {
+pub(super) fn texel_of(levels: &[Level], level: usize, x: u32, y: u32, width: u32, height: u32) -> [u8; 4] {
     let Some(l) = levels.get(level).or(levels.last()) else {
         return [0; 4];
     };

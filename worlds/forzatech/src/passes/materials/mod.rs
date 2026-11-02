@@ -85,7 +85,10 @@
 //! `uber_road` 140, 66,426, of which 52, 9,157 are a `core.layered` of two or three layers. The terrain families and
 //! the roads' planar layers are mapped by position: `lower-forzatech-planar-uv` writes `TexCoord(3)` for 11 placements
 //! (144 primitives), and all 35,858 vertices of the terrain land on their textures through the rule's own scale and
-//! offset (the frame, the map scale and the offset agree). Left out by name (materials, triangles): `environment_plot`
+//! offset (the frame, the map scale and the offset agree). The 25 terrain materials all read one pair of maps (the box lies
+//! in one submap): its colour map is near white (mean 254, 243, 233) and the squared alpha of its colour map (mean 0.105,
+//! under 0.5 on every texel) is the shader's albedo factor, so one albedo is baked of the two (mean 86, 82, 78) and
+//! the terrain carries no occlusion slot. Left out by name (materials, triangles): `environment_plot`
 //! terrain snow and wetness 286, 91,811, macro occlusion 286, 91,811, lightmap 12, 126; `terr_*` the world-space normal
 //! taken as a tangent-space one over the planar coordinates 25, 24,943; `uber_road` the tint overlay 140, 66,426, frost
 //! and snow 140, 66,426, the modulate maps 94, 18,340, the blend's smoothstep taken as a linear ramp 52, 9,157.
@@ -304,8 +307,6 @@ enum Derived {
     RoughnessMetalRg,
     /// A roughness in the red channel times a scale (the `f32`'s bits): G roughness, B 0 (no metal), R 1.
     RedRoughness(u32),
-    /// An occlusion in the alpha channel, squared: R occlusion.
-    SquaredAlphaOcclusion,
     /// A world-space normal's `x` and `z` (the game's frame) in red and green, as a tangent-space normal map over
     /// coordinates `(x, z)` of the game's ground plane: red `x`, green `-z` (the world's frame negates `z`, and
     /// the coordinates' `v` runs down the image), blue the rebuilt `y`.
@@ -506,7 +507,6 @@ impl Lowering {
             Derived::AlphaHeight => ("height-in-alpha", "height"),
             Derived::RoughnessMetalRg => ("roughness-metalness-in-rg", "roughness metallic"),
             Derived::RedRoughness(_) => ("roughness-in-red", "roughness"),
-            Derived::SquaredAlphaOcclusion => ("occlusion-in-alpha, squared,", "occlusion"),
             Derived::WorldNormalXz => ("world-space normal", "normal"),
             Derived::OcclusionRoughnessRed => ("occlusion-in-blue roughness-in-red", "occlusion roughness"),
             Derived::RedRoughnessMetal => ("roughness-in-red", "roughness metallic"),
@@ -565,10 +565,6 @@ impl Lowering {
                         [o, o, o, 255]
                     }
                     Derived::AlphaOcclusion | Derived::AlphaHeight => [a, a, a, 255],
-                    Derived::SquaredAlphaOcclusion => {
-                        let o = byte((f64::from(a) / 255.0).powi(2));
-                        [o, o, o, 255]
-                    }
                     Derived::RedRoughness(scale) => [
                         255,
                         byte(seen(space, r) * f64::from(f32::from_bits(scale))),
