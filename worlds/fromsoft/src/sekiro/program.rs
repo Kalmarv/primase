@@ -16,6 +16,7 @@ use primase_animation::simulation_schedule::ConfigureSimulations;
 use primase_core::Component;
 use primase_core::SelectLod;
 use primase_core::pass::pass_text;
+use primase_image::EncodeTextures;
 
 use super::passes::bake_materials::BakeFromSoftMaterials;
 use super::passes::collision::LowerFromSoftCollision;
@@ -100,7 +101,8 @@ pub struct IrradiancePackage {
 /// environment (after the draw-param sample, where there is one), the game's tone mapping, the shader resolution, the
 /// water bodies measured from the resolved programs, the layer bake (Sekiro, where the program bakes), the materials, the release of the read's stored models and texture
 /// files (where the program releases them), the materials' surface bake, the lights, the sky (where the read brought it
-/// in), the extras, the map records; then the irradiance, the effects and the entities' names. The
+/// in), the extras, the map records; then the irradiance, the effects, the entities' names and the textures' stage
+/// (where the program states one). The
 /// environment states the hour of the day (`core.time_of_day`) and runs before the first bake: a bake gives a program
 /// that reads the hour the scene's, and refuses the program where the scene states none. The sky is lowered after the
 /// lights, so after the environment, whose sun the moon stands towards, and after the materials, which it orders the
@@ -151,6 +153,10 @@ pub struct AreaPreparation {
     pub lights: LowerFromSoftLights,
     /// The map layout's regions and events.
     pub map_records: LowerFromSoftMapRecords,
+    /// The textures' last stage: each one's mip chain completed and its levels in the form the program asks for
+    /// (`encode-textures`), after every pass that makes a texture. None: the textures are left as the lowering made
+    /// them.
+    pub textures: Option<EncodeTextures>,
 }
 
 impl AreaPreparation {
@@ -247,6 +253,9 @@ impl AreaPreparation {
             texts.push(pass_text(effects));
         }
         texts.push(format!("name-fromsoft-entities{{game={}}}", self.game_key()));
+        if let Some(textures) = &self.textures {
+            texts.push(pass_text(textures));
+        }
         Ok(texts)
     }
 
@@ -308,7 +317,8 @@ fn keeps_the_authored_uvs(geometry: &LowerFromSoftGeometry) -> Result<(), String
 /// The order: the requested form kept, the geometry, the selected outfit (where it is dressed), the shader
 /// resolution, the layer bake (where the program bakes), the materials and their surface bake, the part's collision,
 /// the assembly, the animations' binding, the simulation schedule, the display masks and material events (where it is
-/// dressed), the entities' names, `place-assets`, and the held weapons.
+/// dressed), the entities' names, `place-assets`, the held weapons, and the textures' stage (where the program states
+/// one).
 #[derive(Clone, Debug)]
 pub struct CharacterPreparation {
     pub game: Game,
@@ -337,6 +347,10 @@ pub struct CharacterPreparation {
     pub assembly: AssembleCharacter,
     /// The schedule the character's simulations run at.
     pub simulations: ConfigureSimulations,
+    /// The textures' last stage: each one's mip chain completed and its levels in the form the program asks for
+    /// (`encode-textures`), after every pass that makes a texture. None: the textures are left as the lowering made
+    /// them.
+    pub textures: Option<EncodeTextures>,
 }
 
 impl CharacterPreparation {
@@ -384,6 +398,9 @@ impl CharacterPreparation {
         texts.push("place-assets".to_owned());
         if let Some(hold) = &self.held {
             texts.push(pass_text(hold));
+        }
+        if let Some(textures) = &self.textures {
+            texts.push(pass_text(textures));
         }
         Ok(texts)
     }

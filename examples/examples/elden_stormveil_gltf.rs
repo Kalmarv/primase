@@ -136,6 +136,7 @@ fn preparation() -> Result<AreaPreparation, Error> {
             include_disabled: Disabled::Skip,
         },
         map_records: LowerFromSoftMapRecords { leave_out: Default::default() },
+        textures: None,
     })
 }
 

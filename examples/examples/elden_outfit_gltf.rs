@@ -121,6 +121,7 @@ fn preparation() -> Result<CharacterPreparation, Error> {
             leave_out_marked: None,
         },
         simulations: ConfigureSimulations(SimulationSchedule::new(1. / 30., 30, 8)?),
+        textures: None,
     })
 }
 

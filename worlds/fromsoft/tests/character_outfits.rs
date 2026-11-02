@@ -58,6 +58,7 @@ fn preparation(game: Game, dressed: bool) -> primase_fromsoft::sekiro::program::
             Seconds::new(0.).expect("a time"),
         )
         .with_cache(false),
+        textures: None,
         part_collision: LowerFromSoftPartCollision {
             convex: ConvexBodies::Rounded(Metres::new(0.01).expect("an error bound")),
             motion: MotionSelection::All,

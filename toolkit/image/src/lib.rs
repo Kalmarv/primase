@@ -1,6 +1,8 @@
 //! PNG, JPEG ([`read_jpeg`]), QOI ([`read_qoi`]) and TGA ([`read_tga`]) to straight RGBA pixels, piecewise sRGB
 //! transfer, and integer box mips.
-//! No implicit gamma conversion: filtering averages the stored channel values.
+//! No implicit gamma conversion: [`half`] and [`mip_chain`] average the stored channel values; a texture's missing
+//! levels built for drawing ([`complete_mip_chain`], `encode-textures`) are averaged in linear light, normal maps as
+//! directions.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 mod absent;
@@ -14,6 +16,10 @@ mod channels;
 mod cutout_field;
 mod cutouts;
 pub use cutouts::{CLIP_ALPHA_CUTOUTS, ClipAlphaCutouts};
+mod encode;
+pub use encode::{
+    Cache as EncodeCache, ENCODE_TEXTURES, EncodeTextures, Encoding, MipChain, MipFilter, complete_mip_chain,
+};
 mod frames;
 mod jpeg;
 pub use channels::{Rgba8Texel, TextureMetadata, map_rgba8_levels, map_rgba8_levels_with};
@@ -54,12 +60,14 @@ pub use uv_resample::{Canvas, Rebaked, Source, UvTriangle, claimed_texels, rebak
 /// This crate's source files, for the keys of disk caches whose values its code computes (`primase-cache`): editing
 /// any of them retires those entries. A test keeps the list equal to the `src` folder.
 pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
+    ("image/absent.rs", include_bytes!("absent.rs")),
     ("image/atlas.rs", include_bytes!("atlas.rs")),
     ("image/bleed.rs", include_bytes!("bleed.rs")),
     ("image/cap.rs", include_bytes!("cap.rs")),
     ("image/channels.rs", include_bytes!("channels.rs")),
     ("image/cutout_field.rs", include_bytes!("cutout_field.rs")),
     ("image/cutouts.rs", include_bytes!("cutouts.rs")),
+    ("image/encode.rs", include_bytes!("encode.rs")),
     ("image/frames.rs", include_bytes!("frames.rs")),
     ("image/jpeg.rs", include_bytes!("jpeg.rs")),
     ("image/layers.rs", include_bytes!("layers.rs")),
@@ -82,6 +90,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         &modes::SET_MATERIAL_MODES,
         &BLEED_ALPHA_COLORS,
         &CAP_TEXTURES,
+        &ENCODE_TEXTURES,
         &CLIP_ALPHA_CUTOUTS,
         &BAKE_LAYER_CHANNELS,
         &rgba8::LOWER_TEXTURES_RGBA8,
@@ -533,6 +542,7 @@ mod registration_tests {
             "bleed-alpha-colors",
             "cap-textures",
             "clip-alpha-cutouts",
+            "encode-textures",
             "lower-textures-rgba8",
             "normalize-normals",
             "pack-orm",

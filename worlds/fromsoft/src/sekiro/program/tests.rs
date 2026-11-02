@@ -13,12 +13,13 @@ use primase_animation::simulation_schedule::SimulationSchedule;
 use primase_animation::{Correspondence, ReferencePose, UnweightedRests, WeightedRests};
 use primase_core::LodChoice;
 use primase_core::pass::PassRegistry;
-use primase_image::Srgba8;
+use primase_image::{EncodeCache, Encoding, MipFilter, Srgba8};
 
 fn registry() -> PassRegistry {
     let mut registry = PassRegistry::new();
     primase_core::register(&mut registry);
     primase_animation::register(&mut registry);
+    primase_image::register(&mut registry);
     super::super::passes::register(&mut registry);
     registry
 }
@@ -114,6 +115,7 @@ fn character() -> CharacterPreparation {
         },
         assembly: assembly(None),
         simulations: ConfigureSimulations(SimulationSchedule::new(1. / 30., 30, 8).unwrap()),
+        textures: None,
     }
 }
 
@@ -187,6 +189,7 @@ fn area(materials: Materials, read_states: bool, sky: bool) -> AreaPreparation {
         map_records: LowerFromSoftMapRecords {
             leave_out: BTreeSet::new(),
         },
+        textures: None,
     }
 }
 
@@ -398,6 +401,31 @@ fn the_stated_values_give_the_pass_lists_the_builders_fixed() {
         "name-fromsoft-entities{game=elden}",
     ]);
     assert_eq!(canonical(&stormveil.texts().unwrap()), canonical(&stormveil_was));
+
+    // the textures' stage, where stated, after every pass that makes a texture
+    let encode = EncodeTextures {
+        format: Encoding::Bc7,
+        mips: MipFilter::Box,
+        cache: EncodeCache::On,
+    };
+    let encoded = AreaPreparation {
+        textures: Some(encode),
+        ..stormveil.clone()
+    };
+    let encoded_was = [
+        stormveil_was.clone(),
+        texts(&["encode-textures{format=bc7,mips=box,cache=on}"]),
+    ]
+    .concat();
+    assert_eq!(canonical(&encoded.texts().unwrap()), canonical(&encoded_was));
+    let dressed_encoded = CharacterPreparation {
+        textures: Some(encode),
+        ..dressed.clone()
+    };
+    assert_eq!(
+        dressed_encoded.texts().unwrap().last().map(String::as_str),
+        Some("encode-textures{cache=on,format=bc7,mips=box}")
+    );
 
     let clip = ClipPreparation {
         game: Game::EldenRing,
