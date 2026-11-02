@@ -8,6 +8,10 @@
 //! pixel; [`Composition::Height`] blends by each layer's height ([`LayerWeights::heights`], [`height_blend`]): the
 //! layers whose weighted height is near the highest show, the rest fade out within the contrast. Blend normals with the same weights and then normalize the resulting direction. An all-zero normal sum has
 //! no direction; a consumer must state its fallback rather than inventing a source normal.
+//!
+//! A layer's colour is the one its material gives, or, with [`Layer::color`], an [`Expression`] of that colour's lanes
+//! per lane (a colour moved part of the way to a constant, or scaled past one). With [`LayerWeights::saturate`] the
+//! blended base colour is [`saturate`]d per lane.
 use crate::{Component, Entity, JsonError, Semantic, World, pbr::TextureRef, pbr::UvTransform};
 use serde::Serialize;
 use serde_json::Value;
@@ -24,7 +28,32 @@ pub struct Layer {
     pub texcoord: Option<u8>,
     /// Applied to the selected UVs before sampling every layer texture.
     pub transform: Option<UvTransform>,
+    /// The colour the layer blends: red, green and blue, each an [`Expression`] of the lanes of the colour its material
+    /// gives ([`ColorLane`]), under the expressions' numeric rules; `None` blends that colour as it is. Its alpha is the
+    /// material's. A colour that is the material's own, or whose every lane is its own lane times a constant where the
+    /// material's base colour factor is one (the material's factor, which says it), is stated without it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<[Expression<ColorLane>; 3]>,
 }
+
+impl Layer {
+    /// The layer of `material`, sampled with `texcoord` and `transform`, its colour the material's.
+    pub fn new(material: Entity, texcoord: Option<u8>, transform: Option<UvTransform>) -> Layer {
+        Layer {
+            material,
+            texcoord,
+            transform,
+            color: None,
+        }
+    }
+}
+
+/// A lane of the colour a layer's material gives at the pixel (`pbr.material`'s base colour texture times its factor,
+/// times the vertex colour where the material takes it): 0 to 2 red, green and blue, 3 alpha. The source a layer's
+/// [`Layer::color`] reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct ColorLane(pub u8);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum WeightMapping {
@@ -76,6 +105,10 @@ pub struct LayerWeights {
     /// set and transform), one per slot; empty otherwise.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub heights: Vec<Source>,
+    /// The blended base colour is [`saturate`]d, each lane (NaN gives 0): a blend of colours past one, or of weights
+    /// past 0 to 1, held to 0 to 1 as the blend's program holds it. The other blended quantities are as they are.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub saturate: bool,
 }
 
 impl LayerWeights {
@@ -87,11 +120,19 @@ impl LayerWeights {
             channels: None,
             composition: Composition::Sum,
             heights: Vec::new(),
+            saturate: false,
         }
     }
-    /// Whether a consumer must evaluate anything per pixel beyond interpolating one vertex attribute and summing.
-    pub fn per_pixel(&self) -> bool {
+    /// Whether the slot weights are evaluated per pixel: per-pixel channels, or a composition other than the sum (what
+    /// a bake of the weights to a vertex stream evaluates at the vertices).
+    pub fn per_pixel_weights(&self) -> bool {
         self.channels.is_some() || self.composition != Composition::Sum
+    }
+    /// Whether a consumer must evaluate anything per pixel beyond interpolating one vertex attribute and summing: the
+    /// weights ([`LayerWeights::per_pixel_weights`]), or a saturated blend. [`LayeredMaterial::per_pixel`] also counts
+    /// the layers' colours.
+    pub fn per_pixel(&self) -> bool {
+        self.per_pixel_weights() || self.saturate
     }
 }
 
@@ -309,6 +350,29 @@ pub struct LayeredMaterial {
     pub weights: LayerWeights,
 }
 impl LayeredMaterial {
+    /// Whether a consumer must evaluate anything per pixel beyond interpolating one vertex attribute and summing the
+    /// layers' colours as their materials give them: its weights' ([`LayerWeights::per_pixel`]), or a layer's colour
+    /// ([`Layer::color`]).
+    pub fn per_pixel(&self) -> bool {
+        self.vertex_weight_blocker().is_some()
+    }
+    /// What of it a consumer that blends by vertex weights alone (one interpolated attribute, the layers' colours
+    /// summed as their materials give them) cannot draw, named; `None` where it can draw all of it. A bake of the
+    /// weights to a vertex stream (`bake-layer-channels`) removes the first two; a saturated blend and a layer's colour
+    /// have no vertex-weight form.
+    pub fn vertex_weight_blocker(&self) -> Option<&'static str> {
+        if self.weights.channels.is_some() {
+            Some("per-pixel weight channels")
+        } else if self.weights.composition != Composition::Sum {
+            Some("the over or height composition")
+        } else if self.weights.saturate {
+            Some("a saturated blend")
+        } else if self.layers.iter().flatten().any(|l| l.color.is_some()) {
+            Some("a layer's colour expression")
+        } else {
+            None
+        }
+    }
     /// Whether its weights read vertex stream `semantic`: the attribute, or with per-pixel channels a vertex source;
     /// or a height a vertex source.
     pub fn reads(&self, semantic: Semantic) -> bool {
@@ -338,8 +402,9 @@ impl Component for LayeredMaterial {
     const NAME: &'static str = "core.layered";
     const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// 2: per-pixel `channels` and the `composition`; 3: each mask texture's `filters`; 4: the height composition
-    /// and its `heights`; 5: bounded product channels; 6: expression channels, and a threshold saturating NaN to 0.
-    const VERSION: u32 = 6;
+    /// and its `heights`; 5: bounded product channels; 6: expression channels, and a threshold saturating NaN to 0;
+    /// 7: a layer's `color` and the weights' `saturate`.
+    const VERSION: u32 = 7;
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.layers.iter().flatten().map(|layer| layer.material));
         out.extend(self.mask_textures().map(|t| t.texture));
@@ -403,7 +468,43 @@ impl Component for LayeredMaterial {
             {
                 return Err(format!("layer {i} has a nonfinite UV transform"));
             }
+            if let Some(color) = &layer.color {
+                check_color(world, layer.material, color).map_err(|e| format!("layer {i} color: {e}"))?;
+            }
         }
         Ok(())
     }
+}
+
+/// A layer's [`Layer::color`] of `material`'s colour: each lane canonical and reading lanes 0 to 3, and the colour
+/// not one the layer states without it (the material's own, or its factor).
+fn check_color(world: &World, material: Entity, color: &[Expression<ColorLane>; 3]) -> Result<(), String> {
+    for (lane, e) in color.iter().enumerate() {
+        e.check().map_err(|why| format!("lane {lane}: {why}"))?;
+        if let Some(ColorLane(c)) = e.sources.iter().find(|ColorLane(c)| *c > 3) {
+            return Err(format!("lane {lane} reads colour lane {c}, past 3"));
+        }
+    }
+    // the lane's own lane, and its own lane times a constant
+    let own = |lane: u8, e: &Expression<ColorLane>| {
+        e.sources.as_slice() == [ColorLane(lane)] && e.terms.as_slice() == [Term::Source(0)]
+    };
+    let scaled = |lane: u8, e: &Expression<ColorLane>| {
+        e.sources.as_slice() == [ColorLane(lane)]
+            && matches!(
+                e.terms.as_slice(),
+                [Term::Constant(_), Term::Source(0), Term::Multiply(_)]
+            )
+    };
+    let lanes = || (0u8..).zip(color);
+    if lanes().all(|(lane, e)| own(lane, e)) {
+        return Err("the material's own colour, which a layer states with no color".into());
+    }
+    let unit_factor = world
+        .get::<crate::pbr::PbrMaterial>(material)
+        .is_some_and(|m| m.base_color[..3] == [1.0; 3]);
+    if unit_factor && lanes().all(|(lane, e)| own(lane, e) || scaled(lane, e)) {
+        return Err("each lane its own times a constant: the material's base colour factor".into());
+    }
+    Ok(())
 }

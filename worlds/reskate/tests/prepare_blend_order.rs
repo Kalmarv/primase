@@ -57,6 +57,7 @@ fn world(corners: [[f32; 3]; 4], at: [f32; 3]) -> World {
             material: m,
             texcoord: None,
             transform: None,
+            color: None,
         })
     };
     let layers = vec![

@@ -54,6 +54,7 @@ fn world() -> World {
             material: m,
             texcoord: None,
             transform: None,
+            color: None,
         })
     };
     let layers = vec![

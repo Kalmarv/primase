@@ -160,6 +160,7 @@ fn child(
         material: e,
         texcoord: Some(texcoord),
         transform,
+        color: None,
     }
 }
 

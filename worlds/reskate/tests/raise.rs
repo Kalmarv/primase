@@ -838,12 +838,14 @@ fn a_drawn_blend_becomes_a_layered_material() {
                     material: layers[0],
                     texcoord: None,
                     transform: None,
+                    color: None,
                 }),
                 None,
                 Some(Layer {
                     material: layers[1],
                     texcoord: None,
                     transform: None,
+                    color: None,
                 }),
             ],
             weights: LayerWeights::new(Semantic::Color(1), WeightMapping::RgbProduct4),
@@ -859,6 +861,7 @@ fn a_drawn_blend_becomes_a_layered_material() {
         material: orphan,
         texcoord: None,
         transform: None,
+        color: None,
     });
     w.insert(blend, l.clone());
     let e = passes::raise_skate(&mut w, &options()).unwrap_err().to_string();

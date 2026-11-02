@@ -691,11 +691,13 @@ impl Writer<'_> {
             o.opt("source", w.get::<Source>(e), |s| text(&s.0));
             o.other(&m.other);
             if m.class == MaterialClass::Layered {
-                if w.get::<primase_core::LayeredMaterial>(e)
-                    .is_some_and(|l| l.weights.per_pixel())
+                if let Some(why) = w
+                    .get::<primase_core::LayeredMaterial>(e)
+                    .and_then(|l| l.vertex_weight_blocker())
                 {
                     return Err(bad(format!(
-                        "material '{}': per-pixel weight channels have no skate-scene form (bake-layer-channels first)",
+                        "material '{}': {why} has no skate-scene form (bake-layer-channels bakes channels and \
+                         compositions)",
                         m.key
                     )));
                 }

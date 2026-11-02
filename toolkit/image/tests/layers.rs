@@ -39,6 +39,7 @@ fn world(composition: Composition) -> (World, primase_core::Entity, primase_core
             material: m,
             texcoord: None,
             transform: None,
+            color: None,
         })
     };
     w.insert(
@@ -440,6 +441,7 @@ fn a_later_layer_with_its_alpha_left_out_does_not_zero_the_layers_under_it() {
         material: third,
         texcoord: None,
         transform: None,
+        color: None,
     }));
     l.weights
         .channels

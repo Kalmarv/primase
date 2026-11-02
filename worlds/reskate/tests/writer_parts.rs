@@ -168,6 +168,7 @@ fn blended(w: &mut World) -> Entity {
             material: m,
             texcoord: None,
             transform: None,
+            color: None,
         })
     };
     let layers = vec![

@@ -89,6 +89,7 @@ pub(crate) fn read(
             material,
             texcoord,
             transform: t,
+            color: None,
         }));
     }
     let attribute = attribute(&weights["attribute"])?;

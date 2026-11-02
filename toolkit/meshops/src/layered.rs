@@ -28,11 +28,11 @@ pub fn strongest_layer_parts(
     if material.weights.mapping == WeightMapping::RgbProduct4 && material.layers.len() != 4 {
         return Err(Error("rgb_product_4 requires four slots".into()));
     }
-    if material.weights.per_pixel() {
-        return Err(Error(
-            "per-pixel weight channels or the over composition: bake them to vertex weights first (bake-layer-channels)"
-                .into(),
-        ));
+    if let Some(why) = material.vertex_weight_blocker() {
+        return Err(Error(format!(
+            "{why}: the strongest layer is chosen by vertex weights (bake-layer-channels bakes channels and \
+             compositions; a saturated blend or a layer's colour expression has no vertex-weight form)"
+        )));
     }
     let count = p
         .positions()

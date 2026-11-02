@@ -20,6 +20,7 @@ fn fixture() -> (World, primase_core::Entity) {
                     material: ordinary,
                     texcoord: None,
                     transform: None,
+                    color: None,
                 }),
                 None,
             ],

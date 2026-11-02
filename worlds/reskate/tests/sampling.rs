@@ -244,11 +244,13 @@ fn blend(w: &mut World, floor: Entity, paint: Entity, layer: UvTransform) -> (En
                     material: floor,
                     texcoord: None,
                     transform: None,
+                    color: None,
                 }),
                 Some(Layer {
                     material: paint,
                     texcoord: None,
                     transform: Some(layer),
+                    color: None,
                 }),
             ],
             weights: LayerWeights::new(Semantic::Color(0), WeightMapping::Identity),

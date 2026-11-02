@@ -11,9 +11,12 @@
 //! - **Mapping and composition**: identity or `rgb_product_4`; sum, over (`w_i prod_{j>i}(1 - w_j)`, slot 0 at full
 //!   weight) and height (`u_i / sum u`, Cycles' division giving 0 where the sum is 0: the blend has no weight there
 //!   and draws black, this writer's statement of core's open case).
+//! - **Layer colour**: a layer's colour expression (`Layer::color`), each lane as its expression's operations on the
+//!   lanes of the colour the layer's surface gives (base colour, then alpha), as a channel's are drawn.
 //! - **What is blended**: every quantity of the surface, each summed with the weights as they are (not normalized; a
 //!   null slot contributes zero): base colour and alpha, metallic, roughness, emission (colour times strength),
-//!   specular level and tint. The normal is each layer's shading normal (its normal map's, else the surface's own),
+//!   specular level and tint. A saturated blend (`LayerWeights::saturate`) clamps each lane of the blended base colour
+//!   to 0 to 1. The normal is each layer's shading normal (its normal map's, else the surface's own),
 //!   weighted, summed and normalized; where the sum is zero (it has no direction) it is the surface's own normal.
 //! - **Vertex colour**: a layer takes `COLOR_0` as its own material states ([`VertexColor`]), except where the
 //!   blend's weights read `COLOR_0` (the stream is the weights there, not a colour).
@@ -22,7 +25,7 @@
 //! stream and UV set it reads in the primitive as `scene.glb` carries it, and every mask texture sampled. Elsewhere the
 //! host is drawn alone, as core states for a target that does not draw the blend, counted by the reason.
 
-use primase_core::layered::{Channel, Composition, Source, Term};
+use primase_core::layered::{Channel, ColorLane, Composition, Expression, Source, Term};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, LayeredMaterial, Semantic, VertexColor, WeightMapping, World};
 use serde_json::json;
@@ -186,6 +189,28 @@ fn channel(s: &mut Sampler, g: &mut Graph, entity: Entity, c: &Channel) -> Resul
         .iter()
         .map(|src| source(s, g, src))
         .collect::<Result<_>>()?;
+    Ok(operations(g, &e, &v))
+}
+
+/// A layer's colour per pixel ([`primase_core::Layer::color`]): each lane its expression's operations on the lanes of
+/// `base` and `alpha`, the colour its surface gives.
+fn layer_color(g: &mut Graph, color: &[Expression<ColorLane>; 3], base: Vec3, alpha: Float) -> Vec3 {
+    let [r, gr, b] = g.separate(base);
+    let own = [r, gr, b, alpha];
+    let lanes = color.each_ref().map(|e| {
+        let v: Vec<Float> = e
+            .sources
+            .iter()
+            .map(|&ColorLane(c)| own[usize::from(c)])
+            .collect();
+        operations(g, e, &v)
+    });
+    g.combine(lanes)
+}
+
+/// The value of expression `e` whose sources' values are `v`: its terms' operations in their order, add, subtract,
+/// multiply, min and max as Math nodes, saturate as a Clamp to 0 to 1.
+fn operations<S>(g: &mut Graph, e: &Expression<S>, v: &[Float]) -> Float {
     let mut t: Vec<Float> = Vec::with_capacity(e.terms.len());
     for term in &e.terms {
         let at = |k: &u8| t[usize::from(*k)];
@@ -201,7 +226,7 @@ fn channel(s: &mut Sampler, g: &mut Graph, entity: Entity, c: &Channel) -> Resul
         };
         t.push(x);
     }
-    Ok(*t.last().expect("a canonical expression has terms"))
+    *t.last().expect("a canonical expression has terms")
 }
 
 /// The slot weights per pixel, one per slot.
@@ -289,10 +314,17 @@ pub fn graph(
             before: layer.transform,
             scroll: None,
         };
-        let surface = pbr::surface(s, &mut g, m, at, takes)?;
+        let mut surface = pbr::surface(s, &mut g, m, at, takes)?;
+        if let Some(color) = &layer.color {
+            surface.base = layer_color(&mut g, color, surface.base, surface.alpha);
+        }
         sum.add(&mut g, &surface, w, normal);
     }
-    let surface = sum.surface(&mut g, normal);
+    let mut surface = sum.surface(&mut g, normal);
+    if l.weights.saturate {
+        let lanes = g.separate(surface.base).map(|x| g.clamp01(x));
+        surface.base = g.combine(lanes);
+    }
     let settings = pbr::finish(&mut g, &surface, host);
     Ok((g, settings))
 }

@@ -1,4 +1,7 @@
-use primase_core::layered::{Channel, Composition, Source, mask_value, over_as_sum};
+use primase_core::layered::{
+    Channel, ColorLane, Composition, Expression, ExpressionBuilder, Source, Term, mask_value, over_as_sum,
+    saturate,
+};
 use primase_core::pbr::TextureRef;
 use primase_core::{Component, Layer, LayerWeights, LayeredMaterial, Semantic, WeightMapping, World};
 
@@ -27,6 +30,7 @@ fn verifies_null_slots_references_and_nonrecursive_materials() {
                 material: ordinary,
                 texcoord: Some(1),
                 transform: None,
+                color: None,
             }),
             None,
             None,
@@ -97,6 +101,7 @@ fn channels_match_the_mapping_and_their_masks_are_references() {
             material: m,
             texcoord: None,
             transform: None,
+            color: None,
         })
     };
     let masked = Channel::Source(Source::Mask {
@@ -221,6 +226,7 @@ fn products_are_bounded_ordered_and_keep_all_sources() {
             material,
             texcoord: None,
             transform: None,
+            color: None,
         })],
         weights: LayerWeights {
             channels: Some(vec![channel]),
@@ -540,6 +546,7 @@ fn expression_sources_are_read_and_referenced() {
             material: layer,
             texcoord: None,
             transform: None,
+            color: None,
         })],
         weights: LayerWeights {
             channels: Some(vec![b.channel(s).unwrap()]),
@@ -552,4 +559,131 @@ fn expression_sources_are_read_and_referenced() {
     assert_eq!(layered.verify(host, &w), Ok(()));
     w.insert(host, layered);
     assert!(w.closure([host]).contains(&mask));
+}
+
+/// A layer colour lane: `lerp(own, to, by)` of the colour's lane `lane`.
+fn lerp_lane(lane: u8, to: f32, by: f32) -> Expression<ColorLane> {
+    let mut b = ExpressionBuilder::new();
+    let (own, to, by) = (b.source(ColorLane(lane)), b.constant(to), b.constant(by));
+    let x = b.lerp(own, to, by);
+    b.expression(x).expect("a canonical lane expression")
+}
+
+/// A layer colour lane: the colour's lane `lane` times `k`.
+fn scaled_lane(lane: u8, k: f32) -> Expression<ColorLane> {
+    let mut b = ExpressionBuilder::new();
+    let (k, own) = (b.constant(k), b.source(ColorLane(lane)));
+    let x = b.multiply(k, own);
+    b.expression(x).expect("a canonical lane expression")
+}
+
+/// A layer colour lane: the colour's lane `lane` as it is.
+fn own_lane(lane: u8) -> Expression<ColorLane> {
+    let mut b = ExpressionBuilder::new();
+    let x = b.source(ColorLane(lane));
+    b.expression(x).expect("a canonical lane expression")
+}
+
+/// Worked by hand: a colour moved a quarter of the way to 0.2 from 1 is 0.8 (`1 + (0.2 - 1) * 0.25`); one scaled by
+/// 1.6 from 0.75 is 1.2, which the blend's saturate holds at 1; the colour's lanes are read by their place.
+#[test]
+fn layer_colours_evaluate_by_hand() {
+    let lerp = lerp_lane(0, 0.2, 0.25);
+    assert_eq!(lerp.evaluate(&[1.0]), 0.8);
+    let scaled = scaled_lane(1, 1.6);
+    assert_eq!(scaled.evaluate(&[0.75]), 1.2);
+    assert_eq!(saturate(scaled.evaluate(&[0.75])), 1.0);
+    assert_eq!(saturate(f32::NAN), 0.0);
+}
+
+/// A layer's colour is checked with the blend: canonical lanes reading the colour's four lanes, and never a colour the
+/// layer states without one (its material's own, or its material's factor where that is one).
+#[test]
+fn layer_colours_are_checked() {
+    use primase_core::pbr::PbrMaterial;
+    let mut w = World::new();
+    let (material, host) = (w.spawn(), w.spawn());
+    w.insert(material, PbrMaterial::default());
+    let blend = |color| LayeredMaterial {
+        layers: vec![Some(Layer {
+            color,
+            ..Layer::new(material, None, None)
+        })],
+        weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
+    };
+    let ok = blend(Some([lerp_lane(0, 0.2, 0.25), scaled_lane(1, 1.6), own_lane(2)]));
+    assert_eq!(ok.verify(host, &w), Ok(()));
+    assert!(ok.per_pixel());
+    assert!(!ok.weights.per_pixel());
+    assert_eq!(ok.vertex_weight_blocker(), Some("a layer's colour expression"));
+    // the material's own colour
+    let own = blend(Some([own_lane(0), own_lane(1), own_lane(2)]));
+    assert_eq!(
+        own.verify(host, &w),
+        Err("layer 0 color: the material's own colour, which a layer states with no color".into())
+    );
+    // every lane scaled: the material's factor, which is one
+    let factor = blend(Some([scaled_lane(0, 0.5), own_lane(1), scaled_lane(2, 1.5)]));
+    assert_eq!(
+        factor.verify(host, &w),
+        Err("layer 0 color: each lane its own times a constant: the material's base colour factor".into())
+    );
+    // where the material's factor is not one, scaling its colour again is the layer's (the products differ in f32)
+    w.insert(
+        material,
+        PbrMaterial {
+            base_color: [0.5, 1.0, 1.0, 1.0],
+            ..PbrMaterial::default()
+        },
+    );
+    assert_eq!(factor.verify(host, &w), Ok(()));
+    // a lane past alpha, and a lane not in its canonical spelling
+    let past = Expression {
+        sources: vec![ColorLane(4)],
+        terms: vec![Term::Source(0)],
+    };
+    assert_eq!(
+        blend(Some([past, own_lane(1), own_lane(2)])).verify(host, &w),
+        Err("layer 0 color: lane 0 reads colour lane 4, past 3".into())
+    );
+    let spelled = Expression {
+        sources: vec![ColorLane(0)],
+        terms: vec![Term::Source(0), Term::Constant(2.0), Term::Multiply([0, 1])],
+    };
+    assert!(
+        blend(Some([spelled, own_lane(1), own_lane(2)]))
+            .verify(host, &w)
+            .unwrap_err()
+            .starts_with("layer 0 color: lane 0: expression is not canonical")
+    );
+}
+
+/// What a consumer blending by vertex weights alone cannot draw is named, the weights' first; a saturated blend is
+/// per pixel and is written only where it is stated.
+#[test]
+fn per_pixel_forms_are_named() {
+    let mut w = World::new();
+    let material = w.spawn();
+    let mut l = LayeredMaterial {
+        layers: vec![Some(Layer::new(material, None, None))],
+        weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
+    };
+    assert_eq!(l.vertex_weight_blocker(), None);
+    assert!(!l.per_pixel());
+    let json = |l: &LayeredMaterial| l.to_json().unwrap().unwrap();
+    assert!(json(&l)["weights"].get("saturate").is_none());
+    assert!(json(&l)["layers"][0].get("color").is_none());
+    l.weights.saturate = true;
+    assert_eq!(l.vertex_weight_blocker(), Some("a saturated blend"));
+    assert!(l.weights.per_pixel() && !l.weights.per_pixel_weights());
+    assert_eq!(json(&l)["weights"]["saturate"], true);
+    l.weights.composition = Composition::Over;
+    assert_eq!(l.vertex_weight_blocker(), Some("the over or height composition"));
+    assert!(l.weights.per_pixel_weights());
+    l.weights.channels = Some(vec![Channel::Source(colour(0))]);
+    assert_eq!(l.vertex_weight_blocker(), Some("per-pixel weight channels"));
+    l.layers[0].as_mut().unwrap().color = Some([lerp_lane(0, 0.2, 0.25), own_lane(1), own_lane(2)]);
+    let color = &json(&l)["layers"][0]["color"];
+    assert_eq!(color[0]["sources"], serde_json::json!([0]));
+    assert_eq!(color[1]["terms"], serde_json::json!([{ "source": 0 }]));
 }

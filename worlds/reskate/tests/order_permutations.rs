@@ -188,6 +188,7 @@ fn world(order: Order) -> World {
                         material: materials[n],
                         texcoord: None,
                         transform: None,
+                        color: None,
                     })
                 })
                 .to_vec(),

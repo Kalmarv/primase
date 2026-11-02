@@ -1,5 +1,5 @@
 //! [`Expression`]: a weight channel as a small expression over sources, for what the named [`Channel`] forms do not
-//! spell.
+//! spell, and a layer's colour lane over the lanes of its own colour ([`Layer::color`](super::Layer::color)).
 //!
 //! An expression is a list of [`Term`]s, each a constant, a source or one f32 operation on earlier terms; the last is
 //! the channel's value. Shared values are one term, so a value used twice is computed once.
@@ -130,16 +130,17 @@ impl Term {
     }
 }
 
-/// A weight channel's value per pixel as f32 operations on its sources (see the module).
+/// A value per pixel as f32 operations on its sources (see the module): a weight channel's over [`Source`]s, a layer's
+/// colour lane over the lanes of its own colour ([`ColorLane`](super::ColorLane)).
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct Expression {
+pub struct Expression<S = Source> {
     /// The sources its [`Term::Source`] terms read, each once.
-    pub sources: Vec<Source>,
+    pub sources: Vec<S>,
     /// Its terms, each after the terms it reads; the last is the value.
     pub terms: Vec<Term>,
 }
 
-impl Expression {
+impl<S: Clone + PartialEq + Serialize> Expression<S> {
     /// Its value from its sources' values (in [`Expression::sources`] order), under the module's numeric rules.
     pub fn evaluate(&self, values: &[f32]) -> f32 {
         let mut v = [0.0f32; TERM_LIMIT];
@@ -166,7 +167,7 @@ impl Expression {
 
     /// Its canonical spelling (see the module), or why it has none: a term reading itself or a later term, a source
     /// that is not there, a constant that is not finite, no terms, or more than [`TERM_LIMIT`] once canonical.
-    pub fn canonical(&self) -> Result<Expression, String> {
+    pub fn canonical(&self) -> Result<Expression<S>, String> {
         let root = self
             .terms
             .len()
@@ -193,17 +194,27 @@ impl Expression {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TermId(usize);
 
-/// Spells an expression term by term, in any order and with any repetition; [`ExpressionBuilder::channel`] makes it
-/// canonical, or the named form it is.
-#[derive(Clone, Debug, Default)]
-pub struct ExpressionBuilder {
-    sources: Vec<Source>,
+/// Spells an expression term by term, in any order and with any repetition; [`ExpressionBuilder::expression`] makes
+/// it canonical, and [`ExpressionBuilder::channel`] the named form it is.
+#[derive(Clone, Debug)]
+pub struct ExpressionBuilder<S = Source> {
+    sources: Vec<S>,
     terms: Vec<Term>,
     /// Past [`RAW_LIMIT`] terms: the spelling is refused.
     overflow: bool,
 }
 
-impl ExpressionBuilder {
+impl<S> Default for ExpressionBuilder<S> {
+    fn default() -> Self {
+        ExpressionBuilder {
+            sources: Vec::new(),
+            terms: Vec::new(),
+            overflow: false,
+        }
+    }
+}
+
+impl<S: Clone + PartialEq + Serialize> ExpressionBuilder<S> {
     pub fn new() -> Self {
         Self::default()
     }
@@ -224,7 +235,7 @@ impl ExpressionBuilder {
         })
     }
 
-    pub fn source(&mut self, s: Source) -> TermId {
+    pub fn source(&mut self, s: S) -> TermId {
         self.sources.push(s);
         let i = self.sources.len() - 1;
         let i = u8::try_from(i).unwrap_or_else(|_| {
@@ -289,7 +300,7 @@ impl ExpressionBuilder {
     }
 
     /// The canonical expression whose value is `root`.
-    pub fn expression(&self, root: TermId) -> Result<Expression, String> {
+    pub fn expression(&self, root: TermId) -> Result<Expression<S>, String> {
         if self.overflow {
             return Err(format!(
                 "an expression spelled in more than {RAW_LIMIT} terms or sources"
@@ -300,7 +311,9 @@ impl ExpressionBuilder {
         }
         canonical(&self.sources, &self.terms, root.0)
     }
+}
 
+impl ExpressionBuilder {
     /// The channel whose value is `root`: the named form it is, else the canonical expression.
     pub fn channel(&self, root: TermId) -> Result<Channel, String> {
         self.expression(root).map(Channel::from_expression_canonical)
@@ -308,7 +321,7 @@ impl ExpressionBuilder {
 }
 
 /// That every operand reads an earlier term and every source term a source, and every constant is finite.
-fn well_formed(sources: &[Source], terms: &[Term], root: usize) -> Result<(), String> {
+fn well_formed<S>(sources: &[S], terms: &[Term], root: usize) -> Result<(), String> {
     if terms.len() > RAW_LIMIT || sources.len() > RAW_LIMIT {
         return Err(format!(
             "an expression spelled in more than {RAW_LIMIT} terms or sources"
@@ -332,7 +345,11 @@ fn well_formed(sources: &[Source], terms: &[Term], root: usize) -> Result<(), St
 }
 
 /// The canonical spelling of term `root` of `terms` over `sources` (see the module).
-fn canonical(sources: &[Source], terms: &[Term], root: usize) -> Result<Expression, String> {
+fn canonical<S: Clone + PartialEq + Serialize>(
+    sources: &[S],
+    terms: &[Term],
+    root: usize,
+) -> Result<Expression<S>, String> {
     well_formed(sources, terms, root)?;
     let mut needed = vec![false; root + 1];
     needed[root] = true;
@@ -344,7 +361,7 @@ fn canonical(sources: &[Source], terms: &[Term], root: usize) -> Result<Expressi
         }
     }
     // equal terms (over equal classes, commutative operands in either order) are one class; equal sources one source
-    let mut distinct: Vec<&Source> = Vec::new();
+    let mut distinct: Vec<&S> = Vec::new();
     let mut classes: Vec<Term> = Vec::new();
     let mut class_of = vec![0u8; root + 1];
     for i in (0..=root).filter(|&i| needed[i]) {
@@ -445,15 +462,15 @@ impl Order<'_> {
 }
 
 /// The canonical terms, emitted by a walk from the value: operands first, in their canonical order.
-struct Emit {
+struct Emit<S> {
     index: Vec<Option<u8>>,
     source_index: Vec<Option<u8>>,
-    sources: Vec<Source>,
+    sources: Vec<S>,
     terms: Vec<Term>,
 }
 
-impl Emit {
-    fn class(&mut self, order: &mut Order, distinct: &[&Source], c: usize) -> u8 {
+impl<S: Clone> Emit<S> {
+    fn class(&mut self, order: &mut Order, distinct: &[&S], c: usize) -> u8 {
         if let Some(i) = self.index[c] {
             return i;
         }

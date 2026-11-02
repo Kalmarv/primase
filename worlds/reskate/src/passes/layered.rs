@@ -467,14 +467,13 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
             }
             return Ok(());
         }
-        if let Some(e) = layered
+        if let Some((e, why)) = layered
             .iter()
-            .find(|(_, l)| l.weights.per_pixel())
-            .map(|(e, _)| e)
+            .find_map(|(e, l)| Some((e, l.vertex_weight_blocker()?)))
         {
             return Err(format!(
-                "{e:?}: per-pixel weight channels or the over composition: skate blends by vertex weights \
-                 (bake-layer-channels first)"
+                "{e:?}: {why}: skate blends by vertex weights (bake-layer-channels bakes channels and \
+                 compositions; a saturated blend or a layer's colour expression has no vertex-weight form)"
             ));
         }
         for (e, f) in world.iter::<MeshFile>() {
@@ -1063,6 +1062,7 @@ mod tests {
                 material: e,
                 texcoord: None,
                 transform: None,
+                color: None,
             })
         };
         let layers = vec![layer(&mut world, "a"), layer(&mut world, "b")];

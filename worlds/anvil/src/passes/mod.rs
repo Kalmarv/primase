@@ -2790,6 +2790,7 @@ impl LowerAnvilTerrain {
                         scale: [scale as f32; 2],
                         rotation: 0.0,
                     }),
+                    color: None,
                 }));
             }
             // the piece's vertices, in first use, and its triangles; per vertex its kept layers' weights
@@ -2872,6 +2873,7 @@ impl LowerAnvilTerrain {
                     material,
                     texcoord: Some(1),
                     transform: None,
+                    color: None,
                 }));
                 if bake_layer.is_none() {
                     far_pieces += 1;

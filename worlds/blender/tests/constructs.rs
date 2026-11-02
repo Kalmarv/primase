@@ -22,7 +22,9 @@ use primase_blender::graph::aov;
 use primase_blender::render::{Camera, Device, Projection, RenderOptions, Rendered, render};
 use primase_blender::save::{Blender, save};
 use primase_blender::{BlenderReport, WriteOptions, write_file};
-use primase_core::layered::{Channel, Composition, ExpressionBuilder, Source, height_blend, over_as_sum};
+use primase_core::layered::{
+    Channel, ColorLane, Composition, Expression, ExpressionBuilder, Source, height_blend, over_as_sum,
+};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Shading, TextureRef, UvTransform, Wrap};
 use primase_core::{
     ColorSpace, Entity, Layer, LayerWeights, LayeredMaterial, Mesh, Name, Primitive, Semantic, Stream,
@@ -494,7 +496,6 @@ fn at(k: usize) -> f32 {
     (k as f32 + 0.5) / PX as f32
 }
 
-/// A stream of four channels per corner (top-left, top-right, bottom-right, bottom-left) from the corner's `(u, v)`.
 /// `lerp(c, saturate(1 - 1.4 (2 (1 - c) - m)), 0.6)`: a weight no named form spells.
 fn adjust(c: Source, m: Source) -> Channel {
     let mut b = ExpressionBuilder::new();
@@ -522,6 +523,7 @@ fn clamped(a: Source, b: Source) -> Channel {
     e.channel(x).unwrap()
 }
 
+/// A stream of four channels per corner (top-left, top-right, bottom-right, bottom-left) from the corner's `(u, v)`.
 fn corners(f: impl Fn(f32, f32) -> [f32; 4]) -> Stream {
     Stream::F32x4(
         [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
@@ -592,6 +594,7 @@ fn blends(w: &mut World, tex: Entity, data: Entity) -> Vec<Case> {
             material,
             texcoord: None,
             transform: None,
+            color: None,
         })
     };
     let host = || PbrMaterial {
@@ -797,6 +800,7 @@ fn blends(w: &mut World, tex: Entity, data: Entity) -> Vec<Case> {
                     scale: [2.0, 2.0],
                     ..UvTransform::IDENTITY
                 }),
+                color: None,
             })],
             weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
         },
@@ -832,8 +836,58 @@ fn blends(w: &mut World, tex: Entity, data: Entity) -> Vec<Case> {
     taking
         .streams
         .push((Semantic::Color(0), corners(|_, _| [0.5, 0.5, 0.5, 1.0])));
-    out.extend([transformed, weights0, taking]);
+    // the texture's layer over red at 0.75, its colour (lerp(r, 0.2, 0.25), 1.6 g, b a), and the blend saturated: the
+    // green and white quadrants' green, 0.75 * 1.6, held at 1
+    let coloured = case(
+        "blend layer colour, saturated",
+        LayeredMaterial {
+            layers: vec![
+                layer(red),
+                Some(Layer {
+                    color: Some(own_colour()),
+                    ..layer(textured_layer).unwrap()
+                }),
+            ],
+            weights: LayerWeights {
+                channels: Some(vec![Channel::Source(c1(0)), Channel::Source(c1(1))]),
+                composition: Composition::Over,
+                saturate: true,
+                ..LayerWeights::new(Semantic::Color(1), WeightMapping::Identity)
+            },
+        },
+        corners(|_, _| [1.0, 0.75, 0.0, 0.0]),
+        Box::new(|i, j| {
+            let t = quadrant(i, j);
+            let colour = [t[0] + (0.2 - t[0]) * 0.25, 1.6 * t[1], t[2] * t[3]];
+            let blended = weighted(&over_as_sum([1.0, 0.75, 0.0, 0.0], 2), &[RED, colour]);
+            Want::base(blended.map(|x| x.clamp(0.0, 1.0)))
+        }),
+    );
+    out.extend([transformed, weights0, taking, coloured]);
     out
+}
+
+/// A layer colour of the lanes of its own: red `lerp(r, 0.2, 0.25)`, green `1.6 g`, blue `b a`.
+fn own_colour() -> [Expression<ColorLane>; 3] {
+    let lane = |make: &dyn Fn(&mut ExpressionBuilder<ColorLane>) -> primase_core::layered::TermId| {
+        let mut b = ExpressionBuilder::new();
+        let root = make(&mut b);
+        b.expression(root).unwrap()
+    };
+    [
+        lane(&|b| {
+            let (r, to, by) = (b.source(ColorLane(0)), b.constant(0.2), b.constant(0.25));
+            b.lerp(r, to, by)
+        }),
+        lane(&|b| {
+            let (k, g) = (b.constant(1.6), b.source(ColorLane(1)));
+            b.multiply(k, g)
+        }),
+        lane(&|b| {
+            let (blue, alpha) = (b.source(ColorLane(2)), b.source(ColorLane(3)));
+            b.multiply(blue, alpha)
+        }),
+    ]
 }
 
 /// UV set 0 mirrored left to right, per corner.
@@ -948,7 +1002,7 @@ fn each_construct_renders_as_worked_by_hand() {
     // the one filtered colour slot (the bilinear case's) is counted as Cycles filters it, before decoding
     assert_eq!(report.counts.srgb_filtered_encoded, 1);
     // every blend drawn but the one that reads a stream the quad lacks, which is counted
-    assert_eq!(report.blends, 12);
+    assert_eq!(report.blends, 13);
     assert_eq!(
         report.blends_drawn_from_host,
         BTreeMap::from([("reads COLOR_3, which scene.glb does not carry".to_owned(), 1)])

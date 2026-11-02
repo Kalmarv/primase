@@ -39,6 +39,7 @@ fn layer_transform_precedes_texture_transform_and_second_run_is_noop() {
                         offset: [1., 2.],
                         ..UvTransform::IDENTITY
                     }),
+                    color: None,
                 }),
                 None,
             ],
@@ -191,6 +192,7 @@ fn lowering_prunes_only_unreachable_replaced_dependencies() {
                             material,
                             texcoord: None,
                             transform: None,
+                            color: None,
                         })
                     })
                     .collect(),

@@ -71,11 +71,13 @@ fn world() -> World {
                     material: rock,
                     texcoord: None,
                     transform: None,
+                    color: None,
                 }),
                 Some(Layer {
                     material: grass,
                     texcoord: Some(1),
                     transform: None,
+                    color: None,
                 }),
             ],
             weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),

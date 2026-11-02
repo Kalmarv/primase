@@ -1858,6 +1858,7 @@ impl Pass for LowerAnvilMaterial {
                             material: layer,
                             texcoord: None,
                             transform: uv,
+                            color: None,
                         }));
                     }
                     if heights.len() == 2 {

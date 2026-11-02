@@ -426,6 +426,7 @@ fn layered_cell_closure_keeps_textures_and_mask_lowering() {
                 material: ordinary,
                 texcoord: None,
                 transform: None,
+                color: None,
             })],
             weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
         },

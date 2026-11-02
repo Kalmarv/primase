@@ -190,7 +190,7 @@ fn bake(w: &mut World, log: &mut PassLog, layer_alpha: LayerAlpha) -> Result<(),
         let mut unalpha: BTreeMap<Entity, Vec<usize>> = BTreeMap::new();
         let materials: Vec<(Entity, LayeredMaterial)> = w
             .iter::<LayeredMaterial>()
-            .filter(|(_, l)| l.weights.per_pixel())
+            .filter(|(_, l)| l.weights.per_pixel_weights())
             .map(|(e, l)| {
                 let mut l = l.clone();
                 if layer_alpha == LayerAlpha::Pixel

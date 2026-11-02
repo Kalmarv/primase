@@ -74,6 +74,7 @@ fn strip_of(ignores: [bool; 2], weights: Semantic) -> (World, Entity) {
                 material: e,
                 texcoord: None,
                 transform: None,
+                color: None,
             })
         })
         .collect();
@@ -283,11 +284,13 @@ fn a_shared_base_layer_keeps_its_colour_where_it_is_drawn_otherwise() {
             material: a,
             texcoord: None,
             transform: None,
+            color: None,
         }),
         Some(Layer {
             material: b,
             texcoord: None,
             transform: None,
+            color: None,
         }),
     ];
     w.insert(

@@ -239,6 +239,7 @@ impl Pass for GtaTerrainLayers {
                     material: e,
                     texcoord: None,
                     transform: None,
+                    color: None,
                 }));
                 log.count("layer materials", 1);
             }

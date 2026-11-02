@@ -178,6 +178,7 @@ impl Lowering {
                 material: *material,
                 texcoord: Some(mapping.texcoord),
                 transform: mapping.transform,
+                color: None,
             }));
             channels.push(if i == 0 {
                 // the first layer is the base: the blend's weight is 1 there
