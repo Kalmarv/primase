@@ -140,7 +140,7 @@ use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
     ColorSpace, Component, DrawOrder, Entity, LayeredMaterial, MaterialVariants, Mesh, Name, NormalBasis,
-    NormalConvention, NormalGreen, NormalX, NormalZ, Semantic, TexFormat, TexRole, Texture, World,
+    NormalConvention, NormalGreen, NormalX, NormalZ, Semantic, Stream, TexFormat, TexRole, Texture, World,
 };
 use primase_foundations::color::srgb_to_linear;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -265,6 +265,9 @@ struct Lowering {
     /// The texture coordinate sets (bit n: `TexCoord(n)`) every primitive drawn with a material carries; a material no
     /// primitive draws is not listed.
     coord_sets: BTreeMap<Entity, u8>,
+    /// The triangles drawn with a material by the red of their vertex colour (`ShaderInput(0)`): [all three vertices
+    /// 0, all three 1 or more, the rest]; a primitive without the colour counts as all 1 (no scale to apply).
+    colour_red: BTreeMap<Entity, [u64; 3]>,
     /// The glass opacity maps in which the reflection floor raised a texel above the transmission.
     reflected: BTreeSet<Entity>,
     /// The mean linear colour of the back wall of each cell of a room atlas (cell by cell, row by row), by texture and
@@ -809,6 +812,36 @@ impl Pass for LowerForzaMaterials {
                 }
             }
         }
+        let mut colour_red: BTreeMap<Entity, [u64; 3]> = BTreeMap::new();
+        for (_, mesh) in world.iter::<Mesh>() {
+            for primitive in mesh.primitives() {
+                let Some(m) = primitive.material else {
+                    continue;
+                };
+                let tally = colour_red.entry(m).or_default();
+                let colour = match primitive.streams.get(&Semantic::ShaderInput(0)) {
+                    Some(Stream::F32x4(c)) => Some(c),
+                    _ => None,
+                };
+                let count = primitive.indices.as_ref().map_or(0, Vec::len) / 3;
+                let (Some(c), Some(indices)) = (colour, primitive.indices.as_ref()) else {
+                    tally[1] += count as u64;
+                    continue;
+                };
+                for t in indices.chunks_exact(3) {
+                    let red = t.iter().map(|i| c.get(*i as usize).map_or(1.0, |v| v[0]));
+                    let (low, high) =
+                        red.fold((true, true), |(low, high), x| (low && x == 0.0, high && x >= 1.0));
+                    tally[if low {
+                        0
+                    } else if high {
+                        1
+                    } else {
+                        2
+                    }] += 1;
+                }
+            }
+        }
         // the materials a primitive draws or a model variant swaps in: a material with no shader family that none does
         // (the `Default.materialbin` ones of primitives taken out earlier, the occluders) is not an omission
         let mut used: BTreeSet<Entity> = triangles.keys().copied().collect();
@@ -825,6 +858,7 @@ impl Pass for LowerForzaMaterials {
             decal_maps: BTreeMap::new(),
             baked: BTreeMap::new(),
             coord_sets,
+            colour_red,
             reflected: BTreeSet::new(),
             rooms: BTreeMap::new(),
             lit: BTreeMap::new(),

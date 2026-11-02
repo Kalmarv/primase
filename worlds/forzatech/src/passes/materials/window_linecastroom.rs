@@ -26,8 +26,24 @@
 //! uses: a randomised room over all its cells), composited into the baked frame where the mask leaves the pane empty
 //! (`room * (1 - mask) + colour * mask`), one baked texture per distinct (frame, room colour as sRGB bytes); a
 //! material without a frame is that colour alone. Left out, named per material and triangle: the room's parallax,
-//! furniture and per-placement extents, its emission, the fittings (`uv1`), the glass roughness texture tiled on
-//! `uv0`, the fittings' tint, and wetness and lighting.
+//! furniture and per-placement extents, the fittings (`uv1`), the glass roughness texture tiled on `uv0`, the
+//! fittings' tint, and wetness and lighting.
+//!
+//! The room's glow (`BoxEmissiveTex`, `Emissive` on) is the room term of the lit colour, which the shader scales by
+//! `ExposureValues * COLOR.x * saturate((y - EmissiveVariationMin) / (EmissiveVariationMax - EmissiveVariationMin))`
+//! with `y` the placement's instance variation, by `WindowTintColour` and by a warm or cold hue chosen from the world
+//! position; no permutation reads `LightSwitchOnTime` or `LightSwitchOffTime`, so nothing gates the glow by the time of
+//! day. The rule: the glow is baked like the room colour, its factor is `WindowTintColour * ExposureValues` (the
+//! largest channel above 1 goes to the emissive strength), and the material carries the ramp
+//! ([`crate::components::EmissionVariation`]) for `apply-forzatech-emission-variation`, which gives each placement its
+//! step. Evidence, over the Shibuya box (3,259 window materials, 1,361 window primitives, 22,662 placements of them,
+//! 22,654 of them by rule): `ExposureValues` is 1.4 in 2,908 materials, 0.352 in 183, 0.704 in 12 and 11.2 in 156; the
+//! ramp starts at 0.6 or more in 98% of the placements' primitives (7,512 of 30,355 have an empty ramp at 1.0) while the
+//! placements' variation is spread over 0 to 1, so its step is 0 in 73% of the rule placements' triangles, 1 in 11% and
+//! between in 16%; `COLOR.x` is 1 on 96.4% of the placements' triangles, 0 on 1.3% and between on 2.3%. A
+//! material whose every triangle has a `COLOR.x` of 0 emits nothing (counted as `window emission off`); on a material
+//! with some such triangles the glow is drawn there too (a vertex colour does not scale glTF's emission), counted
+//! with those triangles, as is the hue.
 use super::{Binding, Derived, Lowering, Params, approximate, left_out, seen};
 use crate::components::{ForzaMaterial, MaterialTextures};
 use primase_core::pass::PassLog;
@@ -229,6 +245,10 @@ impl Lowering {
             .map(bytes)
             .filter(|c| *c != [0; 3]);
         let mut lit = false;
+        // the shader's room term is scaled by the red of the vertex colour: a material whose every triangle has 0 emits
+        // nothing
+        let red = self.colour_red.get(&e).copied().unwrap_or_default();
+        let dark = red[0] > 0 && red[1] == 0 && red[2] == 0;
         let mut pbr = PbrMaterial {
             base_color: room.map_or([0.0, 0.0, 0.0, 1.0], |r| {
                 let c = r.map(|x| srgb_to_linear(f64::from(x) / 255.0) as f32);
@@ -291,14 +311,46 @@ impl Lowering {
                 ),
             }
             if p.on("Emissive")
+                && !dark
                 && let Some(glow) = glow
                 && let Binding::Texture(t) = p.texture("FrameDiffuseandMask")
                 && let Some(map) = self.window_frame_colour(w, t, Some(glow), true, log)?
             {
-                // the room's glow where the frame leaves the pane empty; the factor stays 1: the map holds it
-                pbr.emissive = [1.0; 3];
+                // the room's glow where the frame leaves the pane empty, scaled by the window tint and the exposure
+                // constant: the map holds the glow, the factor the rest
+                let tint = p.vec4("WindowTintColour").unwrap_or([1.0; 4]);
+                let exposure = p.float("ExposureValues").unwrap_or(1.0).max(0.0);
+                let radiance = [tint[0], tint[1], tint[2]].map(|c| c.max(0.0) * exposure);
+                let strength = radiance.into_iter().fold(1.0, f32::max);
+                pbr.emissive = radiance.map(|c| c / strength);
+                pbr.emissive_strength = strength;
                 pbr.emissive_texture = Some(slot(map));
                 lit = true;
+                Self::vary_emission(w, e, &p, &pbr);
+                if red[0] > 0 {
+                    approximate(
+                        log,
+                        e,
+                        "room emission drawn where the vertex colour's red (COLOR.x) is 0",
+                        red[0],
+                    );
+                }
+                if red[2] > 0 {
+                    approximate(
+                        log,
+                        e,
+                        "room emission drawn at full strength where the vertex colour's red (COLOR.x) is between 0 and 1",
+                        red[2],
+                    );
+                }
+                left_out(
+                    log,
+                    &p,
+                    e,
+                    "EmissiveTempVariationOnOff",
+                    "room emission's warm and cold hue (from the world position) left out",
+                    triangles,
+                );
             }
             if let Binding::Texture(t) = p.texture("FrameGlassRoughnessTexture")
                 && let Some(rough) = self.derive(w, t, Derived::RedRoughnessMetal, log)?
@@ -331,7 +383,12 @@ impl Lowering {
             },
             triangles,
         );
-        if !lit {
+        if dark {
+            log.count(
+                "window emission off: the vertex colour's red (COLOR.x) is 0 on every triangle",
+                1,
+            );
+        } else if !lit {
             approximate(log, e, "room emission left out", triangles);
         }
         left_out(

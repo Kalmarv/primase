@@ -12,8 +12,8 @@ use primase_core::{
     ColorSpace, Entity, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, Topology, World,
 };
 use primase_forzatech::components::{
-    ForzaMaterial, InstanceLevel, MaterialLevel, MaterialTexture, MaterialTextures, Parameter, ShaderLevel,
-    Value,
+    EmissionVariation, ForzaMaterial, InstanceLevel, MaterialLevel, MaterialTexture, MaterialTextures,
+    Parameter, ShaderLevel, Value,
 };
 use primase_forzatech::passes::LowerForzaMaterials;
 use std::collections::BTreeMap;
@@ -555,4 +555,116 @@ fn window_is_its_frame_on_the_second_set() {
         log.approximations["fittings (TEXCOORD1) and their tint left out"],
         1
     );
+}
+
+/// A mesh of the triangles `indices` over four vertices whose vertex colour has the red `red`, drawn with `material`.
+fn coloured(world: &mut World, material: Entity, red: [f32; 4], indices: Vec<u32>) {
+    let mut streams = BTreeMap::new();
+    streams.insert(
+        Semantic::Position,
+        Stream::F32x3(vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ]),
+    );
+    streams.insert(Semantic::TexCoord(2), Stream::F32x2(vec![[0.0, 0.0]; 4]));
+    streams.insert(
+        Semantic::ShaderInput(0),
+        Stream::F32x4(red.iter().map(|r| [*r, 1.0, 1.0, 1.0]).collect()),
+    );
+    let mesh = world.spawn();
+    world.insert(
+        mesh,
+        Mesh::new(vec![Primitive {
+            topology: Topology::Triangles,
+            streams,
+            indices: Some(indices),
+            material: Some(material),
+        }]),
+    );
+}
+
+/// A window with a lit room: its glow is the room's emission scaled by `WindowTintColour` and `ExposureValues` (carried
+/// as the emissive factor and strength), it carries the `EmissiveVariation` ramp for the placements' instance variation,
+/// and the triangles whose vertex colour red is below 1 are counted; a window whose triangles all have a red of 0 emits
+/// nothing.
+#[test]
+fn window_room_glow_is_scaled_by_tint_and_exposure_and_carries_the_ramp() {
+    let mut world = World::new();
+    let frame = texture(&mut world, "frame", ColorSpace::Srgb, 1, &[[200, 100, 50, 0]]);
+    let mut cell = [[10u8, 10, 10, 255]; 32];
+    for (x, y) in [(2, 2), (3, 2), (2, 3), (3, 3)] {
+        cell[y * 8 + x] = [128, 64, 0, 255];
+    }
+    let room = texture(&mut world, "room", ColorSpace::Srgb, 8, &cell);
+    let glow = texture(&mut world, "glow", ColorSpace::Srgb, 8, &cell);
+    let window = |world: &mut World| {
+        let e = world.spawn();
+        world.insert(
+            e,
+            material(
+                "window_linecastroom",
+                [0, 0],
+                vec![
+                    tex("FrameDiffuseandMask", 1),
+                    tex("BoxDiffRoughTex", 6),
+                    tex("BoxEmissiveTex", 7),
+                    parameter("FrameTex", 3, Value::Int(1)),
+                    parameter("Emissive", 4, Value::Int(1)),
+                    parameter("EmissiveTempVariationOnOff", 8, Value::Int(1)),
+                    parameter("ExposureValues", 9, Value::Float(4.0)),
+                    parameter("WindowTintColour", 10, colour([0.5, 0.25, 0.0, 1.0])),
+                    parameter("EmissiveVariationMin", 11, Value::Float(0.6)),
+                    parameter("EmissiveVariationMax", 12, Value::Float(0.8)),
+                ],
+            ),
+        );
+        world.insert(
+            e,
+            MaterialTextures(vec![bound(1, frame), bound(6, room), bound(7, glow)]),
+        );
+        e
+    };
+    let lit = window(&mut world);
+    // one triangle at a red of 1, one with a vertex at 0, one at 0 throughout
+    coloured(
+        &mut world,
+        lit,
+        [1.0, 1.0, 1.0, 0.0],
+        vec![0, 1, 2, 0, 1, 3, 3, 3, 3],
+    );
+    let dark = window(&mut world);
+    coloured(&mut world, dark, [0.0; 4], vec![0, 1, 2, 3, 3, 3]);
+    let log = run(&mut world);
+
+    let pbr = world.get::<PbrMaterial>(lit).unwrap();
+    // radiance (0.5, 0.25, 0) x 4 = (2, 1, 0): the strength carries the largest channel
+    assert_eq!(pbr.emissive, [1.0, 0.5, 0.0]);
+    assert_eq!(pbr.emissive_strength, 2.0);
+    assert!(pbr.emissive_texture.is_some());
+    let ramp = world.get::<EmissionVariation>(lit).unwrap();
+    assert_eq!((ramp.min, ramp.max), (0.6, 0.8));
+    assert_eq!(
+        log.approximations["room emission drawn where the vertex colour's red (COLOR.x) is 0: triangles"],
+        1
+    );
+    assert_eq!(
+        log.approximations["room emission drawn at full strength where the vertex colour's red (COLOR.x) is between 0 and 1: triangles"],
+        1
+    );
+    assert_eq!(
+        log.approximations["room emission's warm and cold hue (from the world position) left out: triangles"],
+        3
+    );
+
+    let pbr = world.get::<PbrMaterial>(dark).unwrap();
+    assert!(pbr.emissive_texture.is_none());
+    assert!(world.get::<EmissionVariation>(dark).is_none());
+    assert_eq!(
+        log.counts["window emission off: the vertex colour's red (COLOR.x) is 0 on every triangle"],
+        1
+    );
+    assert!(!log.approximations.contains_key("room emission left out"));
 }
