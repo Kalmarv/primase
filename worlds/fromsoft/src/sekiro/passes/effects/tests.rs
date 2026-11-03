@@ -210,10 +210,12 @@ fn a_distortion_sheet_blends_by_its_alpha_whatever_its_files_blend_mode() {
 fn a_distortion_normal_map_moves_back_along_v_as_the_games_program_moves_it() {
     let mut config = torch();
     config.actions.retain(|a| a.id != 600);
-    // blendMode, offset xyz, size xyz, color, the word after it, intensity, the word after it, stirSpeed, radius, then
-    // normalMapOffsetU and V and normalMapSpeedU and V
+    // blendMode, offset xyz, size xyz, color and the four-component property after it, intensity, the property after it,
+    // stirSpeed, radius, then normalMapOffsetU and V and normalMapSpeedU and V
     let mut properties = vec![constant(2.0)];
-    properties.extend((1..13).map(|_| constant(1.0)));
+    properties.extend((1..7).map(|_| constant(1.0)));
+    properties.extend((7..9).map(|_| Property::constant_of(&[1.0; 4])));
+    properties.extend((9..13).map(|_| constant(1.0)));
     properties.extend([constant(0.2), constant(0.3), constant(0.1), constant(0.25)]);
     config.actions.push(with(action(607), properties, vec![]));
     let effect = fx(
