@@ -14,7 +14,7 @@ use fromsoft_formats::{Binder, Game, Keys, NameDictionary, dcx::Decoder};
 use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use primase_core::{Component, Entity, World};
 use primase_fromsoft::game::ParamKey;
-use primase_fromsoft::sekiro::effects::{Resolver, lower};
+use primase_fromsoft::sekiro::effects::{Resolver, lower, models::Look};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -66,8 +66,8 @@ impl Resolver for Everything {
     fn texture(&mut self, _: fxr::resources::TextureKind, _: i32) -> Option<Entity> {
         Some(Entity::from_index(1))
     }
-    fn model(&mut self, _: i32) -> Option<Entity> {
-        Some(Entity::from_index(2))
+    fn model(&mut self, _: i32) -> Option<(Entity, Look)> {
+        Some((Entity::from_index(2), Look::default()))
     }
     fn animation(&mut self, _: i32) -> Option<Entity> {
         Some(Entity::from_index(3))

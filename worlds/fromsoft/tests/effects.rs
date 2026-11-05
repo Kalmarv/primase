@@ -205,13 +205,15 @@ fn the_effects_of_three_areas_are_placed_with_their_files_and_lowered() -> Resul
 }
 
 /// Two of Elden Ring's spells read alone as a viewer reads an effect (`read_effect`: the shard spell 523022 and the pebble
-/// spell 523002, from `sfxbnd_commoneffects`) and lowered: every model their mesh particles name is read (none missing) and
-/// made a `core.mesh` whose materials are unlit `pbr.material`s, every mesh particle draws one, and a material whose
-/// binding names an effect texture draws that texture as read.
+/// spell 523002, from `sfxbnd_commoneffects`) and lowered: every model their mesh particles name is read with its
+/// materials' definitions (none missing) and made a `core.mesh` whose materials are `pbr.material`s, every mesh particle
+/// draws one, and a material whose binding names an effect texture draws that texture as read. Their plain models'
+/// `S[A]_add_GXFlver` materials are unlit, as their definitions turn lighting off; each one's crystal (a rich model,
+/// `S[ShiningStone]`) is drawn opaque and lit, as the captured frames draw the shard's.
 #[test]
 fn the_mesh_particles_of_two_spells_draw_their_models() -> Result<()> {
-    use primase_core::particles::{Draw, ParticleSystem};
-    use primase_core::pbr::{PbrMaterial, Shading};
+    use primase_core::particles::{Blend, Draw, ParticleSystem};
+    use primase_core::pbr::{AlphaMode, PbrMaterial, Shading};
     let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
         return Ok(());
     };
@@ -273,7 +275,14 @@ fn the_mesh_particles_of_two_spells_draw_their_models() -> Result<()> {
             })
             .collect();
         assert!(!meshes.is_empty(), "{effect}: no mesh particle");
+        assert!(
+            !log.approximations
+                .contains_key("effect model materials whose definition is not held, drawn unlit and blended as their colour texture times the vertex colour"),
+            "{effect}: {:?}",
+            log.approximations
+        );
         let mut textured = 0;
+        let mut lit = 0;
         for m in &meshes {
             let mesh = world
                 .get::<Mesh>(m.mesh)
@@ -282,7 +291,22 @@ fn the_mesh_particles_of_two_spells_draw_their_models() -> Result<()> {
                 let material = world
                     .get::<PbrMaterial>(p.material.ok_or("a primitive without a material")?)
                     .ok_or("a material that is not a pbr.material")?;
-                assert_eq!(material.shading, Shading::Unlit);
+                // a lit material is the crystal's: opaque, drawn by a particle that replaces what is behind and is lit
+                if material.shading == Shading::Lit {
+                    assert_eq!(material.alpha_mode, AlphaMode::Opaque, "{effect}");
+                    assert_eq!((m.blend, m.lit), (Blend::Replace, true), "{effect}");
+                    let name = world
+                        .get::<primase_core::Name>(p.material.unwrap())
+                        .map(|n| n.0.clone());
+                    println!("{effect}: lit {name:?}");
+                    lit += 1;
+                } else {
+                    assert_eq!(
+                        material.base_color[..3],
+                        [20.0; 3],
+                        "{effect}: S[A]_add_GXFlver's colour"
+                    );
+                }
                 if let Some(t) = &material.base_color_texture {
                     assert!(
                         world.has::<Texture>(t.texture),
@@ -293,10 +317,11 @@ fn the_mesh_particles_of_two_spells_draw_their_models() -> Result<()> {
             }
         }
         println!(
-            "{effect}: {} mesh particles, {textured} textured primitives",
+            "{effect}: {} mesh particles, {textured} textured primitives, {lit} lit",
             meshes.len()
         );
         assert!(textured > 0, "{effect}: no mesh particle draws a texture");
+        assert!(lit > 0, "{effect}: its crystal is not lit");
     }
     Ok(())
 }

@@ -4,6 +4,7 @@
 //! places; the pass interprets.
 use super::character::ClipEvents as SourceEvents;
 use super::source::EffectPlace;
+use crate::components::materials::Definition;
 use fromsoft_formats::Game;
 use fromsoft_formats::flver::Model;
 use fromsoft_formats::fxr::Fxr;
@@ -146,15 +147,33 @@ impl Component for EffectResource {
 }
 
 /// The model a mesh particle draws, as its file stores it (`fromsoft.effect_model`), on the entity of its
-/// `fromsoft.effect_resource`. It is not a prototype's (`fromsoft.flver`): nothing places it, and the passes that lower
-/// placed models leave it alone; `lower-fromsoft-effects` makes it the `core.mesh` its particles draw. Shared, as
+/// `fromsoft.effect_resource`, with the definitions (MTDs or material binaries) its materials name. It is not a
+/// prototype's (`fromsoft.flver`): nothing places it, and the passes that lower placed models leave it alone;
+/// `lower-fromsoft-effects` makes it the `core.mesh` its particles draw. Shared, as
 /// [`crate::components::models::SourceModel`] is.
 #[derive(Clone, Debug)]
-pub struct EffectModel(pub Arc<Model>);
+pub struct EffectModel {
+    /// The game whose file it is: its materials resolve by that game's rules.
+    pub game: Game,
+    pub model: Arc<Model>,
+    /// The definitions the materials name, by the stem of their MTD path ([`fromsoft_formats::names::stem`]); a
+    /// material whose definition the install does not hold has none here.
+    pub definitions: BTreeMap<String, Arc<Definition>>,
+}
 impl EffectModel {
-    /// `model`, shared from here on.
-    pub fn new(model: Model) -> Self {
-        Self(Arc::new(model))
+    /// `game`'s `model` with no definitions, shared from here on.
+    pub fn new(game: Game, model: Model) -> Self {
+        Self {
+            game,
+            model: Arc::new(model),
+            definitions: BTreeMap::new(),
+        }
+    }
+    /// The definition `material` names, if it is held.
+    pub fn definition(&self, material: &fromsoft_formats::flver::Material) -> Option<&Definition> {
+        self.definitions
+            .get(&fromsoft_formats::names::stem(&material.mtd))
+            .map(|d| d.as_ref())
     }
 }
 impl Component for EffectModel {
@@ -162,7 +181,7 @@ impl Component for EffectModel {
     const GEOMETRY: Geometry = Geometry::None;
     /// The meshes' vertices and indices, as [`crate::components::models::SourceModel`]'s.
     fn payload_bytes(&self) -> u64 {
-        self.0.resident_bytes()
+        self.model.resident_bytes()
     }
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
         primase_core::world::Linearity::Invariant

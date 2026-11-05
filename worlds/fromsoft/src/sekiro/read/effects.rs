@@ -1,14 +1,16 @@
 //! Effects where they stand (`fromsoft.effect`): the effects the map's SFX regions name and the effects the kept objects and
 //! assets spawn through their model effect row (the routes `fromsoft.effect_light` is read through, see
 //! [`super::effect_lights`]), with the effect files as stored (`fromsoft.effect_file`), the textures they name
-//! (`fromsoft.effect_resource`, a `core.texture` each) and the models their mesh particles draw (a `fromsoft.effect_model` each, the
-//! textures its materials name read with the effects'). Their interpretation belongs to `lower-fromsoft-effects`.
+//! (`fromsoft.effect_resource`, a `core.texture` each) and the models their mesh particles draw (a `fromsoft.effect_model`
+//! each, with the material definitions its materials name; the textures those materials and definitions name are read with
+//! the effects'). Their interpretation belongs to `lower-fromsoft-effects`.
 //!
 //! The effect files are looked for in the binder of the area's map (`sfxbnd_<mNN>`, and Elden Ring's `sfxbnd_<full map name>`
 //! where there is one), then `sfxbnd_commoneffects` and Elden Ring's `commoneffects_dlc02`; the copies of an effect in several
 //! binders are byte-identical. A texture or a model is looked for in the same binders, in that order.
 use super::effect_lights::{ModelDummies, PlacedModel, Placement, map_transform, row_of};
 use super::textures::tpf_image;
+use crate::components::materials::Definition;
 use crate::pose::placed;
 use crate::sekiro::character_data::ClipEvents as SourceEvents;
 use crate::sekiro::components::effect::{
@@ -47,8 +49,8 @@ pub struct Report {
     pub parts_not_placed: BTreeMap<String, usize>,
     /// Effect files read (the placed ones and the ones they spawn), textures and models read into the world, the textures and
     /// models a file named that the read could not give, by kind and why (no binder searched holds it, or its file does not
-    /// decode: a texture kept as a `core.texture_absent`), each model whose file does not decode with the reader's error,
-    /// and the model animations named (not read).
+    /// decode: a texture kept as a `core.texture_absent`; a model material whose definition the install does not hold),
+    /// each model whose file does not decode with the reader's error, and the model animations named (not read).
     pub files: usize,
     pub textures: usize,
     pub models: usize,
@@ -88,13 +90,16 @@ struct Loaded {
     resources: Resources,
 }
 
-/// What libraries have read, kept from one to the next: the binders (decoded and indexed, by path) and the effect files found
-/// (by number). A reader that loads many clips keeps one, so the common binder is read once, not once for each clip.
+/// What libraries have read, kept from one to the next: the binders (decoded and indexed, by path), the effect files found
+/// (by number) and the material definitions effect models named (by stem). A reader that loads many clips keeps one, so the
+/// common binder is read once, not once for each clip.
 #[derive(Default)]
 pub struct EffectCache {
     binders: BTreeMap<String, Arc<Loaded>>,
     /// The effects found or refused; one that no binder searched holds is not kept (a later library may search more).
     files: BTreeMap<i32, std::result::Result<Option<Arc<Fxr>>, String>>,
+    /// The definitions looked for: `None` for a stem the install holds none for.
+    definitions: BTreeMap<String, Option<Arc<Definition>>>,
 }
 
 impl std::fmt::Debug for EffectCache {
@@ -102,6 +107,7 @@ impl std::fmt::Debug for EffectCache {
         f.debug_struct("EffectCache")
             .field("binders", &self.binders.len())
             .field("files", &self.files.len())
+            .field("definitions", &self.definitions.len())
             .finish()
     }
 }
@@ -270,6 +276,33 @@ impl<'a> EffectLibrary<'a> {
         Ok(Ok(None))
     }
 
+    /// The material definitions (MTDs or material binaries) of the stems `stems` names that the install holds, by stem; each
+    /// is read once for the cache, so the material binders are read only when a stem is new.
+    pub fn material_definitions(
+        &mut self,
+        stems: &BTreeSet<String>,
+    ) -> Result<BTreeMap<String, Arc<Definition>>> {
+        let unread: BTreeSet<String> = stems
+            .iter()
+            .filter(|s| !self.cache.definitions.contains_key(*s))
+            .cloned()
+            .collect();
+        if !unread.is_empty() {
+            let mut read =
+                super::area::game_material_definitions_where(self.archive, self.decoder, self.game, &|s| {
+                    unread.contains(s)
+                })?;
+            for stem in unread {
+                let found = read.remove(&stem).map(Arc::new);
+                self.cache.definitions.insert(stem, found);
+            }
+        }
+        Ok(stems
+            .iter()
+            .filter_map(|s| Some((s.clone(), self.cache.definitions.get(s)?.clone()?)))
+            .collect())
+    }
+
     /// The mesh-particle model `id` (`s<id>.flver`) as stored, from the first binder that holds it: `Ok(None)` where none does,
     /// `Err` with the reason where its file does not read (an archive that does not read is the outer error).
     pub fn model(&mut self, id: i32) -> Result<std::result::Result<Option<Model>, String>> {
@@ -397,10 +430,28 @@ pub fn read_files(
             }
         }
     }
+    // the definitions the models' materials name, and the textures the materials and their definitions name
+    let stems: BTreeSet<String> = models
+        .iter()
+        .flat_map(|(_, m)| &m.materials)
+        .map(|m| fromsoft_formats::names::stem(&m.mtd))
+        .collect();
+    let definitions = library.material_definitions(&stems)?;
     for (_, model) in &models {
-        for t in model.materials.iter().flat_map(|m| &m.textures) {
-            if let Some((texture_kind, texture)) = model_texture(&t.path) {
-                named.insert((ResourceKind::of_texture(texture_kind), texture));
+        for m in &model.materials {
+            let definition = definitions.get(&fromsoft_formats::names::stem(&m.mtd));
+            if definition.is_none() {
+                *report
+                    .missing
+                    .entry("Model material definition not in the install".to_owned())
+                    .or_default() += 1;
+            }
+            let paths = m.textures.iter().map(|t| t.path.as_str());
+            let defined = definition.into_iter().flat_map(|d| d.textures()).map(|t| t.1);
+            for path in paths.chain(defined) {
+                if let Some((texture_kind, texture)) = model_texture(path) {
+                    named.insert((ResourceKind::of_texture(texture_kind), texture));
+                }
             }
         }
     }
@@ -414,7 +465,20 @@ pub fn read_files(
                 id,
             },
         );
-        world.insert(e, EffectModel::new(model));
+        let definitions = model
+            .materials
+            .iter()
+            .map(|m| fromsoft_formats::names::stem(&m.mtd))
+            .filter_map(|stem| Some((stem.clone(), definitions.get(&stem)?.clone())))
+            .collect();
+        world.insert(
+            e,
+            EffectModel {
+                game,
+                model: Arc::new(model),
+                definitions,
+            },
+        );
         world.insert(e, Name(format!("sfx model {id}")));
         report.models += 1;
     }

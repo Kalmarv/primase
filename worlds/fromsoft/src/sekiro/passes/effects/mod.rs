@@ -118,6 +118,8 @@ pub const LOWER_FROMSOFT_EFFECTS: PassSpec = PassSpec {
 /// effects the lowering may name.
 struct Finder<'a> {
     resources: &'a BTreeMap<(ResourceKind, i32), Entity>,
+    /// The lowered models' looks, by entity.
+    looks: &'a BTreeMap<Entity, models::Look>,
     systems: &'a BTreeMap<i32, Entity>,
     /// The effects the one being lowered may not name: those that can reach it (a spawn cycle's closing reference).
     forbidden: BTreeSet<i32>,
@@ -127,8 +129,9 @@ impl Resolver for Finder<'_> {
     fn texture(&mut self, kind: TextureKind, id: i32) -> Option<Entity> {
         self.resources.get(&(ResourceKind::of_texture(kind), id)).copied()
     }
-    fn model(&mut self, id: i32) -> Option<Entity> {
-        self.resources.get(&(ResourceKind::Model, id)).copied()
+    fn model(&mut self, id: i32) -> Option<(Entity, models::Look)> {
+        let e = *self.resources.get(&(ResourceKind::Model, id))?;
+        Some((e, *self.looks.get(&e)?))
     }
     fn animation(&mut self, id: i32) -> Option<Entity> {
         self.resources.get(&(ResourceKind::Animation, id)).copied()
@@ -215,7 +218,7 @@ impl Pass for LowerFromSoftEffects {
         ]
     }
     fn approximates(&self) -> &'static str {
-        "the fxr project's reading of the parameters (not yet checked against a running game); Hermite properties sampled into lines; a GPU particle system as an ordinary emitter; level-of-detail ranges as ascending distances; soft-particle depth as a fixed distance; effect light colours squared at the keys of their curves; mesh particles' materials unlit, their colour texture times the vertex colour; a bullet's flight by its BulletParam row's law as Paramdex describes its fields (a max speed of 0 as no limit, the range reached by the forward travel alone)"
+        "the fxr project's reading of the parameters (not yet checked against a running game); Hermite properties sampled into lines; a GPU particle system as an ordinary emitter; level-of-detail ranges as ascending distances; soft-particle depth as a fixed distance; effect light colours squared at the keys of their curves; mesh particles' materials as their definitions state their colour, lighting and blend, their programs not drawn (unlit and blended where the definition is not held); a bullet's flight by its BulletParam row's law as Paramdex describes its fields (a max speed of 0 as no limit, the range reached by the forward travel alone)"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         // the files the read kept
@@ -233,8 +236,8 @@ impl Pass for LowerFromSoftEffects {
             }
         }
         // the models mesh particles draw, as meshes; one left without (it draws nothing) is not found
-        let meshes = models::lower(world, &resources, log)?;
-        resources.retain(|(kind, _), e| *kind != ResourceKind::Model || meshes.contains(e));
+        let looks = models::lower(world, &resources, log)?;
+        resources.retain(|(kind, _), e| *kind != ResourceKind::Model || looks.contains_key(e));
         // the placements, and the effects they need with the effects those spawn
         let mut placements: Vec<(Entity, i32)> = Vec::new();
         for (e, p) in world.iter::<Effect>() {
@@ -310,6 +313,7 @@ impl Pass for LowerFromSoftEffects {
                 .collect();
             let mut finder = Finder {
                 resources: &resources,
+                looks: &looks,
                 systems: &systems,
                 forbidden,
             };

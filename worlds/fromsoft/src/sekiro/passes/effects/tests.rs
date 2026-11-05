@@ -274,7 +274,7 @@ fn children_hang_from_their_parents_emitter_and_a_proxy_names_the_spawned_effect
         fn texture(&mut self, _: fromsoft_formats::fxr::resources::TextureKind, _: i32) -> Option<Entity> {
             None
         }
-        fn model(&mut self, _: i32) -> Option<Entity> {
+        fn model(&mut self, _: i32) -> Option<(Entity, super::models::Look)> {
             None
         }
         fn animation(&mut self, _: i32) -> Option<Entity> {
@@ -709,7 +709,7 @@ fn world_with_models(models: Vec<(i32, fromsoft_formats::flver::Model)>) -> (Wor
                     id,
                 },
             );
-            world.insert(e, EffectModel::new(model));
+            world.insert(e, EffectModel::new(fromsoft_formats::Game::EldenRing, model));
             e
         })
         .collect();
@@ -717,9 +717,9 @@ fn world_with_models(models: Vec<(i32, fromsoft_formats::flver::Model)>) -> (Wor
 }
 
 /// A mesh particle's model is the `core.mesh` of its entity: its level-0 face set with the vertex colour the material
-/// binary's program reads, an unlit blended material of its own whose colour texture is the effect texture the binding's
-/// `_a` path names, double-sided where the face set draws back faces. A material that binds no file draws in the
-/// particles' colour alone, counted.
+/// binary's program reads, a material of its own whose colour texture is the effect texture the binding's `_a` path names,
+/// double-sided where the face set draws back faces. A material whose definition is not held is drawn unlit and blended,
+/// counted; one that binds no file draws in the particles' colour alone, counted.
 #[test]
 fn an_effect_model_becomes_a_mesh_with_an_unlit_material_on_its_colour_texture() {
     use primase_core::pbr::{AlphaMode, PbrMaterial, Shading};
@@ -731,12 +731,13 @@ fn an_effect_model_becomes_a_mesh_with_an_unlit_material_on_its_colour_texture()
     let mut log = PassLog::default();
     pass().run(&mut world, &mut log).unwrap();
     assert_eq!(log.counts.get("effect models lowered"), Some(&2));
+    // the world holds neither model's definition
     assert_eq!(log.approximations.get(models::UNREAD_DEFINITION), Some(&2));
-    // both materials are S[A]_add_GXFlver's
-    assert_eq!(log.approximations.get(models::ADDITIVE_BLENDED), Some(&2));
+    assert_eq!(log.approximations.get(models::ADDITIVE_BLENDED), None);
     assert_eq!(
-        log.approximations
-            .get("effect model materials with no colour texture, drawn in their particles' colour alone"),
+        log.approximations.get(
+            "effect model materials with no colour texture held, drawn in their particles' colour alone"
+        ),
         Some(&1)
     );
 
@@ -764,6 +765,174 @@ fn an_effect_model_becomes_a_mesh_with_an_unlit_material_on_its_colour_texture()
         .unwrap();
     assert!(material.base_color_texture.is_none());
     assert!(!material.double_sided);
+}
+
+/// A material binary as the effect models' are: `shader`, `params` and `samplers` (kind, path).
+fn effect_definition(
+    shader: &str,
+    params: Vec<(&str, fromsoft_formats::matbin::Value)>,
+    samplers: Vec<(&str, &str)>,
+) -> crate::components::materials::Definition {
+    use fromsoft_formats::matbin::{Material, Param, Sampler};
+    crate::components::materials::Definition::Matbin(Material {
+        shader: shader.into(),
+        source: String::new(),
+        key: 0,
+        params: params
+            .into_iter()
+            .map(|(name, value)| Param {
+                name: name.into(),
+                key: 0,
+                value,
+            })
+            .collect(),
+        samplers: samplers
+            .into_iter()
+            .map(|(kind, path)| Sampler {
+                kind: kind.into(),
+                path: path.into(),
+                key: 0,
+                unknown: [0.0; 2],
+            })
+            .collect(),
+        unreferenced_tail: Vec::new(),
+    })
+}
+
+/// An effect model's material resolved with its definition, as the captured frames draw them: `S[A]_add_GXFlver` (a
+/// `GXFlver_Col` program, lighting off, blend 4) multiplies its texture by `g_DiffuseColor` times `g_DiffuseColorPower` and
+/// reads only the alpha of the colour the FLVER indexes 1; `S[ShiningStone]` (an `S[AMSN]_Glow` program, blend 0) is lit
+/// and opaque, its base texture the one its definition's albedo sampler names where the FLVER's path is empty.
+#[test]
+fn an_effect_model_material_is_drawn_as_its_definition_states() {
+    use crate::sekiro::components::effect::{EffectModel, EffectResource, ResourceKind};
+    use fromsoft_formats::matbin::Value;
+    use primase_core::pbr::{AlphaMode, PbrMaterial, Shading};
+    use primase_core::{Mesh, Semantic, Stream};
+    use std::sync::Arc;
+    // the plain model: its one colour stored as COLOR1, (1, 0, 1, a)
+    let mut plain = effect_model(r"N:\GR\data\Sfx\Tex\s34031_a.tif", false);
+    plain.layouts[0][0].index = 1;
+    for (i, v) in plain.meshes[0].vertices.iter_mut().enumerate() {
+        v.colors = [[1.0, 0.0, 1.0, 0.25 * i as f32]].into();
+    }
+    // the crystal: no paths of its own
+    let mut crystal = effect_model("", true);
+    crystal.materials[0].mtd = r"N:\GR\data\Material\mtd\sfx\matxml\S[ShiningStone].matxml".into();
+    crystal.materials[0].textures[0].kind = "C_Crystal__snp_Texture2D_1_AlbedoMap".into();
+    let (mut world, texture, models) = world_with_models(vec![(83050, plain), (84016, crystal)]);
+    let stone = world.spawn();
+    world.insert(
+        stone,
+        EffectResource {
+            kind: ResourceKind::Albedo,
+            id: 34050,
+        },
+    );
+    world.insert(
+        stone,
+        primase_core::TextureAbsent {
+            reason: "a stand-in".into(),
+        },
+    );
+    let add = effect_definition(
+        r"N:\GR\data\Material\spx\GXFlver_Col.spx",
+        vec![
+            ("GXFT_InvalidLighting", Value::Bool(true)),
+            ("g_BlendMode", Value::Int(4)),
+            ("g_DiffuseColor", Value::Float3([1.0, 0.5, 1.0], Some([1.0, 1.0]))),
+            ("g_DiffuseColorPower", Value::Float(20.0)),
+        ],
+        vec![("g_DiffuseTexture", "")],
+    );
+    let shining = effect_definition(
+        r"N:\GR\data\Material\sat\OutputData\SPX\S[AMSN]_Glow.spx",
+        vec![
+            ("g_BlendMode", Value::Int(0)),
+            (
+                "g_DiffuseMapColor",
+                Value::Float3([1.0, 1.0, 1.0], Some([1.0, 1.0])),
+            ),
+        ],
+        vec![
+            (
+                "S_AMSN__Glow_snp_Texture2D_2_AlbedoMap_0",
+                r"N:\GR\data\Sfx\Tex\s34050_a.tif",
+            ),
+            (
+                "S_AMSN__Glow_snp_Texture2D_7_NormalMap_4",
+                r"N:\GR\data\Sfx\Tex\s00005_n.tif",
+            ),
+        ],
+    );
+    for (e, stem, d) in [
+        (models[0], "s[a]_add_gxflver", add),
+        (models[1], "s[shiningstone]", shining),
+    ] {
+        let mut m = world.get::<EffectModel>(e).unwrap().clone();
+        m.definitions.insert(stem.into(), Arc::new(d));
+        world.insert(e, m);
+    }
+    let resources = world
+        .iter::<EffectResource>()
+        .map(|(e, r)| ((r.kind, r.id), e))
+        .collect();
+    let mut log = PassLog::default();
+    let looks = models::lower(&mut world, &resources, &mut log).unwrap();
+    // what a rich model drawing each is drawn with
+    assert_eq!(
+        looks[&models[0]],
+        models::Look {
+            blend: Some(Blend::Additive),
+            lit: false
+        }
+    );
+    assert_eq!(
+        looks[&models[1]],
+        models::Look {
+            blend: Some(Blend::Replace),
+            lit: true
+        }
+    );
+    assert_eq!(log.approximations.get(models::UNREAD_DEFINITION), None);
+    assert_eq!(log.approximations.get(models::PROGRAM_NOT_DRAWN), Some(&2));
+    assert_eq!(log.approximations.get(models::ADDITIVE_BLENDED), Some(&1));
+
+    let mesh = world.get::<Mesh>(models[0]).unwrap();
+    let p = &mesh.primitives()[0];
+    let material = world.get::<PbrMaterial>(p.material.unwrap()).unwrap();
+    assert_eq!(material.base_color, [20.0, 10.0, 20.0, 1.0]);
+    assert_eq!(material.shading, Shading::Unlit);
+    assert_eq!(material.alpha_mode, AlphaMode::Blend);
+    assert_eq!(
+        material.base_color_texture.as_ref().map(|t| t.texture),
+        Some(texture)
+    );
+    // the colour the program reads: white with COLOR1's alpha
+    let Some(Stream::F32x4(colours)) = p.streams.get(&Semantic::Color(0)) else {
+        panic!("no vertex colour: {:?}", p.streams.keys());
+    };
+    assert_eq!(
+        colours,
+        &vec![[1.0, 1.0, 1.0, 0.0], [1.0, 1.0, 1.0, 0.25], [1.0, 1.0, 1.0, 0.5]]
+    );
+
+    let mesh = world.get::<Mesh>(models[1]).unwrap();
+    let material = world
+        .get::<PbrMaterial>(mesh.primitives()[0].material.unwrap())
+        .unwrap();
+    assert_eq!(material.base_color, [1.0; 4]);
+    assert_eq!(material.shading, Shading::Lit);
+    assert_eq!(material.alpha_mode, AlphaMode::Opaque);
+    assert_eq!(
+        material.base_color_texture.as_ref().map(|t| t.texture),
+        Some(stone)
+    );
+    assert_eq!(
+        log.approximations.get("effect model normal textures not drawn"),
+        None,
+        "the normal map is not held: the preview names none"
+    );
 }
 
 /// A model with no level-0 triangles is left without a mesh, counted: no particle draws it.

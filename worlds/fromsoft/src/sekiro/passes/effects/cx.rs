@@ -2,6 +2,7 @@
 //! properties use so far, and the accounting of what was lost or approximated. The helpers here make the core values and
 //! terms the appearances are built of.
 
+use super::models::Look;
 use super::value::{self, Inputs, Notes};
 use fromsoft_formats::fxr::Property;
 use fromsoft_formats::fxr::resources::TextureKind;
@@ -13,8 +14,8 @@ use primase_core::particles::{Argument, Channels, Map, Term, Value};
 pub trait Resolver {
     /// The texture entity of kind `kind` and number `id`.
     fn texture(&mut self, kind: TextureKind, id: i32) -> Option<Entity>;
-    /// The prototype entity of model particle `id`.
-    fn model(&mut self, id: i32) -> Option<Entity>;
+    /// The prototype entity of model particle `id`, with how its materials say it is drawn.
+    fn model(&mut self, id: i32) -> Option<(Entity, Look)>;
     /// The clip entity of model animation `id`.
     fn animation(&mut self, id: i32) -> Option<Entity>;
     /// The system entity of the effect `id` (an effect an `SFXReference` spawns); made on first use.
@@ -30,7 +31,7 @@ impl Resolver for NoFiles {
     fn texture(&mut self, _: TextureKind, _: i32) -> Option<Entity> {
         None
     }
-    fn model(&mut self, _: i32) -> Option<Entity> {
+    fn model(&mut self, _: i32) -> Option<(Entity, Look)> {
         None
     }
     fn animation(&mut self, _: i32) -> Option<Entity> {

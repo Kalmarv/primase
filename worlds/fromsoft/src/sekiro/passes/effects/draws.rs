@@ -440,7 +440,7 @@ impl Cx<'_> {
                 })
             }
             Typed::Model(m) => {
-                let Some(mesh) = value::id(&m.model).and_then(|id| self.resolver.model(id)) else {
+                let Some((mesh, _)) = value::id(&m.model).and_then(|id| self.resolver.model(id)) else {
                     self.notes.lose("a model particle whose model is not read");
                     return None;
                 };
@@ -505,7 +505,7 @@ impl Cx<'_> {
                 })
             }
             Typed::RichModel(m) => {
-                let Some(mesh) = value::id(&m.model).and_then(|id| self.resolver.model(id)) else {
+                let Some((mesh, look)) = value::id(&m.model).and_then(|id| self.resolver.model(id)) else {
                     self.notes.lose("a model particle whose model is not read");
                     return None;
                 };
@@ -517,8 +517,14 @@ impl Cx<'_> {
                         speed: m.animation_speed,
                         looped: m.loop_animation,
                     });
-                self.notes
-                    .approximate("a rich model's blend mode taken as normal (its blend word is unnamed)");
+                // its blend word is unnamed: it draws as its materials state (S[ShiningStone]'s S[AMSN]_Glow program draws
+                // opaque, lit and writing depth in a captured Elden Ring frame)
+                let blend = look.blend.unwrap_or_else(|| {
+                    self.notes.approximate(
+                        "a rich model whose materials state no one blend drawn as normal (its blend word is unnamed)",
+                    );
+                    Blend::Alpha
+                });
                 let size = self.size3(&m.size_x, &m.size_y, &m.size_z, m.uniform_scale);
                 let rotation = self.rotation([&m.rotation_x, &m.rotation_y, &m.rotation_z]);
                 let spin = self.spin([
@@ -541,7 +547,7 @@ impl Cx<'_> {
                 Draw::Mesh(MeshParticle {
                     mesh,
                     clip,
-                    blend: Blend::Alpha,
+                    blend,
                     orientation: units::rich_model_orientation(m.orientation, &mut self.notes),
                     size,
                     size_variance: [m.scale_variation_x, m.scale_variation_y, m.scale_variation_z],
@@ -561,7 +567,7 @@ impl Cx<'_> {
                         m.min_distance_threshold,
                         m.max_distance_threshold,
                     )),
-                    lit: false,
+                    lit: look.lit,
                 })
             }
             Typed::LegacyTracer(t) => {

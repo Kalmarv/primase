@@ -1052,19 +1052,18 @@ pub fn world_bounds(model: &Model) -> std::result::Result<Option<[[f32; 3]; 2]>,
         .map(|[min, max]| [[min[0], min[1], -max[2]], [max[0], max[1], -min[2]]]))
 }
 
-/// Every material definition (MTD) of the install, by stem: what a model's materials resolve against.
-pub(super) fn material_definitions(
+/// The material definitions (MTD) of the install `wanted` keeps, by stem: what a model's materials resolve against.
+fn material_definitions(
     archive: &Archive,
     decoder: &Decoder<'_>,
+    wanted: &dyn Fn(&str) -> bool,
 ) -> Result<BTreeMap<String, MaterialDefinition>> {
     let mut definitions = BTreeMap::new();
     for f in Binder::read(&archive.read("/mtd/allmaterialbnd.mtdbnd.dcx", decoder)?, decoder)?.files {
         let name = f.name.as_deref().unwrap_or("");
-        if fromsoft_formats::names::fold(name).ends_with(".mtd") {
-            definitions.insert(
-                fromsoft_formats::names::stem(name),
-                MaterialDefinition::read(&decoder.decode_if_dcx(&f.bytes)?)?,
-            );
+        let stem = fromsoft_formats::names::stem(name);
+        if fromsoft_formats::names::fold(name).ends_with(".mtd") && wanted(&stem) {
+            definitions.insert(stem, MaterialDefinition::read(&decoder.decode_if_dcx(&f.bytes)?)?);
         }
     }
     Ok(definitions)
@@ -1076,22 +1075,33 @@ pub(super) fn game_material_definitions(
     decoder: &Decoder<'_>,
     game: Game,
 ) -> Result<BTreeMap<String, materials::Definition>> {
+    game_material_definitions_where(archive, decoder, game, &|_| true)
+}
+
+/// [`game_material_definitions`] of the stems `wanted` keeps alone (the others are not decoded).
+pub(super) fn game_material_definitions_where(
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    game: Game,
+    wanted: &dyn Fn(&str) -> bool,
+) -> Result<BTreeMap<String, materials::Definition>> {
     if game.material_binders().is_empty() {
-        Ok(material_definitions(archive, decoder)?
+        Ok(material_definitions(archive, decoder, wanted)?
             .into_iter()
             .map(|(stem, d)| (stem, materials::Definition::Mtd(d)))
             .collect())
     } else {
-        material_binaries(archive, decoder, game)
+        material_binaries(archive, decoder, game, wanted)
     }
 }
 
-/// Every material binary of `game`'s material binders, by the stem of its name (the `.matxml` stem its FLVER
-/// materials name): the first binder holding a name gives it.
+/// The material binaries of `game`'s material binders `wanted` keeps, by the stem of its name (the `.matxml` stem its
+/// FLVER materials name): the first binder holding a name gives it.
 fn material_binaries(
     archive: &Archive,
     decoder: &Decoder<'_>,
     game: Game,
+    wanted: &dyn Fn(&str) -> bool,
 ) -> Result<BTreeMap<String, materials::Definition>> {
     let mut definitions = BTreeMap::new();
     for path in game.material_binders() {
@@ -1100,14 +1110,16 @@ fn material_binaries(
         }
         for f in Binder::read(&archive.read(path, decoder)?, decoder)?.files {
             let name = f.name.as_deref().unwrap_or("");
-            if !fromsoft_formats::names::fold(name).ends_with(".matbin") {
+            let stem = fromsoft_formats::names::stem(name);
+            if !fromsoft_formats::names::fold(name).ends_with(".matbin")
+                || !wanted(&stem)
+                || definitions.contains_key(&stem)
+            {
                 continue;
             }
             let material = fromsoft_formats::matbin::Material::read(&decoder.decode_if_dcx(&f.bytes)?)
                 .map_err(|e| invalid("material binary", 0, format!("{name}: {e}")))?;
-            definitions
-                .entry(fromsoft_formats::names::stem(name))
-                .or_insert(materials::Definition::Matbin(material));
+            definitions.insert(stem, materials::Definition::Matbin(material));
         }
     }
     Ok(definitions)
