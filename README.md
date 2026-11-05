@@ -1,90 +1,81 @@
 # primase
 
-A Rust library for reading, transforming and writing 3D game worlds. It brings supported source data into a shared
-`World`, so adding a reader or writer expands the possible conversions without a separate exporter for every pair.
+A Rust library for reading 3D game worlds into a shared in-memory world, transforming them with passes, and writing them out as glTF, Blender scenes or skate. maps. It has no command line: a program composes the readers, passes and writers it needs.
 
-```text
-read → World (shared + namespaced data) → selected passes → write → later stages
+## Features
+
+- Reads Sekiro: Shadows Die Twice and Elden Ring areas and characters
+- Reads Grand Theft Auto V regions from an install, with caller-supplied archive keys
+- Reads Riders Republic and Shaun White Skateboarding (PC) data from Anvil forge archives
+- Reads Unity players' data files, with extra readers for SkateBIRD and PEAK
+- Reads STUNTBOOST levels and lifts MonoGame effect programs
+- Reads Tony Hawk: SHRED (PS3), Forza Horizon 6 tracks and TrackMania Nations Forever maps
+- Reads Frostbite data folders as skate. uses them
+- Reads and writes glTF 2.0 and GLB, using standard glTF and Khronos extensions only
+- Writes map folders for ReSkate Studio and runs its compile and post-compile steps
+- Writes Blender scenes whose materials are Cycles shader node graphs, saves them as `.blend` and renders them
+- Provides toolkit crates for BCn textures, DDS, PNG and JPEG, mesh operations, animation, Havok data and lighting
+- Converts large maps in parts, one part in memory at a time
+- Runs pipelines as stated: the pass manager never adds, removes or reorders a pass
+- Reports every omission, approximation and refusal as a notice in the conversion report
+- Produces the same bytes for the same input, and denies `unsafe` code outside the loading of a game's Oodle library
+
+## Getting Started
+
+### Requirements
+
+- Rust 1.99.0 (pinned in `rust-toolchain.toml`)
+- Your own installs of the games you read, and their archive keys where a game needs them
+- For the skate. stages: a skate. install and ReSkate Studio's command line (`reskate_cli.exe`)
+- For the Blender stages: a Blender executable
+
+On Windows, archives compressed with Oodle are read with the game's own `oo2core` DLL, loaded at run time from the install. Elsewhere `oozextract` decodes them.
+
+### Installation
+
+primase is not published on crates.io. Depend on its crates from Git, pinned to a commit:
+
+```toml
+[dependencies]
+primase-core = { git = "https://github.com/Kalmarv/primase", rev = "<commit>" }
+primase-meshops = { git = "https://github.com/Kalmarv/primase", rev = "<commit>" }
 ```
 
-Readers read supported source information faithfully; they do not bake it for a destination. Passes select and
-transform that information. Writers encode prepared data they support, report what they omit, and reject invalid
-data that prevents valid output. Compilation, stitching and other later stages remain explicit operations.
-
-## What it reads and writes
-
-| Crate | Reads or writes |
+| Package | What it does |
 | --- | --- |
-| [`worlds/fromsoft`](worlds/fromsoft/) | Sekiro: Shadows Die Twice and Elden Ring areas: placements, models, layered materials and their shaders, lights, collision |
-| [`worlds/gta`](worlds/gta/) | Grand Theft Auto V from an install |
-| [`worlds/frostbite`](worlds/frostbite/) | Frostbite data folders (skate.) |
-| [`worlds/anvil`](worlds/anvil/), [`worlds/shaunwhite`](worlds/shaunwhite/) | Anvil forge archives (Riders Republic), and Shaun White Skateboarding over them |
-| [`worlds/unity`](worlds/unity/), [`worlds/skatebird`](worlds/skatebird/), [`worlds/peak`](worlds/peak/) | Unity players' data files, what SkateBIRD's own scripts say, and what PEAK's scripts hand every shader |
-| [`worlds/monogame`](worlds/monogame/), [`worlds/stuntboost`](worlds/stuntboost/) | MonoGame (XNA 4.0, FNA) content, and STUNTBOOST's levels |
-| [`worlds/shred`](worlds/shred/) | Tony Hawk: SHRED's archives and scenes |
-| [`worlds/trackmania`](worlds/trackmania/) | TrackMania Nations Forever maps, placed from the install's block models |
-| [`worlds/forzatech`](worlds/forzatech/) | Forza Horizon 6 tracks: a box's placements, models, material chains and textures, as stored |
-| [`worlds/reskate`](worlds/reskate/) | skate. maps: preparation passes, the map folder ReSkate Studio compiles, and the compile and post-compile finishing |
-| [`formats/gltf`](formats/gltf/) | glTF 2.0 / GLB |
+| `primase-core` | The `World` store, core components, frames, the pass manager and the conversion loop |
+| `primase-texcodec` | BCn texture decoding and BC7 encoding behind one `TexFormat` |
+| `primase-dds` | DDS read and write (legacy and DX10 headers) |
+| `primase-image` | PNG and JPEG pixels, sRGB transfer, mip chains and texture passes |
+| `primase-meshops` | Mesh operations, tessellation and mesh passes |
+| `primase-animation` | Clip evaluation, poses, morphs, skinning and retargeting |
+| `primase-lighting` | Ambient light as fill lights, emissive surfaces as lights |
+| `primase-glb` | The GLB container, a strict GLB reader and a mesh encoder |
+| `primase-havok` | Havok convex shapes, skeletons, animations and cloth as world data |
+| `primase-exactsum` | An order-independent exact sum of `f64` values |
+| `primase-cache` | A content-addressed disk cache for expensive pure steps |
+| `primase-gltf` | glTF 2.0 / GLB reader and writer |
+| `primase-fromsoft` | Sekiro and Elden Ring |
+| `primase-gta` | Grand Theft Auto V |
+| `primase-anvil` | Anvil forge archives (Riders Republic) |
+| `primase-shaunwhite` | Shaun White Skateboarding (PC) |
+| `primase-unity` | Unity players' data files |
+| `primase-skatebird` | SkateBIRD, over `primase-unity` |
+| `primase-peak` | PEAK's script-set shader globals, over `primase-unity` |
+| `primase-monogame` | MonoGame effect programs |
+| `primase-stuntboost` | STUNTBOOST levels |
+| `primase-shred` | Tony Hawk: SHRED (PS3) |
+| `primase-forzatech` | Forza Horizon 6 tracks |
+| `primase-trackmania` | TrackMania Nations Forever maps |
+| `primase-frostbite` | Frostbite data folders |
+| `primase-reskate` | The skate. destination: preparation passes, the ReSkate Studio map writer, compile and post-compile |
+| `primase-blender` | The Blender destination: writer, `.blend` save and Cycles render |
 
-## Architecture
+The game and engine format readers, the iridia shader lifter and `primase-foundations` live in their own repositories and are pinned by commit in the root `Cargo.toml`. A program that uses one of them directly must pin the same commit primase does, or cargo treats the two as different crates.
 
-| Layer | What belongs here |
-| --- | --- |
-| [`core`](core/) | Shared meanings: geometry, materials, lights, collision and world state; what a shader program's inputs, constants and outputs stand for (`core::shader`); the `World` store, texture forms, irradiance volumes, auto exposure and pass/conversion machinery. |
-| [`toolkit`](toolkit/) | Reusable mechanisms, independent of a particular game or destination: texture codecs, DDS, images, mesh operations, animation, lighting, the GLB codec, Havok lowering, a disk cache. |
-| [`formats`](formats/) | Formats that are not one game's or destination's: their readers and writers. |
-| [`worlds`](worlds/) | Game, engine-family and destination knowledge: source readers, namespaced data and domain passes/writers. |
-| [`examples`](examples/) | Programs using primase as a library (the one below). primase has no command line: a program composes readers, passes and writers itself. |
-| [`checks`](checks/) | The architecture rules' tests and tests spanning crates. |
+### Usage
 
-A game crate may depend on its engine's crate, never the reverse. Each worlds crate names only its own game,
-engine or destination. Reusable destination preparation belongs alongside that destination's writer, as separately
-selected passes. Complete conversion programs live in consumer repositories and own their recipes and choices.
-
-### The crates under it
-
-How a game stores its data is not primase's: the readers of game and engine formats, the shader lifter, and the
-plumbing under them are libraries in their own repositories, published on crates.io, so they can be used without
-primase. They use none of primase's crates; primase's worlds crates read through them and turn what they read into
-the world.
-
-| Repository | Crates | What |
-| --- | --- | --- |
-| [iridia](https://github.com/Kalmarv/iridia) | `iridia`, `iridia-interface`, `iridia-dxbc`, `iridia-dxil`, `iridia-d3d9`, `iridia-mojo`, `iridia-exec` | Compiled shaders (DXBC, DXIL, Direct3D 9, Mojo) lifted to one program form, run on the CPU, and read for what their code shows |
-| [dx](https://github.com/Kalmarv/dx) | `dxcontainer`, `dxbc-reader`, `dxil-reader`, `rsx-reader` | Direct3D shader bytecode (the container, DXBC and DXIL, with their reflection), and the PlayStation 3's RSX textures and decoded vertex/fragment programs |
-| [fromsoft-formats](https://github.com/Kalmarv/fromsoft-formats), [rage-engine-formats](https://github.com/Kalmarv/rage-engine-formats), [frostbite-formats](https://github.com/Kalmarv/frostbite-formats), [anvil-formats](https://github.com/Kalmarv/anvil-formats), [unity-formats](https://github.com/Kalmarv/unity-formats), [monogame-formats](https://github.com/Kalmarv/monogame-formats), [rme-formats](https://github.com/Kalmarv/rme-formats) | one per engine | An engine's archives and file formats |
-| [havok-formats](https://github.com/Kalmarv/havok-formats), [havok-cloth](https://github.com/Kalmarv/havok-cloth), [morpheme-formats](https://github.com/Kalmarv/morpheme-formats), [lua51-bytecode](https://github.com/Kalmarv/lua51-bytecode) | one each | Middleware formats and cloth simulation several engines share |
-| [primase-foundations](https://github.com/Kalmarv/primase-foundations) | `primase-foundations` | Checked byte reads, game-file hashes, vertex decoding, texture sampling, and the compression codecs game files use |
-| [primase-naga](https://github.com/Kalmarv/primase-naga) | `primase-naga` | naga with the changes primase needs that upstream has not released |
-| [primase-testdata](https://github.com/Kalmarv/primase-testdata) | `primase-testdata` | The real-data test loader and input manifests, a dev-dependency only |
-
-The line between iridia and primase is the line between what a program is and what it means. iridia reports what a
-shader's code shows: its interface, Direct3D's fixed-function state, whether a matrix constant is read by rows or
-columns, which output lanes a discard tests or a blend weighs by. What those stand for (a view-projection matrix, an
-albedo, a normal stored octahedrally) is primase's to say, in `core::shader`, together with the one reading of a pixel
-program's outputs as a lit surface and the WGSL a GPU composite decodes them with.
-
-primase depends on each of these at one git commit, and every repository that shares one names the same commit
-([CONTRIBUTING](CONTRIBUTING.md#crates-in-their-own-repositories)).
-
-## What this means
-
-- **You choose what gets produced.** Region, world state, quality, baking, collision generation and placement are
-  program choices. Library operations can still have sensible, documented algorithm defaults.
-- **One read can feed different destinations.** Supported information stays in core or a source namespace until
-  selected passes transform it. Writers do not need to know which reader supplied it; coverage determines what can transfer.
-- **Losses are visible.** Reports retain known approximations, exclusions and unsupported output, including per-part
-  details. Preserving meaning matters; matching an old tool's encoded bytes is not a general requirement.
-- **New code has a home.** How a game stores its data goes in its engine's formats repository, shared concepts in
-  core, neutral mechanisms in toolkit, domain knowledge in formats or worlds, and recipe choices in the consuming
-  program. A standard shared concept need not wait for a second reader.
-
-## Using the library
-
-A consumer builds the passes it chooses through their typed constructors and supplies its reader, writer and
-explicit pipeline. This small sketch chooses to turn curves into polylines with a 1 cm tolerance; a real route also
-selects its source and destination preparation passes. The sketch uses `primase-core` and `primase-meshops`.
+A program reads with a reader, runs the passes it states, and writes with a writer. This function converts a world, turning curves into polylines within 1 cm:
 
 ```rust
 use primase_core::convert::{convert, ConvertReport, Reader, Result, Writer};
@@ -95,162 +86,28 @@ fn export(reader: &mut dyn Reader, writer: Box<dyn Writer>) -> Result<ConvertRep
     let passes = Pipeline {
         passes: vec![Box::new(FlattenCurves::new(0.01)?)],
     };
-    let select = Pipeline::default(); // No selection: retain all read content.
-    // A registry names passes for pipelines written as text; a pipeline built from typed passes needs none.
+    let select = Pipeline::default(); // no selection: keep everything that was read
     let manager = PassManager::new(PassRegistry::new());
     convert(reader, writer, &manager, &select, &passes)
 }
 ```
 
-Inspect the returned report's `notices()`; failures expose a partial report through `ConvertError`.
-Use `convert_parts` for incremental loading with explicit partition planning, or compose library operations directly.
+The returned report's `notices()` lists what was left out or approximated. `convert_parts` converts a world in planned parts.
 
-## From a Sekiro area to a skate. map
+The `examples` package holds complete programs. Each states its paths and choices in the source:
 
-One program, five stages:
-
-- **Read.** `AreaReader` reads an area of Sekiro as the game stores it: placements, models, materials and their
-  layered shaders, lights, spawn points and collision. It decides nothing for a destination; what has no shared
-  meaning stays in the `fromsoft` namespace.
-- **Select.** Passes run once on the world as read and lower Sekiro's data to core meanings: collision by hit class,
-  static meshes posed, the finest level of detail, layered materials baked to plain textures, materials, lights and
-  spawn points.
-- **Prepare.** Passes run on each part before it is written and prepare it for skate.: textures sampled at the
-  albedo's tiling (the dialect has no texture transform), raised to the skate dialect, clipped to the region, the
-  floor placed, the spawn chosen, water, the pause map, textures capped and tinted, decal overlays stacked, blend
-  chains ordered and budgeted, the collision laid out.
-- **Write.** `MapSink` encodes the prepared part as a map folder for ReSkate Studio. What it leaves out or
-  approximates is a notice in the report; a value it cannot encode is an error.
-- **Compile.** `compile_map` runs ReSkate Studio on the folder, then finishes the mod against skate.'s data with its version-9 Oodle library; its result includes the post-compile report.
-
-`convert` drives the first four: it reads, runs the selection, loads the region, runs its preparation, checks it
-against what the writer writes, and writes it. This region is one part; a larger map is converted in parts
-(`convert_parts`) and written as the whole map would be. Every choice is a typed value, an enum or a checked number,
-so a choice that is not valid fails while the pipeline is built, before anything is read.
-
-<!-- quoted from examples/examples/sekiro_to_reskate.rs: keep the two the same -->
-```rust
-fn main() -> Result<()> {
-    // Ashina Castle (m11_01), the part within [west, south, east, north] metres, and placements reaching 30 m into it
-    let region = [-170.0, 180.0, -50.0, 300.0];
-    let oodle = load_oodle(Path::new("C:/Games/Sekiro/oo2core_6_win64.dll"), Version::V6)?;
-    let decoder = Decoder { oodle: Some(&oodle), max_output: 1 << 30 };
-    let options = sekiro::Options { region: Some(sekiro::Region { rect: region, margin: 30.0 }), ..Default::default() };
-    let keys = Keys::from_folder("C:/Games/Sekiro/keys", Game::Sekiro, None)?;
-    let install = Install::new("C:/Games/Sekiro", Game::Sekiro, keys);
-    let mut reader = AreaReader::of(install, "m11_01", decoder, options);
-    let e = EncodingOptions {
-        out_root: "out".into(),
-        name: Some("ashina".into()),
-        max_render_edge: Some(48.0),
-        ..EncodingOptions::default()
-    };
-
-    // Run once on the area as read: Sekiro's own data lowered to core meanings.
-    let (reach, water, leave_out) = (Some(Metres::new(50.0)?), HitClass::set([22, 36])?, HitClass::set([29, 40])?);
-    let hit_filters = HitFilters::new([8, 27])?;
-    let skip = [SkipClass::Sky, SkipClass::LightVolume, SkipClass::Shadow].into();
-    #[rustfmt::skip]
-    let lower = Pipeline {
-        passes: vec![
-            Box::new(LowerFromSoftCollision { hit_filters, water: water.clone(), leave_out: leave_out.clone(), reach,
-                f_meshes: FMeshes::Off }),
-            Box::new(LowerFromSoftObjectCollision { resolution: ResolutionChoice::High, convex: ConvexBodies::Tessellate, leave_out: &water | &leave_out,
-                leave_out_motion: [2].into(), convex_surface: ConvexSurface::Render, reach }),
-            Box::new(DropFromSoftFar),
-            Box::new(ApplyRigidSkinning),
-            Box::new(LowerFromSoftGeometry { pose: Pose::Rigid, uv_tiling: Tiling::Apply, winding: Winding::Normals,
-                degenerates: Degenerates::Drop, leave_out: skip, blocker_cards: Cards::Record,
-                speedtree_frame: SpeedTreeFrame::Program }),
-            Box::new(SelectLod { choice: LodChoice::Finest }),
-            Box::new(ResolveFromSoftShaders::new(Unbound::Preview)),
-            Box::new(BakeFromSoftLayers::new(PixelCap::new(512)?, Seconds::new(0.0)?)),
-            // water without a base texture: the skate look's flat blue-grey (the destination's choice)
-            Box::new(LowerFromSoftMaterials::new(None, primase_image::Srgba8([48, 98, 122, 190]))),
-            Box::new(LowerFromSoftLights { candela_per_power: Factor::new(1.0)?, spot_blend: Fraction::new(0.15)?,
-                brightness: Brightness::Settled, min_range: Metres::new(0.5)?, include_disabled: Disabled::Skip }),
-            Box::new(LowerFromSoftExtras),
-        ],
-    };
-
-    // Run on each part before it is written: the core world prepared as the ReSkate writer encodes it.
-    let prepare = Pipeline {
-        passes: vec![
-            Box::new(NormalizeNormals),
-            Box::new(DropFromSoftTextureTransforms::new()),
-            // layers laid on a surface drawn as decals (raise-skate requires it)
-            Box::new(PrepareReskateLaidLayers::default()),
-            Box::new(RaiseSkate::new(RaiseOptions::new("ashina", LightCalibration::Standard, Unclassified::LeaveOut)?)),
-            Box::new(ClipReskateRegion::new(region, 30.0)?),
-            Box::new(PrepareReskateFloor::new(100.0, 250.0)?),
-            Box::new(PrepareReskateGrinds::studio()),
-            Box::new(PlaceReskateSpawn::centre()),
-            Box::new(SnapReskateMarkers::for_encoding(&e)?),
-            Box::new(PrepareReskateWater::new(WaterExtent::Region { margin: 400.0 }, OceanMaterials::Stated)?),
-            Box::new(PrepareReskatePauseMap::new(PauseSource::Geometry {
-                height: 2160,
-                extent: PauseExtent::Region,
-                drawing: PauseDrawing { leave_out: PauseLeaveOut::Nothing, colour: PauseColour::Mean },
-            })?),
-            Box::new(CapTextures::new(256, CapMode { beyond: Beyond::Filter, normals: NormalDownscale::Box })?),
-            Box::new(PrepareReskateTextures),
-            Box::new(PrepareReskateUvRepeats::new(RepeatDecals::Omit, RepeatBlended::Cutout)),
-            Box::new(PrepareReskateOverlays::new(0.004)?.for_encoding(&e)?),
-            Box::new(
-                PrepareReskateBlendOrder::new(200.0, primase_reskate::blend_order::ChainOrder::Tie)?
-                    .for_encoding(&e)?,
-            ),
-            Box::new(PrepareReskateCollision::new(CollisionSurfaces::Coalesce, CollisionWeld::Millimetre, &e)?),
-            Box::new(SummarizeReskateMap::for_encoding(&e)?),
-            Box::new(PlanReskateBlendBudget::pool()),
-        ],
-    };
-
-    // Read, lower, prepare, write `out/ashina`; what was left out or approximated comes back as notices.
-    let writer = Box::new(MapSink::new(Path::new(""), &e));
-    let report = convert(&mut reader, writer, &PassManager::new(PassRegistry::new()), &lower, &prepare)?;
-    for notice in report.notices() {
-        println!("{notice}");
-    }
-
-    // ReSkate Studio compiles the map folder into a mod, then the post-compile steps finish it (blend stage, level
-    // root, layering gate) against skate.'s data, read with skate.'s own Oodle library (version 9).
-    let studio = Studio { cli: "C:/ReSkate/reskate_cli.exe".into(), game: "C:/Games/skate".into() };
-    let skate_oodle = load_oodle(Path::new("C:/Games/skate/oo2core_9_win64.dll"), Version::V9)?;
-    let choices = CompileChoices {
-        streaming: Some(Streaming::Cells),
-        lods: true,
-        gi: true,
-        time_of_day: Some(TimeOfDay::Noon),
-        pause_map: None,
-    };
-    let compiled =
-        compile_map(&studio, Path::new("out/ashina"), Path::new("out/staging"), "ashina", &choices, &skate_oodle)?;
-    println!(
-        "{} ({} warnings; layering gate {:.0} s, failing but not yet enforced: {:?})",
-        compiled.patch.display(),
-        compiled.warnings,
-        compiled.finished.gate_seconds,
-        compiled.finished.reported
-    );
-    Ok(())
-}
-```
-
-This is [`examples/examples/sekiro_to_reskate.rs`](examples/examples/sekiro_to_reskate.rs) without its imports and Oodle
-loader; landing's checks build it. With the game, ReSkate Studio and skate. installed at the paths in it:
-
-```text
+```sh
+# a Sekiro area to a skate. map, compiled by ReSkate Studio (paths are in the file)
 cargo run --release -p primase-examples --example sekiro_to_reskate
+# Forza Horizon 6's Shibuya Scramble to a skate. map; Studio compile when both optional paths are given
+cargo run --release -p primase-examples --example fh6_to_reskate -- <ForzaHorizon6 install> [<skate install> <ReSkate CLI>]
+# a skate. Quick Drop item cloned into an .fbmod
+cargo run --release -p primase-examples --example quickdrop_clone -- <skate. game folder> <out.fbmod>
+# Elden Ring outfit and Stormveil Castle slice to GLB (install and keys from GAME_DATA)
+cargo run --release -p primase-examples --example elden_outfit_gltf -- outfit.glb
+cargo run --release -p primase-examples --example elden_stormveil_gltf -- stormveil.glb
 ```
 
-A complete program adds passes of its own for what it chooses beyond the library: ledges chained into grind rails,
-travel markers named for players with the spawn among them, collision added where the game has none under a rendered
-surface, foliage drawn as plain surfaces, and markers snapped down to the ground.
+Run the tests with `cargo nextest run`, and the architecture rules alone with `cargo test -p primase-checks --test architecture`. Real-data tests read their inputs from the TOML file `GAME_DATA` names and skip when it is unset; see [CONTRIBUTING](CONTRIBUTING.md) for that setup, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/DESIGN.md](docs/DESIGN.md) for the design, and each crate's README for its details.
 
-Status: the library is being aligned with this model; remaining boundary exceptions are tracked in
-[`architecture.toml`](architecture.toml).
-
-See [CONTRIBUTING](CONTRIBUTING.md) for rules, checks and real-data setup, and [DESIGN](docs/DESIGN.md) for detail.
-
-[GPL-3.0-or-later](LICENSE)
+Licensed under [GPL-3.0-or-later](LICENSE).

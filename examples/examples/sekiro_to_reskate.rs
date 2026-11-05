@@ -1,5 +1,4 @@
-//! An area of Sekiro read, lowered, prepared and written as a skate. map folder, then compiled by ReSkate Studio. The
-//! README's "From a Sekiro area to a skate. map" quotes this file; keep the two the same.
+//! An area of Sekiro read, lowered, prepared and written as a skate. map folder, then compiled by ReSkate Studio.
 use std::path::Path;
 
 use fromsoft_formats::dcx::Decoder;

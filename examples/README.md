@@ -7,7 +7,7 @@ recipes and quality choices are visible in each program. Build the examples from
 cargo build -p primase-examples --examples
 ```
 
-[sekiro_to_reskate](examples/sekiro_to_reskate.rs) is the complete example quoted in the root README. It needs
+[sekiro_to_reskate](examples/sekiro_to_reskate.rs) is a complete conversion, from game files to a compiled map. It needs
 a Sekiro install and archive keys, the game's Oodle library, ReSkate Studio and a skate. install at the paths the
 program states. After setting those paths, run:
 
