@@ -7,6 +7,7 @@
 primase_testdata::inputs! {
     games {
         Sekiro = "sekiro",
+        Tmnf = "tmnf",
     }
     installs {}
     keys {}
@@ -18,12 +19,22 @@ primase_testdata::inputs! {
         },
     }
     oracle_sets {
+        Gbxnet = "gbxnet" {
+            about: "what GBX.NET 2.5.0 (third-party, MIT) reads from the corpus, written by a thin dump harness",
+            source: "GBX.NET 2.5.0 with GBX.NET.LZO 2.1.6, run over the corpus files",
+        },
         Scripts = "scripts" {
             about: "measurements by our own scripts over game data, separate from the readers they check (normal curl, texture statistics, shadow and state records, the eclipse reference)",
             source: "our own scripts kept with the private oracle tools: separate from the readers under test, not third-party; some producers are not recorded yet",
         },
     }
     declared {
+        Query::Oracle(OracleSet::Gbxnet, Game::Tmnf, "tmnf-packs") => {
+            status: Live,
+            gate: false,
+            about: r#"GBX.NET 2.5.0's extraction of TrackMania Nations Forever's three packs: `<pack>/<path>` (each file's plaintext under its real name), among them the game's 50 DDS files, 13 of them legacy cube maps; tests/census.rs"#,
+            source: r#"the gbxnet-pak harness (GBX.NET 2.5.0's NadeoPak) over the install's `Packs/*.pak` with `packlist.dat`'s keys"#,
+        },
         Query::Oracle(OracleSet::Scripts, Game::Sekiro, "pbr") => {
             status: Live,
             gate: true,

@@ -34,6 +34,11 @@ primase_testdata::inputs! {
         },
     }
     tools {
+        DirectxtexDump = "directxtex_dump" {
+            about: "directxtex-dump: what Microsoft's DirectXTex library reads from a DDS file (`read`, `read-permissive`, `batch`), written out as the library returns it",
+            source: "third-party library: primase-oracles' dumps/directxtex built against DirectXTex may2026 (MIT)",
+            gate: true,
+        },
         Oodle6 = "oodle6" {
             about: "an Oodle version-6 DLL (`oo2core_6_win64.dll`); on Windows only: elsewhere oozextract decodes and nothing is configured",
             source: "the game's own DLL from the user's install",

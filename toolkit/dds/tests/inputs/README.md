@@ -17,12 +17,14 @@ What this crate's real-data tests read, as tests/inputs/mod.rs declares them: th
 
 | set | about | source |
 | --- | --- | --- |
+| `oracles.gbxnet` | what GBX.NET 2.5.0 (third-party, MIT) reads from the corpus, written by a thin dump harness | GBX.NET 2.5.0 with GBX.NET.LZO 2.1.6, run over the corpus files |
 | `oracles.scripts` | measurements by our own scripts over game data, separate from the readers they check (normal curl, texture statistics, shadow and state records, the eclipse reference) | our own scripts kept with the private oracle tools: separate from the readers under test, not third-party; some producers are not recorded yet |
 
 #### Declared files
 
 | key | status | gate | about | source |
 | --- | --- | --- | --- | --- |
+| `oracles.gbxnet.tmnf/tmnf-packs` | live | - | GBX.NET 2.5.0's extraction of TrackMania Nations Forever's three packs: `<pack>/<path>` (each file's plaintext under its real name), among them the game's 50 DDS files, 13 of them legacy cube maps; tests/census.rs | the gbxnet-pak harness (GBX.NET 2.5.0's NadeoPak) over the install's `Packs/*.pak` with `packlist.dat`'s keys |
 | `oracles.scripts.sekiro/pbr` | live | yes | source DDS in `census/dds` plus independent `texture-statistics.json` channel extrema and means; `worlds/fromsoft/tests/pbr_census.rs` | the install's own DDS with statistics computed by a script kept with the private oracle tools |
 
 <!-- end of real-data inputs -->

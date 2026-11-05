@@ -5,48 +5,19 @@
 //! library also reads every file this writer writes, in every shape, format, header and alpha mode, as this reader reads
 //! it.
 #![allow(clippy::unwrap_used)]
+mod harness;
 mod inputs;
 
-use inputs::{Tool, own_scratch, tool};
+use harness::{FIELDS, agrees, directxtex, images, metadata};
+use inputs::{Tool, tool};
 use primase_core::{ColorSpace, TexFormat};
-use primase_dds::{AlphaMode, Dds, Shape, WriteHeader, from_dxgi, parse, to_dxgi, write};
+use primase_dds::{AlphaMode, Dds, Shape, WriteHeader, from_dxgi, parse, write};
 use primase_testdata::gate::{GateReport, Tolerance};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 fn hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// DirectXTex's `TexMetadata` for what was read: arraySize counts cube faces, depth is 1 but for volumes.
-fn metadata(d: &Dds) -> [u64; 9] {
-    let (dimension, array, depth, misc) = match d.shape {
-        Shape::D1 { layers } => (2, u64::from(layers), 1, 0),
-        Shape::D2 { layers } => (3, u64::from(layers), 1, 0),
-        Shape::Cube { cubes } => (3, u64::from(cubes) * 6, 1, 4),
-        Shape::D3 { depth } => (4, 1, u64::from(depth), 0),
-    };
-    [
-        u64::from(d.width),
-        u64::from(d.height),
-        depth,
-        array,
-        d.levels.len() as u64,
-        misc,
-        u64::from(d.alpha_mode.misc2()),
-        u64::from(to_dxgi(d.format, d.color_space).unwrap()),
-        dimension,
-    ]
-}
-
-/// The images in DirectXTex's order (file order): item by item with their mips, or mip by mip with their slices.
-fn images(d: &Dds) -> Vec<&[u8]> {
-    match d.shape {
-        Shape::D3 { .. } => d.levels.iter().flatten().map(Vec::as_slice).collect(),
-        _ => (0..d.levels[0].len())
-            .flat_map(|item| d.levels.iter().map(move |level| level[item].as_slice()))
-            .collect(),
-    }
 }
 
 #[test]
@@ -70,18 +41,7 @@ fn texconv_layouts_read_as_directxtex_reads_them_and_write_back_exactly() {
         let d = &parsed.dds;
         assert!(!parsed.faces_counted, "{name}");
         let x = &case["directxtex"];
-        let expected = [
-            "width",
-            "height",
-            "depth",
-            "arraySize",
-            "mipLevels",
-            "miscFlags",
-            "miscFlags2",
-            "format",
-            "dimension",
-        ]
-        .map(|k| x[k].as_u64().unwrap());
+        let expected = FIELDS.map(|k| x[k].as_u64().unwrap());
         assert_eq!(
             metadata(d),
             expected,
@@ -120,85 +80,6 @@ fn texconv_layouts_read_as_directxtex_reads_them_and_write_back_exactly() {
     assert_eq!(shapes.len(), 4, "1D, 2D, cube and volume fixtures");
     reads.assert_passed();
     writes.assert_passed();
-}
-
-/// One answer of directxtex-dump: its `meta.json` and its `images.bin`.
-struct Answer {
-    meta: Value,
-    images: Vec<u8>,
-}
-
-/// DirectXTex's answers for `files` (each a command, `read` or `read-permissive`, and a file's bytes), from one batch run.
-fn directxtex(dump: &std::path::Path, files: &[(&str, Vec<u8>)]) -> Vec<Answer> {
-    let dir = own_scratch("directxtex-dds");
-    let mut list = String::new();
-    for (i, (command, bytes)) in files.iter().enumerate() {
-        let file = dir.join(format!("{i}.dds"));
-        std::fs::write(&file, bytes).unwrap();
-        list += &format!(
-            "{command}\t{}\t{}\n",
-            file.display(),
-            dir.join(i.to_string()).display()
-        );
-    }
-    let tsv = dir.join("list.tsv");
-    std::fs::write(&tsv, list).unwrap();
-    let out = std::process::Command::new(dump)
-        .arg("batch")
-        .arg(&tsv)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "directxtex-dump batch: {}\n{}",
-        out.status,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    (0..files.len())
-        .map(|i| {
-            let folder = dir.join(i.to_string());
-            Answer {
-                meta: serde_json::from_slice(&std::fs::read(folder.join("meta.json")).unwrap()).unwrap(),
-                images: std::fs::read(folder.join("images.bin")).unwrap_or_default(),
-            }
-        })
-        .collect()
-}
-
-/// Whether DirectXTex read `d` from the file: the same metadata and the same bytes for every image, in its order.
-fn agrees(name: &str, d: &Dds, answer: &Answer) -> Result<(), String> {
-    let x = &answer.meta;
-    let hr = x["hr"].as_str().unwrap();
-    if hr != "0x00000000" {
-        return Err(format!("{name}: DirectXTex refused it ({hr})"));
-    }
-    let theirs = [
-        "width",
-        "height",
-        "depth",
-        "arraySize",
-        "mipLevels",
-        "miscFlags",
-        "miscFlags2",
-        "format",
-        "dimension",
-    ]
-    .map(|k| x[k].as_u64().unwrap());
-    if metadata(d) != theirs {
-        return Err(format!(
-            "{name}: metadata {:?}, DirectXTex {theirs:?}",
-            metadata(d)
-        ));
-    }
-    let ours = images(d).concat();
-    if ours != answer.images {
-        return Err(format!(
-            "{name}: images differ ({} and {} bytes)",
-            ours.len(),
-            answer.images.len()
-        ));
-    }
-    Ok(())
 }
 
 /// A resource whose every image is distinct: byte `j` of image `i` of level `l` is `j + 7 i + 61 l`.
@@ -284,14 +165,14 @@ fn directxtex_reads_every_file_written_here_as_it_is_read_here() {
         &dump,
         &cases
             .iter()
-            .map(|(_, _, b)| ("read", b.clone()))
+            .map(|(_, _, b)| ("read", b.as_slice()))
             .collect::<Vec<_>>(),
     );
     let mut gate = GateReport::new("files written here, read by DirectXTex", Tolerance::Exact);
     for ((name, d, _), answer) in cases.iter().zip(&answers) {
-        match agrees(name, d, answer) {
+        match agrees(d, answer) {
             Ok(()) => gate.record(name, 0.0),
-            Err(e) => gate.fail(name, e),
+            Err(e) => gate.fail(name, format!("{name}: {e}")),
         }
     }
     eprintln!("{gate}");
@@ -319,17 +200,19 @@ fn face_counted_cubes_read_as_directxtex_reads_them_permissively() {
         let p = parse(&bytes).unwrap();
         assert!(p.faces_counted);
         assert_eq!(p.dds, d);
-        files.push(("read", bytes.clone()));
-        files.push(("read-permissive", bytes));
+        files.push(bytes);
         expected.push(d);
     }
-    let answers = directxtex(&dump, &files);
+    let runs: Vec<_> = files
+        .iter()
+        .flat_map(|b| [("read", b.as_slice()), ("read-permissive", b.as_slice())])
+        .collect();
+    let answers = directxtex(&dump, &runs);
     for (i, d) in expected.iter().enumerate() {
-        let strict = answers[2 * i].meta["hr"].as_str().unwrap();
-        assert_ne!(
-            strict, "0x00000000",
-            "cube {i}: DirectXTex's strict read accepted a face-counted cube"
+        assert!(
+            !answers[2 * i].read(),
+            "cube {i}: DirectXTex's default load read a face-counted cube"
         );
-        agrees(&format!("cube {i} permissive"), d, &answers[2 * i + 1]).unwrap();
+        agrees(d, &answers[2 * i + 1]).unwrap_or_else(|e| panic!("cube {i} permissive: {e}"));
     }
 }
