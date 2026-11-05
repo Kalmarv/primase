@@ -460,7 +460,20 @@ fn leaving_unbound_slots_invents_nothing() {
         &mut |_, _| Ok(None),
     )
     .unwrap();
-    assert!(resolution.policies.is_empty());
+    // nothing stands in: the slot naming a texture the read does not hold is missing and counted (whatever the
+    // policy), the slot naming nothing is left missing uncounted
+    let policies: Vec<_> = resolution
+        .policies
+        .iter()
+        .map(|(why, n)| (why.as_str(), *n))
+        .collect();
+    assert_eq!(
+        policies,
+        [(
+            "texture slots naming a texture not in the install, left missing",
+            1
+        )]
+    );
     assert!(
         resolution
             .stage
@@ -468,6 +481,15 @@ fn leaving_unbound_slots_invents_nothing() {
             .iter()
             .all(|t| matches!(t.source, TextureSource::Missing { .. }))
     );
+    let absent = resolution
+        .stage
+        .textures
+        .iter()
+        .filter(
+            |t| matches!(&t.source, TextureSource::Missing { why } if why.ends_with(": not in the install")),
+        )
+        .count();
+    assert_eq!(absent, 1);
     // the tiling is the engine's row whatever is bound: the bound slot's FLVER scale, the unbound slot's 1
     let tiling: Vec<_> = constants(&resolution.stage, &shader)
         .into_iter()
