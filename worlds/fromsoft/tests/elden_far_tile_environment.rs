@@ -289,7 +289,7 @@ fn stacked(
             else {
                 continue;
             };
-            let layers = primase_dds::read_volume(&t.dds)?;
+            let layers = primase_dds::read_layers(&t.dds)?;
             let primase_core::TextureShape::Volume { depth } = layers.shape else {
                 return Err(format!("{area}: {} not a volume", t.name).into());
             };

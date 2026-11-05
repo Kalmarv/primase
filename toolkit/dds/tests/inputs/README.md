@@ -10,6 +10,7 @@ What this crate's real-data tests read, as tests/inputs/mod.rs declares them: th
 
 | key | gate | about | source |
 | --- | --- | --- | --- |
+| `tools.directxtex_dump` | yes | directxtex-dump: what Microsoft's DirectXTex library reads from a DDS file (`read`, `read-permissive`, `batch`), written out as the library returns it | third-party library: primase-oracles' dumps/directxtex built against DirectXTex may2026 (MIT) |
 | `scratch.root` | - | where real-data tests write their outputs (the OS temporary folder when unset) | - |
 
 #### Oracle sets (`<oracles.root>/<set>/<game>/`)

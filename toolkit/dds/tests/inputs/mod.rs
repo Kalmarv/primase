@@ -10,7 +10,13 @@ primase_testdata::inputs! {
     }
     installs {}
     keys {}
-    tools {}
+    tools {
+        DirectxtexDump = "directxtex_dump" {
+            about: "directxtex-dump: what Microsoft's DirectXTex library reads from a DDS file (`read`, `read-permissive`, `batch`), written out as the library returns it",
+            source: "third-party library: primase-oracles' dumps/directxtex built against DirectXTex may2026 (MIT)",
+            gate: true,
+        },
+    }
     oracle_sets {
         Scripts = "scripts" {
             about: "measurements by our own scripts over game data, separate from the readers they check (normal curl, texture statistics, shadow and state records, the eclipse reference)",

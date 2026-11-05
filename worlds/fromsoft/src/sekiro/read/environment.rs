@@ -14,7 +14,7 @@ use fromsoft_formats::{
     msb::{MapLayout, Region},
     tpf::{Package, TextureKind},
 };
-use primase_core::{Name, Resource, Source, World};
+use primase_core::{Name, Resource, Source, TextureShape, World};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -188,18 +188,30 @@ pub fn load_requested(archive: &Archive, decoder: &Decoder<'_>, world: &mut Worl
                 if identity.state != package.state {
                     return Err(invalid("environment texture", 0, "package/name state mismatch"));
                 }
-                let data = match (texture.kind, identity.channel) {
-                    (TextureKind::Volume, Some(_)) => primase_dds::read_volume(&texture.dds),
-                    (TextureKind::Cube, None) => primase_dds::read_cube_faces(&texture.dds),
-                    _ => {
-                        return Err(invalid(
-                            "environment texture",
-                            0,
-                            "texture kind disagrees with member identity",
-                        ));
-                    }
+                if !matches!(
+                    (texture.kind, identity.channel),
+                    (TextureKind::Volume, Some(_)) | (TextureKind::Cube, None)
+                ) {
+                    return Err(invalid(
+                        "environment texture",
+                        0,
+                        "texture kind disagrees with member identity",
+                    ));
                 }
-                .map_err(|e| invalid("environment DDS", 0, e))?;
+                // The cubes' DX10 arraySize counts faces (6), not cubes; the DDS reader reads that as one cube.
+                let data =
+                    primase_dds::read_layers(&texture.dds).map_err(|e| invalid("environment DDS", 0, e))?;
+                if !matches!(
+                    (texture.kind, data.shape),
+                    (TextureKind::Volume, TextureShape::Volume { .. })
+                        | (TextureKind::Cube, TextureShape::Cube { cubes: 1 })
+                ) {
+                    return Err(invalid(
+                        "environment DDS",
+                        0,
+                        format!("{:?} for a {:?} texture", data.shape, texture.kind),
+                    ));
+                }
                 let entity = world.spawn();
                 world.insert(entity, Name(texture.name.clone()));
                 world.insert(entity, Source(format!("{}:{}", package.path, texture.name)));

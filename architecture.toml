@@ -40,3 +40,7 @@ reason = "the forge reader reads untrusted archive headers and tables"
 path = "toolkit/glb"
 reason = "the GLB reader reads untrusted containers, buffer views and accessors"
 
+[[parse_crate]]
+path = "toolkit/dds"
+reason = "the DDS reader reads untrusted headers and payload layouts"
+

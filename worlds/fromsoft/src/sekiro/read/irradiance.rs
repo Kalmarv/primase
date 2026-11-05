@@ -9,7 +9,7 @@ use fromsoft_formats::{
     tpf::{Package, TextureKind},
 };
 use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
-use primase_core::{Entity, Name, Source, World};
+use primase_core::{Entity, Name, Source, TextureShape, World};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Default)]
@@ -73,7 +73,10 @@ pub fn read(
             let channel = identity
                 .channel
                 .ok_or_else(|| invalid("GIIV", 0, "volume has no coefficient channel"))?;
-            let data = primase_dds::read_volume(&texture.dds).map_err(|e| invalid("GIIV DDS", 0, e))?;
+            let data = primase_dds::read_layers(&texture.dds).map_err(|e| invalid("GIIV DDS", 0, e))?;
+            if !matches!(data.shape, TextureShape::Volume { .. }) {
+                return Err(invalid("GIIV DDS", 0, format!("{:?}, not a volume", data.shape)));
+            }
             let entity = world.spawn();
             world.insert(entity, Name(texture.name.clone()));
             world.insert(entity, Source(format!("{path}:{}", texture.name)));

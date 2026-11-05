@@ -1,11 +1,26 @@
-//! Strict DDS containers. Payloads are retained verbatim, never decoded.
+//! DDS files: every layout Direct3D stores in one (1D, 2D, cube and volume textures, arrays of them, with mips), under
+//! the legacy header or the DX10 one. Payloads are retained verbatim, never decoded.
 //!
-//! Legacy DDS has no colour-space tag and reads as linear; callers may override it.
-//! DX10 sRGB tags are preserved. Role and normal convention are not DDS metadata:
-//! reads use `Other` and `None`. Only tightly packed rows are supported.
+//! A header means what it means to DirectXTex (Microsoft's reference, may2026), whose `DecodeDDSHeader` and
+//! `EncodeDDSHeader` this follows field by field: [`parse`] reads every layout texconv reads, and [`write`] writes the
+//! header bytes texconv writes. The differences are deliberate and listed in the README: this reader is stricter (the
+//! payload must be exactly the layout's size; typeless formats, unknown DX10 misc flags and the legacy formats
+//! DirectXTex converts as it loads are refused rather than altered), it reads the face-counted DX10 cubes DirectXTex
+//! reads only with `-permissive`, and it reads one legacy pixel format DirectXTex refuses (the FourCC flag with no
+//! FourCC).
+//!
+//! Legacy DDS has no colour-space tag and reads as linear (an NVIDIA Texture Tools sRGB flag aside); callers may
+//! override it. DX10 sRGB tags are preserved. Role and normal convention are not DDS metadata: reads use `Other` and
+//! `None`.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
-use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
+mod formats;
+mod read;
+
+use primase_core::{ColorSpace, TexFormat, TexRole, Texture, TextureLayers, TextureShape};
+
+pub use formats::{PixelFormat, from_dxgi, legacy_format, legacy_pixel_format, to_dxgi};
+pub use read::parse;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -21,437 +36,509 @@ fn invalid(offset: usize, detail: impl Into<String>) -> Error {
         detail: detail.into(),
     }
 }
-fn word(b: &[u8], o: usize) -> Result<u32> {
-    let s = b.get(o..o + 4).ok_or_else(|| invalid(o, "truncated header"))?;
-    Ok(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+
+/// A level's extent along one axis: halved `level` times, down to 1.
+fn extent(size: u32, level: u32) -> u32 {
+    size.checked_shr(level).unwrap_or(0).max(1)
 }
+
+/// The resource a DDS file holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shape {
+    /// `layers` 1D textures (a DX10 header only); the height is 1.
+    D1 { layers: u32 },
+    /// `layers` 2D textures.
+    D2 { layers: u32 },
+    /// `cubes` cube maps, six faces each: +X, -X, +Y, -Y, +Z, -Z.
+    Cube { cubes: u32 },
+    /// One volume `depth` texels deep; each level halves the depth with the width and height (down to 1).
+    D3 { depth: u32 },
+}
+
+impl Shape {
+    /// The images each level holds: the layers, six per cube, or the level's depth slices.
+    pub fn images_at(self, level: u32) -> u64 {
+        match self {
+            Shape::D1 { layers } | Shape::D2 { layers } => u64::from(layers),
+            Shape::Cube { cubes } => u64::from(cubes) * 6,
+            Shape::D3 { depth } => u64::from(extent(depth, level)),
+        }
+    }
+}
+
+/// How the alpha channel is to be read (the DX10 header's `miscFlags2`, DirectXTex's `TEX_ALPHA_MODE`). A legacy
+/// header states only premultiplied alpha (`DXT2`, `DXT4`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AlphaMode {
+    #[default]
+    Unknown,
+    Straight,
+    Premultiplied,
+    /// The alpha channel is 1 everywhere, or to be read as 1.
+    Opaque,
+    /// The alpha channel holds something other than transparency.
+    Custom,
+}
+
+impl AlphaMode {
+    /// The alpha mode a DX10 `miscFlags2` states.
+    pub fn from_misc2(value: u32) -> Result<Self> {
+        Ok(match value {
+            0 => AlphaMode::Unknown,
+            1 => AlphaMode::Straight,
+            2 => AlphaMode::Premultiplied,
+            3 => AlphaMode::Opaque,
+            4 => AlphaMode::Custom,
+            v => return Err(Error::Unsupported(format!("DX10 miscFlags2 {v:#x}"))),
+        })
+    }
+    /// The DX10 `miscFlags2` value.
+    pub fn misc2(self) -> u32 {
+        match self {
+            AlphaMode::Unknown => 0,
+            AlphaMode::Straight => 1,
+            AlphaMode::Premultiplied => 2,
+            AlphaMode::Opaque => 3,
+            AlphaMode::Custom => 4,
+        }
+    }
+}
+
+/// A DDS file's resource: its shape, format and every image of every level, as stored.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dds {
+    pub shape: Shape,
+    pub width: u32,
+    /// 1 for [`Shape::D1`].
+    pub height: u32,
+    pub format: TexFormat,
+    pub color_space: ColorSpace,
+    pub alpha_mode: AlphaMode,
+    /// `levels[level][image]`, largest level first, as [`TextureLayers`] holds them: each level has
+    /// [`Shape::images_at`] images (layers, cube faces cube after cube, or depth slices), each exactly the format's
+    /// size for the level's width and height.
+    pub levels: Vec<Vec<Vec<u8>>>,
+}
+
+/// Which header a file had.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeaderKind {
+    /// The Direct3D 9 header, with the pixel format it states the format by.
+    Legacy(PixelFormat),
+    Dx10,
+}
+
+/// What [`parse`] read: the resource, and the facts about the header it was read from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Parsed {
+    pub dds: Dds,
+    pub header: HeaderKind,
+    /// The DX10 `arraySize` counted cube faces (6 per cube) rather than cubes, as some writers do (FromSoftware's
+    /// environment cubes): DirectXTex reads these only with `DDS_FLAGS_PERMISSIVE` (texconv `-permissive`).
+    pub faces_counted: bool,
+}
+
+/// Which header [`write`] writes. Each matches a texconv choice byte for byte where they can.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteHeader {
+    /// The legacy header where it states everything the [`Dds`] holds, else DX10: texconv's default, except that
+    /// texconv also writes a lone 1D texture under a legacy header (reading back as 2D) and writes no alpha mode
+    /// without `-dx10`, where this writes the DX10 header to keep them.
+    Auto,
+    /// The legacy header, as texconv `-dx9` writes it: for one image, one cube or one volume. The colour space and
+    /// alpha mode are dropped where the pixel format can't state them (DXT2/DXT4 are premultiplied BC2/BC3); a format
+    /// with no legacy pixel format is refused.
+    Legacy,
+    /// The DX10 header with the alpha mode, as texconv `-dx10` writes it.
+    Dx10,
+}
+
+/// A [`Dds`]'s description and images, borrowed: what the writer needs, from a [`Dds`], [`Texture`] or
+/// [`TextureLayers`] without copying their pixels.
+struct View<'a> {
+    shape: Shape,
+    width: u32,
+    height: u32,
+    format: TexFormat,
+    color_space: ColorSpace,
+    alpha_mode: AlphaMode,
+    images: Images<'a>,
+}
+
+enum Images<'a> {
+    /// One image per level.
+    One(&'a [Vec<u8>]),
+    Many(&'a [Vec<Vec<u8>>]),
+}
+
+impl Images<'_> {
+    fn levels(&self) -> usize {
+        match self {
+            Images::One(l) => l.len(),
+            Images::Many(l) => l.len(),
+        }
+    }
+    fn count(&self, level: usize) -> usize {
+        match self {
+            Images::One(_) => 1,
+            Images::Many(l) => l[level].len(),
+        }
+    }
+    fn get(&self, level: usize, image: usize) -> &[u8] {
+        match self {
+            Images::One(l) => &l[level],
+            Images::Many(l) => &l[level][image],
+        }
+    }
+}
+
+impl View<'_> {
+    /// Check that the description is a resource Direct3D can hold and the images are exactly its layout.
+    fn validate(&self) -> Result<u32> {
+        let (count, extent_z) = match self.shape {
+            Shape::D1 { layers } | Shape::D2 { layers } => (layers, 1),
+            Shape::Cube { cubes } => (cubes, 1),
+            Shape::D3 { depth } => (depth, depth),
+        };
+        if self.width == 0 || self.height == 0 || count == 0 {
+            return Err(invalid(
+                0,
+                format!("{} x {} {:?}", self.width, self.height, self.shape),
+            ));
+        }
+        if matches!(self.shape, Shape::D1 { .. }) && self.height != 1 {
+            return Err(invalid(0, format!("1D texture with height {}", self.height)));
+        }
+        let most = self.width.max(self.height).max(extent_z).ilog2() + 1;
+        let levels = self.images.levels();
+        if levels == 0 || levels > most as usize {
+            return Err(invalid(
+                0,
+                format!(
+                    "{levels} levels for {} x {} {:?} (1 to {most})",
+                    self.width, self.height, self.shape
+                ),
+            ));
+        }
+        for level in 0..levels {
+            let l = level as u32;
+            let (w, h) = (extent(self.width, l), extent(self.height, l));
+            let images = self.shape.images_at(l);
+            if self.images.count(level) as u64 != images {
+                return Err(invalid(
+                    0,
+                    format!(
+                        "level {level}: {} images, a {:?} has {images}",
+                        self.images.count(level),
+                        self.shape
+                    ),
+                ));
+            }
+            let size = self
+                .format
+                .checked_level_size(w, h)
+                .ok_or_else(|| invalid(0, format!("level {level} size overflow")))?;
+            for i in 0..self.images.count(level) {
+                let len = self.images.get(level, i).len();
+                if len != size {
+                    return Err(invalid(
+                        0,
+                        format!("level {level} image {i}: {len} bytes, expected {size}"),
+                    ));
+                }
+            }
+        }
+        Ok(levels as u32)
+    }
+}
+
+impl Dds {
+    fn view(&self) -> View<'_> {
+        View {
+            shape: self.shape,
+            width: self.width,
+            height: self.height,
+            format: self.format,
+            color_space: self.color_space,
+            alpha_mode: self.alpha_mode,
+            images: Images::Many(&self.levels),
+        }
+    }
+
+    /// A single 2D texture.
+    pub fn from_texture(t: &Texture) -> Dds {
+        Dds {
+            shape: Shape::D2 { layers: 1 },
+            width: t.width,
+            height: t.height,
+            format: t.format,
+            color_space: t.color_space,
+            alpha_mode: AlphaMode::Unknown,
+            levels: t.levels.iter().map(|l| vec![l.clone()]).collect(),
+        }
+    }
+
+    /// An array, cube (array) or volume.
+    pub fn from_layers(t: &TextureLayers) -> Dds {
+        Dds {
+            shape: shape_of(t.shape),
+            width: t.width,
+            height: t.height,
+            format: t.format,
+            color_space: t.color_space,
+            alpha_mode: AlphaMode::Unknown,
+            levels: t.levels.clone(),
+        }
+    }
+
+    /// One 2D (or 1D, as a height of 1) texture. Core textures hold straight alpha, so premultiplied alpha is refused.
+    pub fn into_texture(self) -> Result<Texture> {
+        self.straight_alpha()?;
+        if !matches!(self.shape, Shape::D1 { layers: 1 } | Shape::D2 { layers: 1 }) {
+            return Err(Error::Unsupported(format!(
+                "{:?} as one 2D texture (read it as layers)",
+                self.shape
+            )));
+        }
+        Ok(Texture {
+            width: self.width,
+            height: self.height,
+            format: self.format,
+            levels: self.levels.into_iter().flatten().collect(),
+            color_space: self.color_space,
+            role: TexRole::Other,
+            normal: None,
+        })
+    }
+
+    /// Layers of any shape: 1D textures become 2D ones of height 1 (core has no 1D shape), a single 2D texture an array
+    /// of one. Premultiplied alpha is refused, as for [`Dds::into_texture`].
+    pub fn into_layers(self) -> Result<TextureLayers> {
+        self.straight_alpha()?;
+        let shape = match self.shape {
+            Shape::D1 { layers } | Shape::D2 { layers } => TextureShape::Array { layers },
+            Shape::Cube { cubes } => TextureShape::Cube { cubes },
+            Shape::D3 { depth } => TextureShape::Volume { depth },
+        };
+        Ok(TextureLayers {
+            shape,
+            width: self.width,
+            height: self.height,
+            format: self.format,
+            levels: self.levels,
+            color_space: self.color_space,
+            role: TexRole::Other,
+            normal: None,
+        })
+    }
+
+    fn straight_alpha(&self) -> Result<()> {
+        if self.alpha_mode == AlphaMode::Premultiplied {
+            return Err(Error::Unsupported(
+                "premultiplied alpha as a core texture (read it with `parse`)".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn shape_of(shape: TextureShape) -> Shape {
+    match shape {
+        TextureShape::Array { layers } => Shape::D2 { layers },
+        TextureShape::Cube { cubes } => Shape::Cube { cubes },
+        TextureShape::Volume { depth } => Shape::D3 { depth },
+    }
+}
+
+/// Read one 2D texture (or a 1D one, as a height of 1); other shapes are refused, see [`read_layers`].
+pub fn read(bytes: &[u8]) -> Result<Texture> {
+    parse(bytes)?.dds.into_texture()
+}
+
+/// Read a texture of any shape as layers (see [`Dds::into_layers`]).
+pub fn read_layers(bytes: &[u8]) -> Result<TextureLayers> {
+    parse(bytes)?.dds.into_layers()
+}
+
+/// Write a DDS file.
+pub fn write(dds: &Dds, header: WriteHeader) -> Result<Vec<u8>> {
+    emit(&dds.view(), header)
+}
+
+/// Write one 2D texture under the legacy header (texconv `-dx9`): the caller chooses to lose the colour space, which a
+/// legacy header can't state. Mips are written as supplied.
+pub fn write_legacy(t: &Texture) -> Result<Vec<u8>> {
+    emit(&texture_view(t), WriteHeader::Legacy)
+}
+
+/// Write one 2D texture under the DX10 header, with its DXGI format and colour space.
+pub fn write_dx10(t: &Texture) -> Result<Vec<u8>> {
+    emit(&texture_view(t), WriteHeader::Dx10)
+}
+
+/// Write an array, cube (array) or volume.
+pub fn write_layers(t: &TextureLayers, header: WriteHeader) -> Result<Vec<u8>> {
+    emit(
+        &View {
+            shape: shape_of(t.shape),
+            width: t.width,
+            height: t.height,
+            format: t.format,
+            color_space: t.color_space,
+            alpha_mode: AlphaMode::Unknown,
+            images: Images::Many(&t.levels),
+        },
+        header,
+    )
+}
+
+fn texture_view(t: &Texture) -> View<'_> {
+    View {
+        shape: Shape::D2 { layers: 1 },
+        width: t.width,
+        height: t.height,
+        format: t.format,
+        color_space: t.color_space,
+        alpha_mode: AlphaMode::Unknown,
+        images: Images::One(&t.levels),
+    }
+}
+
 fn put(b: &mut [u8], o: usize, n: u32) {
     b[o..o + 4].copy_from_slice(&n.to_le_bytes());
 }
 
-// Typed DXGI values only: typeless, depth/stencil, integer and unknown layouts are errors.
-const DXGI: &[(u32, TexFormat)] = &[
-    (2, TexFormat::Rgba32Float),
-    (10, TexFormat::Rgba16Float),
-    (11, TexFormat::Rgba16Unorm),
-    (16, TexFormat::Rg32Float),
-    (24, TexFormat::Rgb10a2Unorm),
-    (28, TexFormat::Rgba8Unorm),
-    (31, TexFormat::Rgba8Snorm),
-    (34, TexFormat::Rg16Float),
-    (35, TexFormat::Rg16Unorm),
-    (37, TexFormat::Rg16Snorm),
-    (41, TexFormat::R32Float),
-    (49, TexFormat::Rg8Unorm),
-    (51, TexFormat::Rg8Snorm),
-    (54, TexFormat::R16Float),
-    (56, TexFormat::R16Unorm),
-    (61, TexFormat::R8Unorm),
-    (63, TexFormat::R8Snorm),
-    (65, TexFormat::A8Unorm),
-    (71, TexFormat::Bc1),
-    (74, TexFormat::Bc2),
-    (77, TexFormat::Bc3),
-    (80, TexFormat::Bc4Unorm),
-    (81, TexFormat::Bc4Snorm),
-    (83, TexFormat::Bc5Unorm),
-    (84, TexFormat::Bc5Snorm),
-    (85, TexFormat::B5g6r5Unorm),
-    (86, TexFormat::B5g5r5a1Unorm),
-    (87, TexFormat::Bgra8Unorm),
-    (88, TexFormat::Bgrx8Unorm),
-    (95, TexFormat::Bc6hUfloat),
-    (96, TexFormat::Bc6hSfloat),
-    (98, TexFormat::Bc7),
-    (115, TexFormat::B4g4r4a4Unorm),
-];
-const SRGB: &[(u32, TexFormat)] = &[
-    (29, TexFormat::Rgba8Unorm),
-    (72, TexFormat::Bc1),
-    (75, TexFormat::Bc2),
-    (78, TexFormat::Bc3),
-    (91, TexFormat::Bgra8Unorm),
-    (93, TexFormat::Bgrx8Unorm),
-    (99, TexFormat::Bc7),
-];
-/// Map a typed DXGI format; typeless formats are deliberately not guessed.
-pub fn from_dxgi(value: u32) -> Result<(TexFormat, ColorSpace)> {
-    for (table, color) in [(DXGI, ColorSpace::Linear), (SRGB, ColorSpace::Srgb)] {
-        if let Some((_, f)) = table.iter().find(|(n, _)| *n == value) {
-            return Ok((*f, color));
+/// The header `EncodeDDSHeader` writes, then the images in file order.
+fn emit(v: &View, header: WriteHeader) -> Result<Vec<u8>> {
+    let mips = v.validate()?;
+    let one = matches!(
+        v.shape,
+        Shape::D1 { layers: 1 } | Shape::D2 { layers: 1 } | Shape::Cube { cubes: 1 } | Shape::D3 { .. }
+    );
+    let legacy = match header {
+        WriteHeader::Dx10 => None,
+        WriteHeader::Legacy => {
+            if !one {
+                return Err(Error::Unsupported(format!("{:?} under a legacy header", v.shape)));
+            }
+            let pf = legacy_pixel_format(v.format, v.color_space, v.alpha_mode, true);
+            Some(pf.ok_or_else(|| {
+                Error::Unsupported(format!(
+                    "{:?} {:?} under a legacy header",
+                    v.format, v.color_space
+                ))
+            })?)
         }
-    }
-    Err(Error::Unsupported(format!("DXGI format {value}")))
-}
-/// Map a format and colour space without dropping an sRGB tag.
-pub fn to_dxgi(format: TexFormat, color: ColorSpace) -> Result<u32> {
-    let table = if color == ColorSpace::Srgb { SRGB } else { DXGI };
-    table
-        .iter()
-        .find(|(_, f)| *f == format)
-        .map(|(n, _)| *n)
-        .ok_or_else(|| Error::Unsupported(format!("DXGI mapping for {format:?} {color:?}")))
-}
-/// The pixel format's FourCC flag: where it is set the FourCC states the format (the masks are not read), as Direct3D's
-/// loaders read a header. Writers also set the RGB flag beside it (`0x44`); a zero FourCC there leaves the masks to say.
-const FOURCC: u32 = 4;
-
-fn legacy(b: &[u8]) -> Result<TexFormat> {
-    use TexFormat::*;
-    let flags = word(b, 80)?;
-    if flags & FOURCC != 0 && b[84..88] != [0; 4] {
-        return match &b[84..88] {
-            b"DXT1" => Ok(Bc1),
-            b"DXT3" => Ok(Bc2),
-            b"DXT5" => Ok(Bc3),
-            b"ATI1" | b"BC4U" => Ok(Bc4Unorm),
-            b"ATI2" | b"BC5U" => Ok(Bc5Unorm),
-            b"BC4S" => Ok(Bc4Snorm),
-            b"BC5S" => Ok(Bc5Snorm),
-            c => Err(Error::Unsupported(format!("legacy FourCC {c:?}"))),
-        };
-    }
-    let masks = [
-        word(b, 88)?,
-        word(b, 92)?,
-        word(b, 96)?,
-        word(b, 100)?,
-        word(b, 104)?,
-    ];
-    match (flags & !FOURCC, masks) {
-        (0x40, [16, 0xf800, 0x7e0, 0x1f, 0]) => Ok(B5g6r5Unorm),
-        (0x41, [16, 0x7c00, 0x3e0, 0x1f, 0x8000]) => Ok(B5g5r5a1Unorm),
-        (0x41, [16, 0xf00, 0xf0, 0xf, 0xf000]) => Ok(B4g4r4a4Unorm),
-        (0x41, [32, 0xff, 0xff00, 0xff0000, 0xff000000]) => Ok(Rgba8Unorm),
-        (0x41, [32, 0xff0000, 0xff00, 0xff, 0xff000000]) => Ok(Bgra8Unorm),
-        (0x40, [32, 0xff0000, 0xff00, 0xff, 0]) => Ok(Bgrx8Unorm),
-        (0x41, [32, 0x3ff, 0xffc00, 0x3ff00000, 0xc0000000]) => Ok(Rgb10a2Unorm),
-        (0x20000, [8, 0xff, 0, 0, 0]) => Ok(R8Unorm),
-        (0x20000, [16, 0xffff, 0, 0, 0]) => Ok(R16Unorm),
-        (0x20001, [16, 0xff, 0, 0, 0xff00]) => Ok(Rg8Unorm),
-        (2, [8, 0, 0, 0, 0xff]) => Ok(A8Unorm),
-        _ => Err(Error::Unsupported(format!(
-            "legacy pixel flags {flags:#x}, masks {masks:x?}"
-        ))),
-    }
-}
-fn size(f: TexFormat, w: u32, h: u32) -> Result<usize> {
-    let (bw, bh) = f.block_dims();
-    let n = u64::from(w.div_ceil(bw)) * u64::from(h.div_ceil(bh));
-    n.checked_mul(u64::from(f.block_bytes()))
-        .and_then(|v| usize::try_from(v).ok())
-        .ok_or_else(|| invalid(16, "level size overflow"))
-}
-fn dimensions(w: u32, h: u32, n: u32) -> Result<()> {
-    if w == 0 || h == 0 {
-        return Err(invalid(12, "zero dimensions"));
-    }
-    if n == 0 || n > 32 - w.max(h).leading_zeros() {
-        return Err(invalid(28, "invalid mip count"));
-    }
-    Ok(())
-}
-/// Read a tightly packed DX10 3D texture, retaining each mip's depth slices in file order.
-/// A volume is not a 2D array: its depth halves at each mip along with width and height.
-pub fn read_volume(bytes: &[u8]) -> Result<primase_core::TextureLayers> {
-    use primase_core::{TextureLayers, TextureShape};
-    if bytes.get(..4) != Some(b"DDS ") || word(bytes, 4)? != 124 || word(bytes, 76)? != 32 {
-        return Err(invalid(0, "invalid DDS header"));
-    }
-    let flags = word(bytes, 8)?;
-    if flags & 0x801007 != 0x801007 || word(bytes, 112)? & 0x200000 == 0 {
-        return Err(invalid(8, "missing volume header flags"));
-    }
-    if word(bytes, 80)? & FOURCC == 0 || bytes.get(84..88) != Some(b"DX10") {
-        return Err(Error::Unsupported("volume without a DX10 header".into()));
-    }
-    if word(bytes, 132)? != 4 || word(bytes, 140)? != 1 {
-        return Err(invalid(132, "expected one 3D resource"));
-    }
-    if word(bytes, 136)? != 0 || word(bytes, 144)? != 0 || word(bytes, 112)? & 0xfe00 != 0 {
-        return Err(Error::Unsupported("volume misc flags / cube metadata".into()));
-    }
-    let width = word(bytes, 16)?;
-    let height = word(bytes, 12)?;
-    let depth = word(bytes, 24)?;
-    let mips = word(bytes, 28)?.max(1);
-    if width == 0 || height == 0 || depth == 0 || mips > 32 - width.max(height).max(depth).leading_zeros() {
-        return Err(invalid(12, "invalid volume dimensions or mip count"));
-    }
-    let (format, color_space) = from_dxgi(word(bytes, 128)?)?;
-    let top = size(format, width, height)?;
-    if flags & 8 != 0 && u64::from(word(bytes, 20)?) != u64::from(width) * u64::from(format.block_bytes()) {
-        return Err(invalid(20, "padded or inconsistent volume row pitch"));
-    }
-    // DDS's compressed linear-size field describes one top-level depth slice.
-    if flags & 0x80000 != 0 && word(bytes, 20)? as usize != top {
-        return Err(invalid(20, "inconsistent volume slice size"));
-    }
-    let mut end = 148_usize;
-    let mut levels = Vec::new();
-    for mip in 0..mips {
-        let slice_size = size(format, (width >> mip).max(1), (height >> mip).max(1))?;
-        let slices = (depth >> mip).max(1);
-        let mut level = Vec::new();
-        for _ in 0..slices {
-            let next = end
-                .checked_add(slice_size)
-                .ok_or_else(|| invalid(end, "volume size overflow"))?;
-            let slice = bytes
-                .get(end..next)
-                .ok_or_else(|| invalid(end, "truncated volume slice"))?;
-            level.push(slice.to_vec());
-            end = next;
+        WriteHeader::Auto => {
+            let premultiplied_dxtn = v.alpha_mode == AlphaMode::Premultiplied
+                && matches!(v.format, TexFormat::Bc2 | TexFormat::Bc3);
+            let states_alpha = v.alpha_mode == AlphaMode::Unknown || premultiplied_dxtn;
+            if one && states_alpha && !matches!(v.shape, Shape::D1 { .. }) {
+                legacy_pixel_format(v.format, v.color_space, v.alpha_mode, false)
+            } else {
+                None
+            }
         }
-        levels.push(level);
-    }
-    if end != bytes.len() {
-        return Err(invalid(end, "trailing volume payload"));
-    }
-    Ok(TextureLayers {
-        shape: TextureShape::Volume { depth },
-        width,
-        height,
-        format,
-        levels,
-        color_space,
-        role: TexRole::Other,
-        normal: None,
-    })
-}
-/// Read one tightly packed 2D texture, consuming the exact input length.
-/// Arrays, cubes, volumes, 1D resources and DX10 alpha-mode metadata are rejected.
-pub fn read(bytes: &[u8]) -> Result<Texture> {
-    if bytes.get(..4) != Some(b"DDS ") {
-        return Err(invalid(0, "bad magic"));
-    }
-    if word(bytes, 4)? != 124 || word(bytes, 76)? != 32 {
-        return Err(invalid(4, "invalid header size"));
-    }
-    if bytes.len() < 128 {
-        return Err(invalid(bytes.len(), "truncated header"));
-    }
-    let flags = word(bytes, 8)?;
-    if flags & 0x1007 != 0x1007 {
-        return Err(invalid(8, "missing required header flags"));
-    }
-    if word(bytes, 112)? & 0xfe00 != 0 {
-        return Err(Error::Unsupported("cube maps".into()));
-    }
-    if word(bytes, 112)? & 0x200000 != 0 || flags & 0x800000 != 0 || word(bytes, 24)? > 1 {
-        return Err(Error::Unsupported("volumes".into()));
-    }
-    let w = word(bytes, 16)?;
-    let h = word(bytes, 12)?;
-    let n = word(bytes, 28)?.max(1);
-    dimensions(w, h, n)?;
-    let (format, color_space, start) = if word(bytes, 80)? & FOURCC != 0 && &bytes[84..88] == b"DX10" {
-        let dim = word(bytes, 132)?;
-        if dim != 3 {
-            return Err(Error::Unsupported(format!(
-                "resource dimension {dim} (only 2D supported)"
-            )));
-        }
-        if word(bytes, 136)? & 4 != 0 {
-            return Err(Error::Unsupported("cube maps".into()));
-        }
-        if word(bytes, 140)? != 1 {
-            return Err(Error::Unsupported(format!(
-                "arrays (arraySize={})",
-                word(bytes, 140)?
-            )));
-        }
-        if word(bytes, 136)? != 0 || word(bytes, 144)? != 0 {
-            return Err(Error::Unsupported("DX10 misc flags / alpha-mode metadata".into()));
-        }
-        let (f, c) = from_dxgi(word(bytes, 128)?)?;
-        (f, c, 148)
-    } else {
-        (legacy(bytes)?, ColorSpace::Linear, 128)
     };
-    let top = size(format, w, h)?;
-    if flags & 8 != 0 && u64::from(word(bytes, 20)?) != u64::from(w) * u64::from(format.block_bytes()) {
-        return Err(invalid(20, "padded or inconsistent row pitch"));
-    }
-    if flags & 0x80000 != 0 && word(bytes, 20)? as usize != top {
-        return Err(invalid(20, "inconsistent top-level linear size"));
-    }
-    let mut ranges = Vec::new();
-    let mut end: usize = start;
-    for i in 0..n {
-        let len = size(format, (w >> i).max(1), (h >> i).max(1))?;
-        let next = end
-            .checked_add(len)
-            .ok_or_else(|| invalid(end, "payload size overflow"))?;
-        if next > bytes.len() {
-            return Err(invalid(end, format!("truncated mip {i}: need {len} bytes")));
-        }
-        ranges.push(end..next);
-        end = next;
-    }
-    if end != bytes.len() {
-        return Err(invalid(end, format!("{} trailing bytes", bytes.len() - end)));
-    }
-    Ok(Texture {
-        width: w,
-        height: h,
-        format,
-        levels: ranges.into_iter().map(|r| bytes[r].to_vec()).collect(),
-        color_space,
-        role: TexRole::Other,
-        normal: None,
-    })
-}
-fn validate(t: &Texture) -> Result<()> {
-    let n = u32::try_from(t.levels.len()).map_err(|_| invalid(28, "too many levels"))?;
-    dimensions(t.width, t.height, n)?;
-    for (i, l) in t.levels.iter().enumerate() {
-        let expected = size(t.format, (t.width >> i).max(1), (t.height >> i).max(1))?;
-        if l.len() != expected {
-            return Err(invalid(
-                i,
-                format!("mip {i}: {} bytes, expected {expected}", l.len()),
-            ));
-        }
-    }
-    Ok(())
-}
-fn header(t: &Texture, dx10: bool) -> Result<Vec<u8>> {
-    validate(t)?;
-    let mut b = vec![0; if dx10 { 148 } else { 128 }];
+    let dxgi = match legacy {
+        Some(_) => None,
+        None => Some(to_dxgi(v.format, v.color_space)?),
+    };
+
+    let mut b = vec![0_u8; if dxgi.is_some() { 148 } else { 128 }];
     b[..4].copy_from_slice(b"DDS ");
     put(&mut b, 4, 124);
-    let compressed = t.format.is_block_compressed();
-    put(
-        &mut b,
-        8,
-        0x1007 | if compressed { 0x80000 } else { 8 } | if t.levels.len() > 1 { 0x20000 } else { 0 },
-    );
-    put(&mut b, 12, t.height);
-    put(&mut b, 16, t.width);
+    let compressed = v.format.is_block_compressed();
+    let volume = matches!(v.shape, Shape::D3 { .. });
+    let cube = matches!(v.shape, Shape::Cube { .. });
+    // DDSD_CAPS | HEIGHT | WIDTH | PIXELFORMAT | MIPMAPCOUNT, and DEPTH for a volume.
+    let mut flags = 0x2_1007 | if compressed { 0x8_0000 } else { 0x8 };
+    if volume {
+        flags |= 0x80_0000;
+    }
+    put(&mut b, 8, flags);
+    put(&mut b, 12, v.height);
+    put(&mut b, 16, v.width);
+    // A compressed format states the top level's size (one depth slice of a volume), others the row pitch.
     let pitch = if compressed {
-        size(t.format, t.width, t.height)?
+        v.format.checked_level_size(v.width, v.height)
     } else {
-        size(t.format, t.width, 1)?
+        v.format.checked_level_size(v.width, 1)
     };
+    let pitch = pitch
+        .and_then(|p| u32::try_from(p).ok())
+        .ok_or_else(|| invalid(20, "pitch exceeds u32"))?;
+    put(&mut b, 20, pitch);
     put(
         &mut b,
-        20,
-        u32::try_from(pitch).map_err(|_| invalid(20, "pitch exceeds u32"))?,
+        24,
+        if let Shape::D3 { depth } = v.shape {
+            depth
+        } else {
+            1
+        },
     );
-    put(&mut b, 28, t.levels.len() as u32);
+    put(&mut b, 28, mips);
     put(&mut b, 76, 32);
-    put(&mut b, 80, 4);
-    put(&mut b, 108, if t.levels.len() > 1 { 0x401008 } else { 0x1000 });
-    Ok(b)
-}
-/// Write BC1/2/3 with DDS_HEADER flags describing the supplied levels.
-/// Legacy DDS cannot encode colour space; the caller explicitly chooses this loss
-/// by using this function. Mips are written as supplied (no trimming/generation).
-pub fn write_legacy(t: &Texture) -> Result<Vec<u8>> {
-    let four = match t.format {
-        TexFormat::Bc1 => b"DXT1",
-        TexFormat::Bc2 => b"DXT3",
-        TexFormat::Bc3 => b"DXT5",
-        f => return Err(Error::Unsupported(format!("legacy writer format {f:?}"))),
-    };
-    let mut b = header(t, false)?;
-    b[84..88].copy_from_slice(four);
-    for l in &t.levels {
-        b.extend_from_slice(l);
-    }
-    Ok(b)
-}
-/// Write a DX10 2D texture with a typed DXGI format and explicit colour space.
-pub fn write_dx10(t: &Texture) -> Result<Vec<u8>> {
-    let dxgi = to_dxgi(t.format, t.color_space)?;
-    let mut b = header(t, true)?;
-    b[84..88].copy_from_slice(b"DX10");
-    put(&mut b, 128, dxgi);
-    put(&mut b, 132, 3);
-    put(&mut b, 140, 1);
-    for l in &t.levels {
-        b.extend_from_slice(l);
-    }
-    Ok(b)
-}
-
-/// Read one DX10 cube, preserving all six faces and its stored mip chain.
-/// DDS stores all mips of each face consecutively; core stores all faces of each mip.
-pub fn read_cube(bytes: &[u8]) -> Result<primase_core::TextureLayers> {
-    read_cube_stored(bytes, 1)
-}
-
-/// Read the nonstandard header form whose array-size word counts six faces instead
-/// of one cube. The caller must identify this producer dialect explicitly. Payload
-/// length still has to account for exactly six faces, including all stored mips;
-/// canonical cube arrays remain refused by both single-cube entry points.
-pub fn read_cube_faces(bytes: &[u8]) -> Result<primase_core::TextureLayers> {
-    read_cube_stored(bytes, 6)
-}
-
-fn read_cube_stored(bytes: &[u8], array_size: u32) -> Result<primase_core::TextureLayers> {
-    use primase_core::{TextureLayers, TextureShape};
-    if bytes.get(..4) != Some(b"DDS ") || word(bytes, 4)? != 124 || word(bytes, 76)? != 32 {
-        return Err(invalid(0, "invalid DDS header"));
-    }
-    if word(bytes, 8)? & 0x1007 != 0x1007
-        || word(bytes, 80)? & FOURCC == 0
-        || bytes.get(84..88) != Some(b"DX10")
-    {
-        return Err(Error::Unsupported("cube without a DX10 texture header".into()));
-    }
-    if word(bytes, 132)? != 3 || word(bytes, 136)? != 4 || word(bytes, 140)? != array_size {
-        return Err(invalid(132, "expected one 2D cube resource"));
-    }
-    if word(bytes, 144)? != 0 || word(bytes, 112)? & 0xfe00 != 0xfe00 {
-        return Err(invalid(
-            112,
-            "cube needs all six faces and no alpha-mode metadata",
-        ));
-    }
-    let (width, height, mips) = (word(bytes, 16)?, word(bytes, 12)?, word(bytes, 28)?.max(1));
-    dimensions(width, height, mips)?;
-    if width != height {
-        return Err(invalid(12, "cube faces are not square"));
-    }
-    let (format, color_space) = from_dxgi(word(bytes, 128)?)?;
-    let mut levels = vec![Vec::with_capacity(6); mips as usize];
-    if word(bytes, 8)? & 8 != 0
-        && u64::from(word(bytes, 20)?) != u64::from(width) * u64::from(format.block_bytes())
-    {
-        return Err(invalid(20, "padded or inconsistent cube row pitch"));
-    }
-    if word(bytes, 8)? & 0x80000 != 0 && word(bytes, 20)? as usize != size(format, width, height)? {
-        return Err(invalid(20, "inconsistent cube top-level linear size"));
-    }
-    let mut at: usize = 148;
-    for _ in 0..6 {
-        for (mip, faces) in levels.iter_mut().enumerate() {
-            let length = size(format, (width >> mip).max(1), (height >> mip).max(1))?;
-            let end = at
-                .checked_add(length)
-                .ok_or_else(|| invalid(at, "cube size overflow"))?;
-            faces.push(
-                bytes
-                    .get(at..end)
-                    .ok_or_else(|| invalid(at, "truncated cube face/mip"))?
-                    .to_vec(),
-            );
-            at = end;
+    match legacy {
+        Some(pf) => {
+            put(&mut b, 80, pf.flags);
+            b[84..88].copy_from_slice(&pf.fourcc);
+            put(&mut b, 88, pf.bits);
+            for (i, m) in pf.masks.into_iter().enumerate() {
+                put(&mut b, 92 + 4 * i, m);
+            }
+        }
+        None => {
+            put(&mut b, 80, formats::FOURCC);
+            b[84..88].copy_from_slice(b"DX10");
         }
     }
-    if at != bytes.len() {
-        return Err(invalid(at, "trailing bytes after cube face/mip payloads"));
+    // DDSCAPS_TEXTURE, COMPLEX | MIPMAP with mips, COMPLEX for a cube.
+    let caps = 0x1000 | if mips > 1 { 0x40_0008 } else { 0 } | if cube { 0x8 } else { 0 };
+    put(&mut b, 108, caps);
+    let caps2 = if cube {
+        0xfe00
+    } else if volume {
+        0x20_0000
+    } else {
+        0
+    };
+    put(&mut b, 112, caps2);
+    if let Some(dxgi) = dxgi {
+        let (dimension, array) = match v.shape {
+            Shape::D1 { layers } => (2, layers),
+            Shape::D2 { layers } => (3, layers),
+            Shape::Cube { cubes } => (3, cubes),
+            Shape::D3 { .. } => (4, 1),
+        };
+        put(&mut b, 128, dxgi);
+        put(&mut b, 132, dimension);
+        put(&mut b, 136, if cube { 4 } else { 0 });
+        put(&mut b, 140, array);
+        put(&mut b, 144, v.alpha_mode.misc2());
     }
-    Ok(TextureLayers {
-        shape: TextureShape::Cube { cubes: 1 },
-        width,
-        height,
-        format,
-        levels,
-        color_space,
-        role: TexRole::Other,
-        normal: None,
-    })
+
+    let total: usize = (0..mips as usize)
+        .map(|l| {
+            (0..v.images.count(l))
+                .map(|i| v.images.get(l, i).len())
+                .sum::<usize>()
+        })
+        .sum();
+    b.reserve_exact(total);
+    if volume {
+        for level in 0..mips as usize {
+            for i in 0..v.images.count(level) {
+                b.extend_from_slice(v.images.get(level, i));
+            }
+        }
+    } else {
+        for i in 0..v.images.count(0) {
+            for level in 0..mips as usize {
+                b.extend_from_slice(v.images.get(level, i));
+            }
+        }
+    }
+    Ok(b)
 }
