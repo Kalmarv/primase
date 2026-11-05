@@ -901,7 +901,7 @@ fn stored_tangents(mesh: &[Vertex], member: usize, vertices: &[u32]) -> Result<V
 /// is two sets; a Half4 member is a point, not a set, and is lowered as one: `Part::points`), and the vertex colours, each as the input its semantic index in `layout` names (`COLOR0` as `Color(0)`,
 /// `COLOR1` as [`crate::sekiro::source::SECOND_COLOUR`]), of the vertices `vertices` of a mesh: what a material binary's
 /// programs read besides the first UV set. A set or colour the mesh's vertices do not all have is not kept.
-fn source_streams(
+pub(crate) fn source_streams(
     mesh: &[fromsoft_formats::flver::Vertex],
     layout: &crate::sekiro::source::LayerLayout,
     vertices: &[u32],

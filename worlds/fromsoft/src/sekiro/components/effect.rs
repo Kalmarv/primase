@@ -1,9 +1,10 @@
 //! What the effect read keeps for `lower-fromsoft-effects`: the effect files as stored (`fromsoft.effect_file`), the places
-//! effects stand (`fromsoft.effect`) and the files effects name by number (`fromsoft.effect_resource`). The read selects and
-//! places; the pass interprets.
+//! effects stand (`fromsoft.effect`), the files effects name by number (`fromsoft.effect_resource`) and the models their mesh
+//! particles draw (`fromsoft.effect_model`). The read selects and places; the pass interprets.
 use super::character::ClipEvents as SourceEvents;
 use super::source::EffectPlace;
 use fromsoft_formats::Game;
+use fromsoft_formats::flver::Model;
 use fromsoft_formats::fxr::Fxr;
 use fromsoft_formats::fxr::resources::TextureKind;
 use primase_core::json::{JsonError, to_value};
@@ -97,6 +98,19 @@ impl ResourceKind {
     }
 }
 
+/// The effect texture a model's material names by its path (`N:\...\Sfx\Tex\s34031_a.tif` is texture 34031 of kind
+/// `a`), if the path names one: a leaf of `s`, the number, an underscore and the kind's letter.
+pub fn model_texture(path: &str) -> Option<(TextureKind, i32)> {
+    let leaf = path.rsplit(['\\', '/']).next()?;
+    let stem = leaf.rsplit_once('.').map_or(leaf, |(stem, _)| stem);
+    let rest = stem.strip_prefix(['s', 'S'])?;
+    let (number, letter) = rest.split_once('_')?;
+    if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((TextureKind::from_letter(letter)?, number.parse().ok()?))
+}
+
 /// A file effects name by number (`fromsoft.effect_resource`), on the entity that holds it (a `core.texture` for a texture):
 /// its kind and number.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -112,6 +126,30 @@ impl Component for EffectResource {
     }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         to_value(self).map(Some)
+    }
+}
+
+/// The model a mesh particle draws, as its file stores it (`fromsoft.effect_model`), on the entity of its
+/// `fromsoft.effect_resource`. It is not a prototype's (`fromsoft.flver`): nothing places it, and the passes that lower
+/// placed models leave it alone; `lower-fromsoft-effects` makes it the `core.mesh` its particles draw. Shared, as
+/// [`crate::components::models::SourceModel`] is.
+#[derive(Clone, Debug)]
+pub struct EffectModel(pub Arc<Model>);
+impl EffectModel {
+    /// `model`, shared from here on.
+    pub fn new(model: Model) -> Self {
+        Self(Arc::new(model))
+    }
+}
+impl Component for EffectModel {
+    const NAME: &'static str = "fromsoft.effect_model";
+    const GEOMETRY: Geometry = Geometry::None;
+    /// The meshes' vertices and indices, as [`crate::components::models::SourceModel`]'s.
+    fn payload_bytes(&self) -> u64 {
+        self.0.resident_bytes()
+    }
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
+        primase_core::world::Linearity::Invariant
     }
 }
 
@@ -699,6 +737,30 @@ mod tests {
     use super::super::character::DecodedEvent;
     use super::*;
     use fromsoft_formats::tae::{Event, Header};
+
+    /// A model material's texture path names an effect texture by its leaf: `s<number>_<kind letter>`, any extension.
+    #[test]
+    fn a_model_texture_path_names_an_effect_texture_by_its_leaf() {
+        assert_eq!(
+            model_texture(r"N:\GR\data\Sfx\Tex\s34031_a.tif"),
+            Some((TextureKind::Albedo, 34031))
+        );
+        assert_eq!(
+            model_texture("sfx/tex/S120_n.dds"),
+            Some((TextureKind::Normal, 120))
+        );
+        assert_eq!(model_texture("s34031_3m"), Some((TextureKind::Specular, 34031)));
+        for not in [
+            "",
+            r"N:\GR\data\Sfx\Tex\m34031_a.tif",
+            "s_a.tif",
+            "s12x_a.tif",
+            "s34031_q.tif",
+            "s34031.tif",
+        ] {
+            assert_eq!(model_texture(not), None, "{not}");
+        }
+    }
 
     fn value(name: &str, v: EventValueData) -> EventValue {
         EventValue {

@@ -626,3 +626,161 @@ fn effect_uses_on_something_that_is_not_a_lowered_clip_are_counted_and_make_noth
         Some(&1)
     );
 }
+
+/// A one-mesh model of three vertices with a vertex colour, its material binding `texture` (a path, empty for none).
+fn effect_model(texture: &str, cull: bool) -> fromsoft_formats::flver::Model {
+    use fromsoft_formats::flver::{FaceSet, Material, Member, Mesh as SourceMesh, Model, Texture, Vertex};
+    Model {
+        bones: Vec::new(),
+        dummies: Vec::new(),
+        version: 0x2001a,
+        speedtree: false,
+        layouts: vec![vec![Member {
+            unknown: 0,
+            stored: true,
+            offset: 0,
+            kind: 0x1a,
+            semantic: 10,
+            index: 0,
+        }]],
+        materials: vec![Material {
+            name: "s1".into(),
+            mtd: r"N:\GR\data\Material\mtd\sfx\matxml\S[A]_add_GXFlver.matxml".into(),
+            textures: vec![Texture {
+                path: texture.into(),
+                kind: "g_DiffuseTexture".into(),
+                ..Texture::default()
+            }],
+            string_bytes: 0,
+            index: 0,
+            gx: Vec::new(),
+        }],
+        meshes: vec![SourceMesh {
+            dynamic: false,
+            material: 0,
+            node: -1,
+            palette: Vec::new(),
+            layouts: vec![0],
+            vertices: (0..3)
+                .map(|i| Vertex {
+                    position: [i as f32, (i == 1) as u8 as f32, 0.0],
+                    normal: [0.0, 1.0, 0.0],
+                    colors: [[0.5, 0.25, i as f32, 1.0]].into(),
+                    ..Vertex::default()
+                })
+                .collect(),
+            faces: vec![FaceSet {
+                flags: 0,
+                strip: false,
+                cull,
+                unknown_06: 0,
+                indices: vec![0, 1, 2],
+            }],
+        }],
+    }
+}
+
+/// A world holding `simple()` placed, the effect texture 34031 (absent: what matters is the entity) and the models `models`.
+fn world_with_models(models: Vec<(i32, fromsoft_formats::flver::Model)>) -> (World, Entity, Vec<Entity>) {
+    use crate::sekiro::components::effect::{EffectModel, EffectResource, ResourceKind};
+    let (mut world, _) = world_with(simple(), false);
+    let texture = world.spawn();
+    world.insert(
+        texture,
+        EffectResource {
+            kind: ResourceKind::Albedo,
+            id: 34031,
+        },
+    );
+    world.insert(
+        texture,
+        primase_core::TextureAbsent {
+            reason: "a stand-in".into(),
+        },
+    );
+    let entities = models
+        .into_iter()
+        .map(|(id, model)| {
+            let e = world.spawn();
+            world.insert(
+                e,
+                EffectResource {
+                    kind: ResourceKind::Model,
+                    id,
+                },
+            );
+            world.insert(e, EffectModel::new(model));
+            e
+        })
+        .collect();
+    (world, texture, entities)
+}
+
+/// A mesh particle's model is the `core.mesh` of its entity: its level-0 face set with the vertex colour the material
+/// binary's program reads, an unlit blended material of its own whose colour texture is the effect texture the binding's
+/// `_a` path names, double-sided where the face set draws back faces. A material that binds no file draws in the
+/// particles' colour alone, counted.
+#[test]
+fn an_effect_model_becomes_a_mesh_with_an_unlit_material_on_its_colour_texture() {
+    use primase_core::pbr::{AlphaMode, PbrMaterial, Shading};
+    use primase_core::{Mesh, Semantic, Stream};
+    let (mut world, texture, models) = world_with_models(vec![
+        (83050, effect_model(r"N:\GR\data\Sfx\Tex\s34031_a.tif", false)),
+        (84016, effect_model("", true)),
+    ]);
+    let mut log = PassLog::default();
+    pass().run(&mut world, &mut log).unwrap();
+    assert_eq!(log.counts.get("effect models lowered"), Some(&2));
+    assert_eq!(log.approximations.get(models::UNREAD_DEFINITION), Some(&2));
+    assert_eq!(
+        log.approximations
+            .get("effect model materials with no colour texture, drawn in their particles' colour alone"),
+        Some(&1)
+    );
+
+    let mesh = world.get::<Mesh>(models[0]).expect("a mesh");
+    assert_eq!(mesh.primitives().len(), 1);
+    let p = &mesh.primitives()[0];
+    assert_eq!(p.indices.as_ref().map(Vec::len), Some(3));
+    let Some(Stream::F32x4(colours)) = p.streams.get(&Semantic::Color(0)) else {
+        panic!("no vertex colour: {:?}", p.streams.keys());
+    };
+    assert_eq!(colours.len(), 3);
+    assert!(colours.iter().all(|c| c[0] == 0.5 && c[1] == 0.25));
+    let material = world.get::<PbrMaterial>(p.material.expect("a material")).unwrap();
+    assert_eq!(material.shading, Shading::Unlit);
+    assert_eq!(material.alpha_mode, AlphaMode::Blend);
+    assert!(material.double_sided);
+    assert_eq!(
+        material.base_color_texture.as_ref().map(|t| t.texture),
+        Some(texture)
+    );
+
+    let crystal = world.get::<Mesh>(models[1]).expect("a mesh");
+    let material = world
+        .get::<PbrMaterial>(crystal.primitives()[0].material.unwrap())
+        .unwrap();
+    assert!(material.base_color_texture.is_none());
+    assert!(!material.double_sided);
+}
+
+/// A model with no level-0 triangles is left without a mesh, counted: no particle draws it.
+#[test]
+fn an_effect_model_with_nothing_to_draw_is_left_out() {
+    use primase_core::Mesh;
+    let mut model = effect_model("", true);
+    model.meshes[0].faces[0].flags = 0x0100_0000;
+    let (mut world, _, models) = world_with_models(vec![(1, model)]);
+    let mut log = PassLog::default();
+    pass().run(&mut world, &mut log).unwrap();
+    assert!(!world.has::<Mesh>(models[0]));
+    assert_eq!(
+        log.omitted.get("effect model meshes with no level-0 face set"),
+        Some(&1)
+    );
+    assert_eq!(
+        log.omitted
+            .get("effect models with no level-0 triangles, left out"),
+        Some(&1)
+    );
+}

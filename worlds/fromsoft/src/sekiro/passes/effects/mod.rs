@@ -2,8 +2,9 @@
 //! `core.particles`, and the effects a character's animation events start (`fromsoft.clip_effect_uses`) as `core.clip_effects`.
 //! The read keeps the effect files as stored (`fromsoft.effect_file`) and the textures and models they name
 //! (`fromsoft.effect_resource`); this pass turns each placed effect's node tree into emitters ([`lower`]), the effects it
-//! spawns into systems of their own that its emitters name, and counts what the core description has no place for. An effect
-//! a clip's event starts is a system of its own, not placed; the clip's `core.clip_effects` says when and where it plays.
+//! spawns into systems of their own that its emitters name, the models its mesh particles draw into meshes ([`models`]),
+//! and counts what the core description has no place for. An effect a clip's event starts is a system of its own, not
+//! placed; the clip's `core.clip_effects` says when and where it plays.
 //!
 //! What the fxr project says of a parameter is the meaning used (sourced); the lowering's approximations, and the actions and
 //! parameters it leaves out, are in the pass log by reason, with the files' own numbers (`Notes`).
@@ -11,6 +12,7 @@ mod cx;
 mod draws;
 mod gpu;
 mod lower;
+pub mod models;
 pub mod units;
 pub mod value;
 
@@ -24,7 +26,8 @@ use fromsoft_formats::fxr::resources::TextureKind;
 pub use lower::{Lowered, NO_LIMIT, lower};
 use primase_core::particles::{Draw, ParticleSystem};
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::{Clip, ClipEffects, ClipSpawn, Component, Entity, World};
+use primase_core::pbr::PbrMaterial;
+use primase_core::{Clip, ClipEffects, ClipSpawn, Component, Entity, Mesh, Name, World};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Options: `candela-per-power` (required: candela per unit of the stored diffuse power, the program's calibration, as for
@@ -201,10 +204,16 @@ impl Pass for LowerFromSoftEffects {
         true
     }
     fn provides(&self) -> &[&'static str] {
-        &[ParticleSystem::NAME, ClipEffects::NAME]
+        &[
+            ParticleSystem::NAME,
+            ClipEffects::NAME,
+            Mesh::NAME,
+            PbrMaterial::NAME,
+            Name::NAME,
+        ]
     }
     fn approximates(&self) -> &'static str {
-        "the fxr project's reading of the parameters (not yet checked against a running game); Hermite properties sampled into lines; a GPU particle system as an ordinary emitter; level-of-detail ranges as ascending distances; soft-particle depth as a fixed distance; effect light colours squared at the keys of their curves"
+        "the fxr project's reading of the parameters (not yet checked against a running game); Hermite properties sampled into lines; a GPU particle system as an ordinary emitter; level-of-detail ranges as ascending distances; soft-particle depth as a fixed distance; effect light colours squared at the keys of their curves; mesh particles' materials unlit, their colour texture times the vertex colour"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         // the files the read kept
@@ -221,6 +230,9 @@ impl Pass for LowerFromSoftEffects {
                 ));
             }
         }
+        // the models mesh particles draw, as meshes; one left without (it draws nothing) is not found
+        let meshes = models::lower(world, &resources, log)?;
+        resources.retain(|(kind, _), e| *kind != ResourceKind::Model || meshes.contains(e));
         // the placements, and the effects they need with the effects those spawn
         let mut placements: Vec<(Entity, i32)> = Vec::new();
         for (e, p) in world.iter::<Effect>() {

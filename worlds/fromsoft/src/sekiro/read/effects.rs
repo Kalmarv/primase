@@ -1,20 +1,22 @@
 //! Effects where they stand (`fromsoft.effect`): the effects the map's SFX regions name and the effects the kept objects and
 //! assets spawn through their model effect row (the routes `fromsoft.effect_light` is read through, see
-//! [`super::effect_lights`]), with the effect files as stored (`fromsoft.effect_file`) and the textures they name
-//! (`fromsoft.effect_resource`, a `core.texture` each). Their interpretation belongs to `lower-fromsoft-effects`.
+//! [`super::effect_lights`]), with the effect files as stored (`fromsoft.effect_file`), the textures they name
+//! (`fromsoft.effect_resource`, a `core.texture` each) and the models their mesh particles draw (a `fromsoft.effect_model` each, the
+//! textures its materials name read with the effects'). Their interpretation belongs to `lower-fromsoft-effects`.
 //!
 //! The effect files are looked for in the binder of the area's map (`sfxbnd_<mNN>`, and Elden Ring's `sfxbnd_<full map name>`
 //! where there is one), then `sfxbnd_commoneffects` and Elden Ring's `commoneffects_dlc02`; the copies of an effect in several
-//! binders are byte-identical. A texture is looked for in the same binders, in that order.
+//! binders are byte-identical. A texture or a model is looked for in the same binders, in that order.
 use super::effect_lights::{ModelDummies, PlacedModel, Placement, map_transform, row_of};
 use super::textures::tpf_image;
 use crate::pose::placed;
 use crate::sekiro::character_data::ClipEvents as SourceEvents;
 use crate::sekiro::components::effect::{
-    Effect, EffectFile, EffectResource, ResourceKind, TraceOffsets, WeaponTraces, apply_trace_offsets,
-    clip_effect_uses, weapon_trace_uses,
+    Effect, EffectFile, EffectModel, EffectResource, ResourceKind, TraceOffsets, WeaponTraces,
+    apply_trace_offsets, clip_effect_uses, model_texture, weapon_trace_uses,
 };
 use crate::sekiro::source::EffectPlace;
+use fromsoft_formats::flver::Model;
 use fromsoft_formats::fxr::actions::Typed;
 use fromsoft_formats::fxr::resources::{ResourceKind as FileKind, Resources};
 use fromsoft_formats::fxr::{self, Fxr, TypedNode};
@@ -43,13 +45,13 @@ pub struct Report {
     pub parts_without_row: usize,
     /// Parts with a row that are not placed, by reason.
     pub parts_not_placed: BTreeMap<String, usize>,
-    /// Effect files read (the placed ones and the ones they spawn), textures read into the world, and the textures a file named
-    /// that the read could not give, by kind and why (no binder searched holds it, or its file does not decode: each kept as a
-    /// `core.texture_absent`), and models and animations named (not read).
+    /// Effect files read (the placed ones and the ones they spawn), textures and models read into the world, the textures and
+    /// models a file named that the read could not give, by kind and why (no binder searched holds it, or its file does not
+    /// decode: a texture kept as a `core.texture_absent`), and the model animations named (not read).
     pub files: usize,
     pub textures: usize,
+    pub models: usize,
     pub missing: BTreeMap<String, usize>,
-    pub models_named: usize,
     pub animations_named: usize,
     /// References that placed nothing, by reason (counted once per effect file or row), and the placements left unplaced
     /// because their effect file was not found.
@@ -265,6 +267,22 @@ impl<'a> EffectLibrary<'a> {
         }
         Ok(Ok(None))
     }
+
+    /// The mesh-particle model `id` (`s<id>.flver`) as stored, from the first binder that holds it: `Ok(None)` where none does,
+    /// `Err` with the reason where its file does not read (an archive that does not read is the outer error).
+    pub fn model(&mut self, id: i32) -> Result<std::result::Result<Option<Model>, String>> {
+        for i in 0..self.paths.len() {
+            let decoder = self.decoder;
+            let loaded = self.load(i)?;
+            if let Some(k) = loaded.resources.model(id) {
+                let read = decoder
+                    .decode_if_dcx(&loaded.binder.files[k].bytes)
+                    .and_then(|bytes| Model::read(&bytes));
+                return Ok(read.map(Some).map_err(|why| why.to_string()));
+            }
+        }
+        Ok(Ok(None))
+    }
 }
 
 /// Every effect named by the actions of `node`'s tree: its resources, by kind and number.
@@ -354,6 +372,49 @@ pub fn read_files(
             .map_err(|e| crate::invalid("effect file", 0, format!("effect {}: {e}", fx.id)))?;
         resources_of(&tree, &mut named);
     }
+    // the models, as stored: the textures their materials name are read with the effects' own
+    let mut models = Vec::new();
+    for &(kind, id) in &named {
+        if kind != ResourceKind::Model {
+            continue;
+        }
+        match library.model(id)? {
+            Ok(Some(model)) => models.push((id, model)),
+            Ok(None) => {
+                *report
+                    .missing
+                    .entry("Model not in the binders searched".to_owned())
+                    .or_default() += 1
+            }
+            Err(_) => {
+                *report
+                    .missing
+                    .entry("Model whose file does not decode".to_owned())
+                    .or_default() += 1
+            }
+        }
+    }
+    for (_, model) in &models {
+        for t in model.materials.iter().flat_map(|m| &m.textures) {
+            if let Some((texture_kind, texture)) = model_texture(&t.path) {
+                named.insert((ResourceKind::of_texture(texture_kind), texture));
+            }
+        }
+    }
+    for (id, model) in models {
+        let e = world.spawn();
+        entities.push(e);
+        world.insert(
+            e,
+            EffectResource {
+                kind: ResourceKind::Model,
+                id,
+            },
+        );
+        world.insert(e, EffectModel::new(model));
+        world.insert(e, Name(format!("sfx model {id}")));
+        report.models += 1;
+    }
     // a texture the read cannot give is kept as a core.texture_absent, so what names it still says one belongs there
     for (kind, id) in named {
         match kind.texture() {
@@ -382,7 +443,7 @@ pub fn read_files(
                 world.insert(e, Name(format!("sfx texture {id} ({kind:?}), absent")));
                 *report.missing.entry(format!("{kind:?} {counted}")).or_default() += 1;
             }
-            None if kind == ResourceKind::Model => report.models_named += 1,
+            None if kind == ResourceKind::Model => {}
             None => report.animations_named += 1,
         }
     }
