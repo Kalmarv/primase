@@ -446,8 +446,8 @@ impl Walk<'_> {
         }
         // the law of the particles
         if let Some(p) = parts.particle_attributes {
-            let life = value::number(&p.duration);
-            e.law.lifetime = (life >= 0.0).then(|| Value::constant(&[life]));
+            // a life the file draws for each particle keeps its draw; a base below 0 is the files' "for ever"
+            e.law.lifetime = (value::number(&p.duration) >= 0.0).then(|| self.cx.fixed(&p.duration));
             e.law.attachment = units::attachment(p.attachment, &mut self.cx.notes);
         }
         if let Some(m) = parts.modifier {
@@ -934,8 +934,10 @@ pub(super) fn end_time(emitters: &[Emitter]) -> Option<f32> {
             _ => return None,
         };
         let life = match &e.law.lifetime {
-            Some(v) if v.is_fixed() => value::number_of(v),
-            Some(_) => return None,
+            Some(v) => match value::reach(v) {
+                Some((_, longest)) => longest,
+                None => return None,
+            },
             None if matches!(
                 e.draw,
                 Some(primase_core::particles::Draw::Light(_)) | Some(primase_core::particles::Draw::Field(_))
@@ -993,5 +995,37 @@ mod tests {
         assert_eq!(end_time(&[once]), None);
         // nothing drawn: ends at once
         assert_eq!(end_time(&[blank(None, None)]), Some(0.0));
+    }
+
+    #[test]
+    fn a_system_whose_lives_are_drawn_ends_when_the_longest_can_end() {
+        let mut once = blank(None, None);
+        once.draw = Some(primase_core::particles::Draw::Point(
+            primase_core::particles::Point {
+                map: None,
+                blend: primase_core::particles::Blend::Alpha,
+                size: Value::constant(&[1.0]),
+                tint: Vec::new(),
+                alpha_cutoff: Value::constant(&[0.0]),
+                soft: None,
+                distance: Default::default(),
+                bloom: None,
+            },
+        ));
+        let mut life = Value::constant(&[0.3]);
+        life.variation.push(primase_core::particles::Variation::Range {
+            min: [0.0; 4],
+            max: [0.5, 0.0, 0.0, 0.0],
+            stream: 1,
+        });
+        once.law.lifetime = Some(life.clone());
+        assert_eq!(end_time(std::slice::from_ref(&once)), Some(0.8));
+        // a life scaled by what the game feeds has no longest
+        life.variation.push(primase_core::particles::Variation::Scaled {
+            input: 0,
+            factor: primase_core::particles::Curve::constant(&[2.0]),
+        });
+        once.law.lifetime = Some(life);
+        assert_eq!(end_time(&[once]), None);
     }
 }

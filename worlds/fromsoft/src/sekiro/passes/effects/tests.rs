@@ -169,6 +169,30 @@ fn a_basic_node_becomes_one_emitter_with_its_slots_lowered() {
 }
 
 #[test]
+fn a_particles_life_drawn_at_random_keeps_its_draw_and_the_system_ends_when_the_longest_ends() {
+    use fromsoft_formats::fxr::Modifier;
+    let mut effect = simple();
+    // the torch's particles live 2 s and a random 0 to 0.5 s more (a random-range modifier, as Elden Ring's shard sprites)
+    let life = &mut effect.root.children[0].configs[0].actions[1].properties1[0];
+    life.modifiers.push(Modifier {
+        type_a: 0xD080,
+        type_b: 4,
+        fields: vec![7, f(0.0), f(0.5)],
+        properties: Vec::new(),
+    });
+    let l = lower(&effect, Game::EldenRing, 1, &mut NoFiles).unwrap();
+    let e = &l.system.emitters[0];
+    let lifetime = e.law.lifetime.as_ref().expect("a life");
+    assert_eq!(lifetime.curve.value_at(0.0)[0], 2.0);
+    assert!(matches!(
+        lifetime.variation[..],
+        [primase_core::particles::Variation::Range { min, max, stream: 7 }] if min[0] == 0.0 && max[0] == 0.5
+    ));
+    // the torch emits from 0.5 s for its node's 5 s; its last particle can live 2.5 s more
+    assert_eq!(l.system.end, Some(8.0));
+}
+
+#[test]
 fn a_distortion_sheet_blends_by_its_alpha_whatever_its_files_blend_mode() {
     for (mode, approximated) in [(0.0, Some(&1)), (2.0, None), (4.0, Some(&1))] {
         let mut config = torch();

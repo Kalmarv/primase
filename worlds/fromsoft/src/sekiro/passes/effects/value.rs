@@ -261,6 +261,42 @@ fn variations(p: &Property, inputs: &mut Inputs, notes: &mut Notes) -> Vec<Varia
     out
 }
 
+/// The least and the greatest first component `v` can take: its one value carried through each variation's widest reach.
+/// `None` for a value that runs along its argument or is scaled by an input, whose reach depends on when it is read and on
+/// what the game feeds.
+pub fn reach(v: &Value) -> Option<(f32, f32)> {
+    if !(v.argument == Argument::Constant || v.curve.keys.len() == 1) {
+        return None;
+    }
+    let base = v.curve.value_at(0.0)[0];
+    let (mut least, mut greatest) = (base, base);
+    for variation in &v.variation {
+        match variation {
+            Variation::Delta { max, .. } => {
+                least -= max[0].abs();
+                greatest += max[0].abs();
+            }
+            Variation::Fraction { max, .. } => {
+                let m = max[0].abs();
+                let ends = [
+                    least * (1.0 - m),
+                    least * (1.0 + m),
+                    greatest * (1.0 - m),
+                    greatest * (1.0 + m),
+                ];
+                least = ends.iter().copied().fold(f32::INFINITY, f32::min);
+                greatest = ends.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            }
+            Variation::Range { min, max, .. } => {
+                least += min[0].min(max[0]);
+                greatest += min[0].max(max[0]);
+            }
+            Variation::Scaled { .. } => return None,
+        }
+    }
+    Some((least, greatest))
+}
+
 /// A property as a core value that is a function of `argument`.
 pub fn value(p: &Property, argument: Argument, inputs: &mut Inputs, notes: &mut Notes) -> Value {
     let variation = variations(p, inputs, notes);
@@ -549,6 +585,38 @@ mod tests {
             }
         }
         assert_eq!(notes.approximated.values().sum::<u32>(), 4);
+    }
+
+    #[test]
+    fn a_values_reach_runs_through_each_variation_and_is_unknown_along_an_argument_or_an_input() {
+        let mut v = Value::constant(&[2.0]);
+        assert_eq!(reach(&v), Some((2.0, 2.0)));
+        v.variation.push(Variation::Range {
+            min: [0.0; 4],
+            max: [0.5, 0.0, 0.0, 0.0],
+            stream: 0,
+        });
+        v.variation.push(Variation::Fraction {
+            max: [0.5, 0.0, 0.0, 0.0],
+            stream: 1,
+        });
+        v.variation.push(Variation::Delta {
+            max: [-0.25, 0.0, 0.0, 0.0],
+            stream: 2,
+        });
+        // 2 + [0, 0.5] is [2, 2.5]; times [0.5, 1.5] is [1, 3.75]; less or more 0.25
+        assert_eq!(reach(&v), Some((0.75, 4.0)));
+        let mut along = Value::constant(&[1.0]);
+        along.argument = Argument::Age;
+        let mut later = along.curve.keys[0];
+        later.at = 1.0;
+        along.curve.keys.push(later);
+        assert_eq!(reach(&along), None);
+        v.variation.push(Variation::Scaled {
+            input: 0,
+            factor: Curve::constant(&[1.0]),
+        });
+        assert_eq!(reach(&v), None);
     }
 
     #[test]
