@@ -852,7 +852,7 @@ impl Walk<'_> {
 }
 
 /// A blank emitter: hung from `parent`, attached to it, active at once and for ever, making nothing.
-fn blank(parent: Option<u32>, name: Option<String>) -> Emitter {
+pub(super) fn blank(parent: Option<u32>, name: Option<String>) -> Emitter {
     Emitter {
         name,
         parent,
@@ -907,7 +907,7 @@ fn transform(offset: [f32; 3], rotation_degrees: [f32; 3]) -> Transform {
 }
 
 /// Seconds after which no particle of the system is alive and nothing more is emitted; `None` when something never ends.
-fn end_time(emitters: &[Emitter]) -> Option<f32> {
+pub(super) fn end_time(emitters: &[Emitter]) -> Option<f32> {
     let mut starts: Vec<f32> = Vec::with_capacity(emitters.len());
     let mut end = 0.0f32;
     for e in emitters {

@@ -1,6 +1,7 @@
 //! What the effect read keeps for `lower-fromsoft-effects`: the effect files as stored (`fromsoft.effect_file`), the places
-//! effects stand (`fromsoft.effect`), the files effects name by number (`fromsoft.effect_resource`) and the models their mesh
-//! particles draw (`fromsoft.effect_model`). The read selects and places; the pass interprets.
+//! effects stand (`fromsoft.effect`), the bullets about to fly (`fromsoft.bullet`), the files effects name by number
+//! (`fromsoft.effect_resource`) and the models their mesh particles draw (`fromsoft.effect_model`). The read selects and
+//! places; the pass interprets.
 use super::character::ClipEvents as SourceEvents;
 use super::source::EffectPlace;
 use fromsoft_formats::Game;
@@ -55,6 +56,21 @@ impl Component for Effect {
     }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         to_value(self).map(Some)
+    }
+}
+
+/// An Elden Ring bullet (a spell's, an arrow's or an attack's projectile) standing where an entity's transform places it,
+/// about to fly along the frame's forward (`fromsoft.bullet`): its `BulletParam` row as stored.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bullet(pub fromsoft_formats::param::Bullet);
+impl Component for Bullet {
+    const NAME: &'static str = "fromsoft.bullet";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
+        primase_core::world::Linearity::Invariant
+    }
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        to_value(&self.0).map(Some)
     }
 }
 

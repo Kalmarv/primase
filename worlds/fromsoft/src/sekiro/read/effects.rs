@@ -12,7 +12,7 @@ use super::textures::tpf_image;
 use crate::pose::placed;
 use crate::sekiro::character_data::ClipEvents as SourceEvents;
 use crate::sekiro::components::effect::{
-    Effect, EffectFile, EffectModel, EffectResource, ResourceKind, TraceOffsets, WeaponTraces,
+    Bullet, Effect, EffectFile, EffectModel, EffectResource, ResourceKind, TraceOffsets, WeaponTraces,
     apply_trace_offsets, clip_effect_uses, model_texture, weapon_trace_uses,
 };
 use crate::sekiro::source::EffectPlace;
@@ -710,6 +710,36 @@ pub fn read_effect(
         .map(|(e, _)| e)
         .find(|e| !before.contains(e));
     Ok((report, placed))
+}
+
+/// One Elden Ring bullet read by its `BulletParam` row, standing at the origin about to fly (a viewer's world): the row
+/// (`fromsoft.bullet`) and the effect files of its own effect (`sfxId_Bullet`) with the effects they spawn, searched for
+/// in `binders`. Returns the report and the bullet's entity, `None` when the param has no row `bullet`.
+pub fn read_bullet(
+    install: &Install,
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    binders: Vec<String>,
+    bullet: i32,
+    world: &mut World,
+) -> Result<(Report, Option<Entity>)> {
+    let mut report = Report {
+        asked: true,
+        ..Report::default()
+    };
+    let param = fromsoft_formats::game_params::read_bullet_param(install, archive, decoder)?;
+    let Some(row) = param.row(bullet).copied() else {
+        return Ok((report, None));
+    };
+    if row.effect != -1 {
+        let mut library = EffectLibrary::new(archive, decoder, install.game, binders);
+        read_files(&mut library, vec![row.effect], world, &mut report)?;
+    }
+    let e = world.spawn();
+    world.insert(e, Transform::IDENTITY);
+    world.insert(e, Source(format!("bullet {bullet}")));
+    world.insert(e, Bullet(row));
+    Ok((report, Some(e)))
 }
 
 #[cfg(test)]

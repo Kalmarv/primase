@@ -300,3 +300,87 @@ fn the_mesh_particles_of_two_spells_draw_their_models() -> Result<()> {
     }
     Ok(())
 }
+
+/// Glintstone Pebble's and Glintstone Shard's bullets (`BulletParam` rows 10400000 and 10400100) read alone as a viewer
+/// reads one (`read_bullet`) and lowered: each is a system whose one emitter flies by its row's law (13 m/s, no
+/// acceleration before 0.32 s, then 40 m/s² held between 6 and 25 m/s, facing its motion) for the row's life and starts
+/// the system of the bullet's own effect (523002, 523022), which the pass lowered from the file the read kept; the
+/// homing and the hit effect are counted, not carried.
+#[test]
+fn the_bullets_of_two_spells_fly_by_their_rows_and_carry_their_effects() -> Result<()> {
+    use primase_core::particles::{ParticleSystem, Value};
+    use primase_fromsoft::sekiro::effect_data::Bullet;
+    use primase_fromsoft::sekiro::passes::effects::bullets;
+    let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
+        return Ok(());
+    };
+    let (Some(root), Some(keys)) = (
+        inputs::install(inputs::Game::Elden),
+        inputs::keys(inputs::Game::Elden),
+    ) else {
+        return Ok(());
+    };
+    let dll = common::oodle(dll)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    let game = Game::EldenRing;
+    let keys = Keys::from_folder(keys, game, game.param_key_sha256())?;
+    let install = common::install(root, game, keys);
+    let archive = install.open()?;
+    for (bullet, effect, life) in [(10_400_000, 523_002, 1.12), (10_400_100, 523_022, 1.25)] {
+        let mut world = World::default();
+        let binders = sekiro::binders_for_area(game, "");
+        let (report, placed) =
+            sekiro::read_bullet(&install, &archive, &decoder, binders, bullet, &mut world)?;
+        let placed = placed.ok_or("no bullet row")?;
+        println!("{bullet}: {report:?}");
+        assert_eq!(world.get::<Bullet>(placed).map(|b| b.0.effect), Some(effect));
+        assert!(
+            world.iter::<EffectFile>().any(|(_, f)| f.effect == effect),
+            "{bullet}: the effect file is not kept"
+        );
+
+        let m = common::manager().with_conservation(primase_core::ledger::Conservation::Enforce);
+        let mut run = RunReport::default();
+        m.run(
+            &mut world,
+            &m.registry.parse("lower-fromsoft-effects{candela-per-power=1}")?,
+            &mut run,
+        )?;
+        let log = &run.steps[0].log;
+        assert_eq!(log.counts.get("bullets lowered").copied(), Some(1), "{log:?}");
+        for reason in [bullets::HIT_EFFECT, bullets::HOMING] {
+            assert_eq!(log.omitted.get(reason).copied(), Some(1), "{reason}: {log:?}");
+        }
+        let system = world
+            .get::<ParticleSystem>(placed)
+            .ok_or("the bullet has no system")?;
+        let [emitter] = system.emitters.as_slice() else {
+            panic!("{bullet}: {} emitters", system.emitters.len());
+        };
+        assert_eq!(emitter.duration, Some(life));
+        let motion = emitter.motion.as_ref().ok_or("the bullet does not move")?;
+        let at = |v: &Value, t: f32| v.eval(t, 0, 0, 0, &|_| 0.0)[0];
+        assert_eq!(at(&motion.speed, 0.0), 13.0);
+        assert_eq!(
+            (at(&motion.acceleration, 0.3), at(&motion.acceleration, 0.32)),
+            (0.0, 40.0)
+        );
+        assert_eq!((motion.min_speed, motion.max_speed), (Some(6.0), Some(25.0)));
+        assert!(motion.align);
+        let [started] = emitter.spawns.as_slice() else {
+            panic!("{bullet}: it starts {} systems", emitter.spawns.len());
+        };
+        let carried = world
+            .get::<ParticleSystem>(*started)
+            .ok_or("the effect is not lowered")?;
+        assert!(!carried.emitters.is_empty());
+        assert!(
+            !world.has::<Transform>(*started),
+            "the carried effect is placed of its own"
+        );
+    }
+    Ok(())
+}

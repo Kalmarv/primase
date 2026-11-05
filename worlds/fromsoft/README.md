@@ -487,7 +487,9 @@ converts frames; it does not lower:
   area's binder and the common ones). `Report::effects` counts the regions, the effects placed by each route, the
   files, textures and models read and what no binder held, by reason. The models mesh particles draw are read
   (`fromsoft.effect_model`, with the textures their materials name) and lowered to meshes with unlit materials by
-  `lower-fromsoft-effects`; the model animations the effects name are counted, not read. `read_effect` reads one effect by its number, at the origin (an effect viewer's world);
+  `lower-fromsoft-effects`; the model animations the effects name are counted, not read. `read_effect` reads one effect by its number, at the origin (an effect viewer's world); `read_bullet` reads one Elden
+  Ring bullet by its `BulletParam` row, at the origin about to fly (`fromsoft.bullet`, the row as stored), with the files
+  of its own effect;
 - with `CharacterOptions::clip_effects` (`CharacterReader::with_clip_effects`), each animation clip, as it loads, also reads
   the effects its events start: the events of types 96, 118 and 120, whose first field the stock files bear out as an effect
   number (types 110, 112, 116 and 119, which the community template also gives an `FFX ID`, hold small numbers or effects no
@@ -695,7 +697,14 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   Hermite property is sampled into a line (counted); the fxr project's reading of the parameters is the meaning used
   (sourced, not checked in a running game); what core has no place for (the flicker of a light, sounds, the conditions
   between states, a node's response to forces) is counted by reason. `candela-per-power` scales the light draws as
-  `lower-fromsoft-lights` scales its lights. The records stay.
+  `lower-fromsoft-lights` scales its lights. A bullet (`fromsoft.bullet`) becomes a system of one emitter that flies by
+  its row's law and starts the system of its own effect on its frame: its start speed along its frame's forward, no
+  acceleration before `accelTime`, then its in-range acceleration until its forward travel reaches `dist` and its
+  out-of-range acceleration after, held between its min and max speeds, gravity in and out of range likewise, its life,
+  facing its motion (`core`'s `NodeMotion`, the law the row states as Paramdex describes its fields; a max speed of 0 is
+  read as no limit and the facing is the pass's choice, both counted). Its homing (a lowered world has no target: it
+  flies straight), hit and deflection effects, the bullets it makes, a follow type other than 0 and the random range of
+  its life are not carried, counted. The records stay.
 - `lower-fromsoft-render-graph` prepares the raw `core.render_graph` read with
   `Options::render_graph`. The reader leaves its lighting pipeline absent and unknown constants intact.
   The registered pass selects the supported native lighting stages, supplies and reports the finite sun,
@@ -874,6 +883,7 @@ unless an option asks), **unread** (no reader opens it). A row's owner is the pr
 | Water | slots of class `water`; collision class soup `water` | read as a material (the program's water colour and normal map; depth, refraction and flow not evaluated) and as a collision soup | `lower-fromsoft-materials`, `lower-fromsoft-collision` / Shaded, Collision |
 | Lights, bank 0 (`<area>_0000.btl.dcx`) | `FILES _NNNN.btl` | read | `read/extras.rs`, `lower-fromsoft-lights` / Lights |
 | Effects (every FXR action: emitters, particles, trails, distortion, blur, lights, forces): the same routes | `REGIONS` type 5, `PARTS`, `ModelSfxParam`/`AssetModelSfxParam`, the `sfx` binders | read with `Options::effects` (off by default) as `fromsoft.effect`, `fromsoft.effect_file`, `fromsoft.effect_resource` and `fromsoft.effect_model` (the models mesh particles draw, lowered to meshes with unlit materials); model animations named are counted, not read | `read/effects.rs`, `lower-fromsoft-effects` / Effects |
+| Bullets (Elden Ring: a spell's or an attack's projectile, by its `BulletParam` row): flight and the effect it carries | `BulletParam` of `regulation.bin`, the `sfx` binders | read one by its row (`read_bullet`) as `fromsoft.bullet` with its effect's files; lowered to a flying `core.particles` that starts its effect; homing, hits, child bullets and following are read and counted, not carried | `read/effects.rs`, `lower-fromsoft-effects` / `passes/effects/bullets.rs` |
 | Effect lights (FXR point and spot lights): SFX regions, and the effects placed objects and assets spawn through their model effect param row | `REGIONS` type 5, `PARTS`, `ModelSfxParam`/`AssetModelSfxParam`, the `sfx` binders | read with `Options::effect_lights` (off by default) as `fromsoft.effect_light`; light shafts (no instance) and every other effect action unread | `read/effect_lights.rs`, `lower-fromsoft-lights` / Lights. Per-area counts in `tests/effect_lights_census.rs` |
 | Light banks other than 0 | `FILES _NNNN.btl` | unread (the reader opens `_0000` only) | none. `FILES` says how many banks exist per area |
 | Light probes / global illumination data | Sekiro's `<area>_envmap_NN.tpf.dcx` GIIV packages and environment-map-effect-box regions | read with `Options::irradiance`, off by default; every package remains a source state, selected by `Options::world_state` when supplied | `sekiro::irradiance`, `lower-fromsoft-irradiance` / Irradiance volumes |

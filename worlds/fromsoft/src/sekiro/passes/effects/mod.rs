@@ -1,5 +1,6 @@
 //! `lower-fromsoft-effects`: the effects an area or a viewer read (`fromsoft.effect`, placed by their transforms) as
-//! `core.particles`, and the effects a character's animation events start (`fromsoft.clip_effect_uses`) as `core.clip_effects`.
+//! `core.particles`, the bullets a viewer read (`fromsoft.bullet`) as `core.particles` that fly and carry their effects
+//! ([`bullets`]), and the effects a character's animation events start (`fromsoft.clip_effect_uses`) as `core.clip_effects`.
 //! The read keeps the effect files as stored (`fromsoft.effect_file`) and the textures and models they name
 //! (`fromsoft.effect_resource`); this pass turns each placed effect's node tree into emitters ([`lower`]), the effects it
 //! spawns into systems of their own that its emitters name, the models its mesh particles draw into meshes ([`models`]),
@@ -8,6 +9,7 @@
 //!
 //! What the fxr project says of a parameter is the meaning used (sourced); the lowering's approximations, and the actions and
 //! parameters it leaves out, are in the pass log by reason, with the files' own numbers (`Notes`).
+pub mod bullets;
 mod cx;
 mod draws;
 mod gpu;
@@ -19,7 +21,7 @@ pub mod value;
 use super::lights::Disabled;
 use super::settings::Factor;
 use crate::sekiro::components::effect::{
-    ClipEffectUses, Effect, EffectFile, EffectResource, ResourceKind, UseRoute,
+    Bullet, ClipEffectUses, Effect, EffectFile, EffectResource, ResourceKind, UseRoute,
 };
 pub use cx::{NoFiles, Resolver};
 use fromsoft_formats::fxr::resources::TextureKind;
@@ -213,7 +215,7 @@ impl Pass for LowerFromSoftEffects {
         ]
     }
     fn approximates(&self) -> &'static str {
-        "the fxr project's reading of the parameters (not yet checked against a running game); Hermite properties sampled into lines; a GPU particle system as an ordinary emitter; level-of-detail ranges as ascending distances; soft-particle depth as a fixed distance; effect light colours squared at the keys of their curves; mesh particles' materials unlit, their colour texture times the vertex colour"
+        "the fxr project's reading of the parameters (not yet checked against a running game); Hermite properties sampled into lines; a GPU particle system as an ordinary emitter; level-of-detail ranges as ascending distances; soft-particle depth as a fixed distance; effect light colours squared at the keys of their curves; mesh particles' materials unlit, their colour texture times the vertex colour; a bullet's flight by its BulletParam row's law as Paramdex describes its fields (a max speed of 0 as no limit, the range reached by the forward travel alone)"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         // the files the read kept
@@ -249,12 +251,29 @@ impl Pass for LowerFromSoftEffects {
             }
             placements.push((e, p.effect));
         }
+        // the bullets about to fly
+        let mut bullets: Vec<(Entity, fromsoft_formats::param::Bullet)> = Vec::new();
+        for (e, b) in world.iter::<Bullet>() {
+            if !world.has::<primase_core::Transform>(e) {
+                return Err(format!("{e:?}: a bullet without a transform"));
+            }
+            if world.has::<Effect>(e) {
+                return Err(format!("{e:?}: a bullet that is also a placed effect"));
+            }
+            bullets.push((e, b.0));
+        }
         // the effects the events of clips start
         let clip_uses: Vec<(Entity, ClipEffectUses)> = world
             .iter::<ClipEffectUses>()
             .map(|(e, u)| (e, u.clone()))
             .collect();
         let mut wanted: BTreeSet<i32> = placements.iter().map(|(_, id)| *id).collect();
+        wanted.extend(
+            bullets
+                .iter()
+                .map(|(_, b)| b.effect)
+                .filter(|id| files.contains_key(id)),
+        );
         wanted.extend(
             clip_uses
                 .iter()
@@ -272,6 +291,7 @@ impl Pass for LowerFromSoftEffects {
         }
         if wanted.is_empty() {
             self.clip_effects(world, log, &clip_uses, &BTreeMap::new());
+            self.bullets(world, log, &bullets, &BTreeMap::new());
             return Ok(());
         }
         // an entity for each effect's system first (a system names the systems it spawns by them), then each effect lowered once
@@ -328,11 +348,29 @@ impl Pass for LowerFromSoftEffects {
             .map(|(id, e)| (*id, *e))
             .collect();
         self.clip_effects(world, log, &clip_uses, &started);
+        self.bullets(world, log, &bullets, &started);
         Ok(())
     }
 }
 
 impl LowerFromSoftEffects {
+    /// `core.particles` on each bullet's entity: its flight ([`bullets::flight`]), starting the system of its own effect
+    /// where that was lowered (`systems`, by number).
+    fn bullets(
+        &self,
+        world: &mut World,
+        log: &mut PassLog,
+        bullets: &[(Entity, fromsoft_formats::param::Bullet)],
+        systems: &BTreeMap<i32, Entity>,
+    ) {
+        for (e, row) in bullets {
+            let effect = systems.get(&row.effect).copied();
+            let system = bullets::flight(row, effect, mix(self.seed, u64::from(e.index())), log);
+            world.insert(*e, system);
+            log.count("bullets lowered", 1);
+        }
+    }
+
     /// `core.clip_effects` on each clip that has effect uses: a spawn for each use whose effect was lowered (`systems`, by number),
     /// standing at the socket the model's dummy polygon is (named as the model's sockets are) and following it where the event
     /// says; the uses with no lowered effect, and what the read could not name, counted.

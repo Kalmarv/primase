@@ -786,3 +786,87 @@ fn an_effect_model_with_nothing_to_draw_is_left_out() {
         Some(&1)
     );
 }
+
+/// A bullet row that flies at 10 m/s for a second and shows `effect`.
+fn bullet_row(id: i32, effect: i32) -> fromsoft_formats::param::Bullet {
+    fromsoft_formats::param::Bullet {
+        id,
+        effect,
+        hit_effect: -1,
+        flick_effect: -1,
+        life: 1.0,
+        life_random: 0.0,
+        range: 0.0,
+        gravity_in_range: 0.0,
+        gravity_out_of_range: 0.0,
+        initial_speed: 10.0,
+        acceleration_in_range: 0.0,
+        acceleration_out_of_range: 0.0,
+        max_speed: 10.0,
+        min_speed: 0.0,
+        acceleration_delay: 0.0,
+        spawned_bullet: -1,
+        follow: 0,
+        interval_bullet: -1,
+        interval_min: 0.0,
+        interval_max: 0.0,
+        interval_wait: 0.0,
+        inherit_speed: false,
+        homing_angle: 0,
+        homing_angle_x: -1,
+        homing_begin: 0.0,
+        homing_stop_range: 0.0,
+        homing_offset: 0.0,
+        auto_homing: false,
+    }
+}
+
+#[test]
+fn a_bullet_flies_carrying_the_system_of_its_effect_and_one_whose_effect_is_not_kept_flies_unseen() {
+    use crate::sekiro::components::effect::Bullet;
+    let fx = simple();
+    let mut world = World::new();
+    let file = world.spawn();
+    world.insert(
+        file,
+        EffectFile {
+            effect: fx.id,
+            game: Game::Sekiro,
+            file: Arc::new(fx.clone()),
+        },
+    );
+    let seen = world.spawn();
+    world.insert(seen, Transform::IDENTITY);
+    world.insert(seen, Bullet(bullet_row(1, fx.id)));
+    let unseen = world.spawn();
+    world.insert(unseen, Transform::IDENTITY);
+    world.insert(unseen, Bullet(bullet_row(2, fx.id + 1)));
+    let mut log = PassLog::default();
+    pass().run(&mut world, &mut log).unwrap();
+    assert_eq!(log.counts.get("bullets lowered"), Some(&2));
+    assert_eq!(log.omitted.get(bullets::NO_EFFECT), Some(&1));
+
+    let system = world.get::<ParticleSystem>(seen).unwrap();
+    assert!(system.verify(seen, &world).is_ok());
+    let [emitter] = system.emitters.as_slice() else {
+        panic!("{} emitters", system.emitters.len());
+    };
+    assert_eq!(emitter.duration, Some(1.0));
+    let [started] = emitter.spawns.as_slice() else {
+        panic!("{} systems started", emitter.spawns.len());
+    };
+    assert!(world.has::<ParticleSystem>(*started) && !world.has::<Transform>(*started));
+    let motion = emitter.motion.as_ref().unwrap();
+    assert_eq!((motion.forward, motion.max_speed), (units::FORWARD, Some(10.0)));
+
+    let system = world.get::<ParticleSystem>(unseen).unwrap();
+    assert!(system.emitters[0].spawns.is_empty());
+    assert_eq!(system.lost, [(bullets::NO_EFFECT.to_owned(), 1)]);
+
+    // a bullet stands where its transform places it
+    let mut world = World::new();
+    let e = world.spawn();
+    world.insert(e, Bullet(bullet_row(1, 5)));
+    let e = pass().run(&mut world, &mut PassLog::default()).unwrap_err();
+    assert!(e.contains("a bullet without a transform"), "{e}");
+}

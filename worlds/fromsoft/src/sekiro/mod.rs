@@ -39,8 +39,8 @@ pub use read::collision::Report as CollisionReport;
 pub use read::draw_param::{CollisionChoice, DrawParams, Report as DrawParamReport};
 pub use read::effect_lights::Report as EffectLightsReport;
 pub use read::effects::{
-    EffectCache, EffectLibrary, Report as EffectsReport, binders_for_area, binders_for_clip, read_effect,
-    read_for_clip,
+    EffectCache, EffectLibrary, Report as EffectsReport, binders_for_area, binders_for_clip, read_bullet,
+    read_effect, read_for_clip,
 };
 pub use read::environment;
 pub use read::equipment::{character_skeletons, empty_character_reason, outfit_notices};
