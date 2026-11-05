@@ -485,8 +485,9 @@ converts frames; it does not lower:
   the model's dummy polygon, the effect files as stored (`fromsoft.effect_file`, one per effect, with the effects
   they spawn) and the textures they name (`fromsoft.effect_resource` on a `core.texture` each, looked for in the
   area's binder and the common ones). `Report::effects` counts the regions, the effects placed by each route, the
-  files and textures read and what no binder held, by reason. Models and animations the effects name are counted,
-  not read. `read_effect` reads one effect by its number, at the origin (an effect viewer's world);
+  files, textures and models read and what no binder held, by reason. The models mesh particles draw are read
+  (`fromsoft.effect_model`, with the textures their materials name) and lowered to meshes with unlit materials by
+  `lower-fromsoft-effects`; the model animations the effects name are counted, not read. `read_effect` reads one effect by its number, at the origin (an effect viewer's world);
 - with `CharacterOptions::clip_effects` (`CharacterReader::with_clip_effects`), each animation clip, as it loads, also reads
   the effects its events start: the events of types 96, 118 and 120, whose first field the stock files bear out as an effect
   number (types 110, 112, 116 and 119, which the community template also gives an `FFX ID`, hold small numbers or effects no
@@ -872,7 +873,7 @@ unless an option asks), **unread** (no reader opens it). A row's owner is the pr
 | Decals | material slots of class `decal` (`Report::material_classes`) | read as materials (`MeshDecal`), drawn on the decal layer, queue order a convention (approximation, noticed). Decal *placements* beyond the material slots: none known in the MSB | `lower-fromsoft-materials` / Shaded view |
 | Water | slots of class `water`; collision class soup `water` | read as a material (the program's water colour and normal map; depth, refraction and flow not evaluated) and as a collision soup | `lower-fromsoft-materials`, `lower-fromsoft-collision` / Shaded, Collision |
 | Lights, bank 0 (`<area>_0000.btl.dcx`) | `FILES _NNNN.btl` | read | `read/extras.rs`, `lower-fromsoft-lights` / Lights |
-| Effects (every FXR action: emitters, particles, trails, distortion, blur, lights, forces): the same routes | `REGIONS` type 5, `PARTS`, `ModelSfxParam`/`AssetModelSfxParam`, the `sfx` binders | read with `Options::effects` (off by default) as `fromsoft.effect`, `fromsoft.effect_file`, `fromsoft.effect_resource`; models and animations named are counted, not read | `read/effects.rs`, `lower-fromsoft-effects` / Effects |
+| Effects (every FXR action: emitters, particles, trails, distortion, blur, lights, forces): the same routes | `REGIONS` type 5, `PARTS`, `ModelSfxParam`/`AssetModelSfxParam`, the `sfx` binders | read with `Options::effects` (off by default) as `fromsoft.effect`, `fromsoft.effect_file`, `fromsoft.effect_resource` and `fromsoft.effect_model` (the models mesh particles draw, lowered to meshes with unlit materials); model animations named are counted, not read | `read/effects.rs`, `lower-fromsoft-effects` / Effects |
 | Effect lights (FXR point and spot lights): SFX regions, and the effects placed objects and assets spawn through their model effect param row | `REGIONS` type 5, `PARTS`, `ModelSfxParam`/`AssetModelSfxParam`, the `sfx` binders | read with `Options::effect_lights` (off by default) as `fromsoft.effect_light`; light shafts (no instance) and every other effect action unread | `read/effect_lights.rs`, `lower-fromsoft-lights` / Lights. Per-area counts in `tests/effect_lights_census.rs` |
 | Light banks other than 0 | `FILES _NNNN.btl` | unread (the reader opens `_0000` only) | none. `FILES` says how many banks exist per area |
 | Light probes / global illumination data | Sekiro's `<area>_envmap_NN.tpf.dcx` GIIV packages and environment-map-effect-box regions | read with `Options::irradiance`, off by default; every package remains a source state, selected by `Options::world_state` when supplied | `sekiro::irradiance`, `lower-fromsoft-irradiance` / Irradiance volumes |

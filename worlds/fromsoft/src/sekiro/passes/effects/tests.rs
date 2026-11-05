@@ -732,6 +732,8 @@ fn an_effect_model_becomes_a_mesh_with_an_unlit_material_on_its_colour_texture()
     pass().run(&mut world, &mut log).unwrap();
     assert_eq!(log.counts.get("effect models lowered"), Some(&2));
     assert_eq!(log.approximations.get(models::UNREAD_DEFINITION), Some(&2));
+    // both materials are S[A]_add_GXFlver's
+    assert_eq!(log.approximations.get(models::ADDITIVE_BLENDED), Some(&2));
     assert_eq!(
         log.approximations
             .get("effect model materials with no colour texture, drawn in their particles' colour alone"),

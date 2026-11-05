@@ -18,6 +18,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// What every lowered material approximates.
 pub const UNREAD_DEFINITION: &str = "effect model materials drawn unlit as their colour texture times the vertex colour (their definitions not read)";
+/// What a material whose definition names an additive blend (`S[A]_add_GXFlver` and the like) approximates besides:
+/// core's materials have no additive blend.
+pub const ADDITIVE_BLENDED: &str =
+    "effect model materials whose definition names an additive blend (_add), drawn alpha-blended";
 
 /// Every effect model of `world` made the `core.mesh` of its entity, its materials `pbr.material` entities of their own;
 /// `resources` are the effect resource entities by kind and number, where a material's textures are found. Returns the
@@ -71,6 +75,9 @@ pub(super) fn lower(
             let entity = world.spawn();
             log.approximate_on(entity, UNREAD_DEFINITION, 1);
             let definition = m.mtd.rsplit(['\\', '/']).next().unwrap_or(&m.mtd);
+            if definition.to_ascii_lowercase().contains("_add") {
+                log.approximate_on(entity, ADDITIVE_BLENDED, 1);
+            }
             world.insert(
                 entity,
                 Name(format!("sfx model {id} material {} ({definition})", m.name)),

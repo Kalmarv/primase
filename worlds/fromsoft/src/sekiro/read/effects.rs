@@ -47,11 +47,13 @@ pub struct Report {
     pub parts_not_placed: BTreeMap<String, usize>,
     /// Effect files read (the placed ones and the ones they spawn), textures and models read into the world, the textures and
     /// models a file named that the read could not give, by kind and why (no binder searched holds it, or its file does not
-    /// decode: a texture kept as a `core.texture_absent`), and the model animations named (not read).
+    /// decode: a texture kept as a `core.texture_absent`), each model whose file does not decode with the reader's error,
+    /// and the model animations named (not read).
     pub files: usize,
     pub textures: usize,
     pub models: usize,
     pub missing: BTreeMap<String, usize>,
+    pub undecoded_models: BTreeMap<i32, String>,
     pub animations_named: usize,
     /// References that placed nothing, by reason (counted once per effect file or row), and the placements left unplaced
     /// because their effect file was not found.
@@ -386,11 +388,12 @@ pub fn read_files(
                     .entry("Model not in the binders searched".to_owned())
                     .or_default() += 1
             }
-            Err(_) => {
+            Err(why) => {
                 *report
                     .missing
                     .entry("Model whose file does not decode".to_owned())
-                    .or_default() += 1
+                    .or_default() += 1;
+                report.undecoded_models.insert(id, why);
             }
         }
     }

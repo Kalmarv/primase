@@ -141,6 +141,14 @@ fn the_effects_of_three_areas_are_placed_with_their_files_and_lowered() -> Resul
             "{map}: each texture resource a texture or absent, not both"
         );
         assert_eq!(models.len(), r.models, "{map}: models");
+        assert_eq!(
+            r.undecoded_models.len(),
+            r.missing
+                .get("Model whose file does not decode")
+                .copied()
+                .unwrap_or(0),
+            "{map}: each model that does not decode with its reason"
+        );
         assert!(
             models.iter().all(|(e, _)| world.has::<EffectModel>(*e)),
             "{map}: a model resource without its model"
