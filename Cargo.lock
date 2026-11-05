@@ -561,7 +561,7 @@ dependencies = [
 [[package]]
 name = "fromsoft-formats"
 version = "0.14.0"
-source = "git+https://github.com/Kalmarv/fromsoft-formats?rev=4e8a89204903d19dae22eb29e544eafc69cbc576#4e8a89204903d19dae22eb29e544eafc69cbc576"
+source = "git+https://github.com/Kalmarv/fromsoft-formats?rev=869920c07de01c35b12df73e0e0944d0a5b06c1f#869920c07de01c35b12df73e0e0944d0a5b06c1f"
 dependencies = [
  "aes",
  "encoding_rs",

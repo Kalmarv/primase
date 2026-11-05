@@ -48,7 +48,7 @@ toml = { version = "=1.1.8", default-features = false, features = ["parse", "ser
 encoding_rs = { version = "=0.8.42", default-features = false, features = ["alloc"] }
 aes = { version = "=0.9.3", default-features = false }
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
-fromsoft-formats = { git = "https://github.com/Kalmarv/fromsoft-formats", rev = "4e8a89204903d19dae22eb29e544eafc69cbc576", version = "0.14.0" }
+fromsoft-formats = { git = "https://github.com/Kalmarv/fromsoft-formats", rev = "869920c07de01c35b12df73e0e0944d0a5b06c1f", version = "0.14.0" }
 primase-fromsoft = { path = "worlds/fromsoft" }
 lz4_flex = { version = "=0.14.0", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
