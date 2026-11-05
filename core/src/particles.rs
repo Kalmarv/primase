@@ -20,6 +20,9 @@ use serde_json::Value as Json;
 
 use crate::{Component, Entity, JsonError, Transform, World};
 
+mod motion;
+pub use motion::{MotionState, Mover};
+
 /// What a [`Value`] is a function of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum Argument {
@@ -1192,10 +1195,14 @@ pub struct NodeMotion {
     /// Spin about the emitter's three axes (degrees per second) times a multiplier, functions of the active time.
     pub spin: [Value; 3],
     pub spin_multiplier: [Value; 3],
-    /// Whether the emitter turns to face its motion.
+    /// Whether the emitter turns to face its motion: its forward along its velocity.
     pub align: bool,
     pub turns: Option<Turns>,
     pub drag: Option<Drag>,
+    /// The least and the most the speed along `forward` may be (metres per second): acceleration takes it no further,
+    /// and a speed that starts outside them is held to them. `None` for no limit.
+    pub min_speed: Option<f32>,
+    pub max_speed: Option<f32>,
 }
 
 /// What happens to a system when what spawned it goes away.
@@ -1374,6 +1381,16 @@ impl Emitter {
             }
         }
         if let Some(n) = &self.motion {
+            for (what, limit) in [("node min speed", n.min_speed), ("node max speed", n.max_speed)] {
+                if limit.is_some_and(|x| !x.is_finite()) {
+                    return Err(format!("{what} {limit:?} is not finite"));
+                }
+            }
+            if let (Some(min), Some(max)) = (n.min_speed, n.max_speed)
+                && min > max
+            {
+                return Err(format!("node min speed {min} is above its max speed {max}"));
+            }
             values.extend([
                 ("node speed", &n.speed),
                 ("node speed multiplier", &n.speed_multiplier),

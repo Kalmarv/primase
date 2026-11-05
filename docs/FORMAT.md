@@ -168,7 +168,10 @@ an input of the system). Random draws are keyed by `(seed, emitter, scope, strea
 a system stepped to a time gives the same particles anywhere. Units are metres, seconds, degrees and linear colour. `lost` is
 accounting: the reasons a source's pass could not carry something, with how many, never state. The JSON view is the
 serialization of these types and is not read back; `references` lists the textures, meshes and systems the draws and emitters
-name. Core defines the description; stepping and drawing it belongs to a consumer.
+name. Core defines the description; stepping and drawing it belongs to a consumer, except an emitter's own motion: its
+`NodeMotion` (speed and acceleration along its forward held within its speed limits, lift, displacement, spin, random
+turns, facing its velocity when it aligns) is stepped by `NodeMotion::advance` over a `MotionState`, so every consumer
+moves an emitter alike.
 
 ## Clip effects
 

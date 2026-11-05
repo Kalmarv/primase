@@ -710,6 +710,8 @@ impl Walk<'_> {
             align: false,
             turns: None,
             drag: None,
+            min_speed: None,
+            max_speed: None,
         };
         let turns = |this: &mut Self, angle: &fromsoft_formats::fxr::Property, interval: i32| Turns {
             interval: units::turn_interval(interval),
