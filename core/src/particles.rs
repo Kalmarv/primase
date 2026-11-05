@@ -814,14 +814,17 @@ pub struct MeshClip {
 }
 
 /// What a mesh particle faces.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub enum MeshOrientation {
     /// Its own frame as emitted.
     Frame,
     /// World axes.
     World,
-    /// Along its heading.
-    Heading,
+    /// Along the way it travels (the direction of its velocity), which is the frame's +Z: the mesh is first turned so its
+    /// own direction `forward` (a unit vector) points along +Z, then turned by its rotation and spin about the frame's
+    /// axes. The first turn is the shortest one; a `forward` of -Z takes the half turn about +X. The frame's other two axes
+    /// are any pair square to the travel.
+    Heading { forward: [f32; 3] },
     /// Facing away from the camera's image plane (the model's front toward the camera).
     CameraPlane,
     /// Toward the camera about the vertical axis.
@@ -1609,6 +1612,13 @@ impl Draw {
         {
             return Err("an orientation that is not finite".into());
         }
+        if let Draw::Mesh(m) = self
+            && let MeshOrientation::Heading { forward } = m.orientation
+            && !(forward.iter().all(|v| v.is_finite())
+                && (forward.iter().map(|v| v * v).sum::<f32>().sqrt() - 1.0).abs() <= 1e-4)
+        {
+            return Err("a mesh particle's forward direction that is not a unit vector".into());
+        }
         if let Draw::Trail(t) = self
             && !(t.segment_interval.is_finite() && t.segment_life.is_finite() && t.fade_out.is_finite())
         {
@@ -1741,6 +1751,36 @@ mod tests {
             stream: 3,
         });
         assert!(!w.is_fixed());
+    }
+
+    #[test]
+    fn a_mesh_particle_turned_along_its_travel_names_a_unit_forward() {
+        let zero = || Value::constant(&[0.0]);
+        let mesh = |forward: [f32; 3]| {
+            Draw::Mesh(MeshParticle {
+                mesh: Entity::from_index(1),
+                clip: None,
+                blend: Blend::Alpha,
+                orientation: MeshOrientation::Heading { forward },
+                size: [zero(), zero(), zero()],
+                size_variance: [1.0; 3],
+                uniform: true,
+                rotation: [zero(), zero(), zero()],
+                spin: [zero(), zero(), zero()],
+                tint: Vec::new(),
+                scroll: [zero(), zero()],
+                offset: [zero(), zero()],
+                atlas: None,
+                soft: None,
+                distance: None,
+                lit: false,
+            })
+        };
+        assert!(mesh([0.0, 1.0, 0.0]).check(0).is_ok());
+        assert!(mesh([0.0, 0.0, -1.0]).check(0).is_ok());
+        for bad in [[0.0; 3], [0.0, 2.0, 0.0], [f32::NAN, 0.0, 0.0]] {
+            assert!(mesh(bad).check(0).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

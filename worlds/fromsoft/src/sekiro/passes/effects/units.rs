@@ -109,12 +109,24 @@ pub fn orientation(mode: i32, notes: &mut Notes) -> Orientation {
     }
 }
 
+/// The direction of a model particle's model that points along its travel (`ModelOrientationMode` 2): the model's +Y. A
+/// captured frame of Elden Ring (a spell's crystal trail, Model 83050 with rotation x 180 and a random rotation z) puts
+/// every model's +Y along the way it moves, turned back by the rotation x, and turns it about that axis.
+pub const MODEL_FORWARD: [f32; 3] = [0.0, 1.0, 0.0];
+
+/// The direction of a rich model particle's model that points along its travel (`RichModelOrientationMode` 2): the
+/// model's +Z as the game stores it, -Z in the world frame (which mirrors Z). The same captured frame (RichModel 84016,
+/// random rotation z) puts its +Z along the way the spell flies and turns it about that axis.
+pub const RICH_MODEL_FORWARD: [f32; 3] = [0.0, 0.0, -1.0];
+
 /// What a model particle faces (`ModelOrientationMode`).
 pub fn model_orientation(mode: i32, notes: &mut Notes) -> MeshOrientation {
     match mode {
         0 => MeshOrientation::World,
         1 => MeshOrientation::World,
-        2 => MeshOrientation::Heading,
+        2 => MeshOrientation::Heading {
+            forward: MODEL_FORWARD,
+        },
         3..=5 => MeshOrientation::CameraYaw,
         _ => {
             notes.lose("a model orientation mode the project does not name, taken as the emitter frame");
@@ -128,7 +140,9 @@ pub fn rich_model_orientation(mode: i32, notes: &mut Notes) -> MeshOrientation {
     match mode {
         0 | 3 => MeshOrientation::World,
         1 => MeshOrientation::World,
-        2 => MeshOrientation::Heading,
+        2 => MeshOrientation::Heading {
+            forward: RICH_MODEL_FORWARD,
+        },
         4 => MeshOrientation::CameraYaw,
         _ => {
             notes.lose("a rich model orientation mode the project does not name, taken as the emitter frame");
@@ -274,6 +288,25 @@ mod tests {
         assert_eq!(d.near, Some([0.5, 2.0]));
         assert_eq!(d.far, Some([30.0, 40.0]));
         assert_eq!((d.cut_near, d.cut_far), (None, Some(100.0)));
+    }
+
+    #[test]
+    fn model_particles_turned_along_their_travel_name_the_axis_the_game_turns_along_it() {
+        // the captured frames: a Model's +Y and a RichModel's +Z (the world frame's -Z) lie along the flight
+        let mut notes = Notes::default();
+        assert_eq!(
+            model_orientation(2, &mut notes),
+            MeshOrientation::Heading {
+                forward: [0.0, 1.0, 0.0]
+            }
+        );
+        assert_eq!(
+            rich_model_orientation(2, &mut notes),
+            MeshOrientation::Heading {
+                forward: [0.0, 0.0, -1.0]
+            }
+        );
+        assert!(notes.lost.is_empty() && notes.approximated.is_empty());
     }
 
     #[test]
