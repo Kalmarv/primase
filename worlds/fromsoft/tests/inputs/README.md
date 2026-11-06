@@ -14,8 +14,9 @@ What this crate's real-data tests read, as tests/inputs/mod.rs declares them: th
 | `installs.sekiro` | yes | Sekiro's install folder (Data1 to Data5 BHD/BDT pairs, the Oodle 6 DLL) | the user's own install |
 | `keys.elden` | - | the user's Elden Ring archive keys, one PKCS#1 `RSA PUBLIC KEY` PEM per archive named after its stem, and `regulation.key`, the key of `regulation.bin` as 64 hexadecimal digits (held to the SHA-256 worlds/fromsoft/src/elden/mod.rs states) | the community unpacker's published keys (UXM's ArchiveKeys.cs) and SoulsFormats' RegulationDecryptor key for the game, written out by a script kept with the game's private tools |
 | `keys.sekiro` | yes | the user's Sekiro archive keys: one PKCS#1 `RSA PUBLIC KEY` PEM per archive, Data1.pem to Data5.pem | the community unpacker's published keys (UXM's ArchiveKeys.cs), written out as PEM files |
-| `tools.directxtex_dump` | yes | directxtex-dump: what Microsoft's DirectXTex library reads from a DDS file (`read`, `read-permissive`, `batch`), written out as the library returns it | third-party library: primase-oracles' dumps/directxtex built against DirectXTex may2026 (MIT) |
+| `tools.directxtex_dump` | yes | directxtex-dump: what Microsoft's DirectXTex library reads from a DDS file and how it decodes it to RGBA32F (`read`, `read-permissive`, `decode`, `batch`), written out as the library returns it | third-party library: primase-oracles' dumps/directxtex built against DirectXTex may2026 (MIT) |
 | `tools.oodle6` | yes | an Oodle version-6 DLL (`oo2core_6_win64.dll`); on Windows only: elsewhere oozextract decodes and nothing is configured | the game's own DLL from the user's install |
+| `tools.texconv` | yes | texconv: Microsoft's DirectXTex command-line converter, whose CPU block encoders (`-nogpu`) are the reference primase-texcodec's encoders are measured against | third-party tool: texconv.exe of the DirectXTex may2026 release (MIT) |
 | `scratch.root` | - | where real-data tests write their outputs (the OS temporary folder when unset) | - |
 
 #### Oracle sets (`<oracles.root>/<set>/<game>/`)

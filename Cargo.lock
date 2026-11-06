@@ -1621,9 +1621,11 @@ dependencies = [
  "block_compression",
  "half",
  "primase-core",
+ "primase-dds",
  "primase-foundations",
  "primase-testdata",
  "rsx-reader",
+ "serde_json",
  "thiserror",
 ]
 

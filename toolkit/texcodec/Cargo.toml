@@ -19,7 +19,9 @@ block_compression.workspace = true
 half.workspace = true
 
 [dev-dependencies]
+primase-dds.workspace = true
 primase-testdata.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

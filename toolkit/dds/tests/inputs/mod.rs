@@ -13,7 +13,7 @@ primase_testdata::inputs! {
     keys {}
     tools {
         DirectxtexDump = "directxtex_dump" {
-            about: "directxtex-dump: what Microsoft's DirectXTex library reads from a DDS file (`read`, `read-permissive`, `batch`), written out as the library returns it",
+            about: "directxtex-dump: what Microsoft's DirectXTex library reads from a DDS file and how it decodes it to RGBA32F (`read`, `read-permissive`, `decode`, `batch`), written out as the library returns it",
             source: "third-party library: primase-oracles' dumps/directxtex built against DirectXTex may2026 (MIT)",
             gate: true,
         },

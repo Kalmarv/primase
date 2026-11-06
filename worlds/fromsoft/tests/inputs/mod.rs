@@ -35,13 +35,18 @@ primase_testdata::inputs! {
     }
     tools {
         DirectxtexDump = "directxtex_dump" {
-            about: "directxtex-dump: what Microsoft's DirectXTex library reads from a DDS file (`read`, `read-permissive`, `batch`), written out as the library returns it",
+            about: "directxtex-dump: what Microsoft's DirectXTex library reads from a DDS file and how it decodes it to RGBA32F (`read`, `read-permissive`, `decode`, `batch`), written out as the library returns it",
             source: "third-party library: primase-oracles' dumps/directxtex built against DirectXTex may2026 (MIT)",
             gate: true,
         },
         Oodle6 = "oodle6" {
             about: "an Oodle version-6 DLL (`oo2core_6_win64.dll`); on Windows only: elsewhere oozextract decodes and nothing is configured",
             source: "the game's own DLL from the user's install",
+            gate: true,
+        },
+        Texconv = "texconv" {
+            about: "texconv: Microsoft's DirectXTex command-line converter, whose CPU block encoders (`-nogpu`) are the reference primase-texcodec's encoders are measured against",
+            source: "third-party tool: texconv.exe of the DirectXTex may2026 release (MIT)",
             gate: true,
         },
     }

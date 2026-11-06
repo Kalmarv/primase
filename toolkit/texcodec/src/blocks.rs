@@ -15,7 +15,7 @@ fn expand(v: u32, bits: u32) -> u32 {
         (v * 259 + 33) >> 6
     }
 }
-fn palette(b: &[u8], opaque: bool) -> [[u8; 4]; 4] {
+pub(crate) fn palette(b: &[u8], opaque: bool) -> [[u8; 4]; 4] {
     let c0 = word(b);
     let c1 = word(&b[2..]);
     let a = [(c0 >> 11) as u32, ((c0 >> 5) & 63) as u32, (c0 & 31) as u32];

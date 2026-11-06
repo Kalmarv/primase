@@ -1,55 +1,94 @@
-# DDS containers
+# primase-dds
 
-`read(&[u8]) -> Result<Texture>`, `write_legacy(&Texture)` and
-`write_dx10(&Texture) -> Result<Vec<u8>>` retain encoded mip bytes.
-`from_dxgi` and `to_dxgi` expose the strict format/colour-space mapping.
+A Rust library that reads and writes DDS texture files for primase. It handles every layout Direct3D stores in one
+under the legacy or the DX10 header, and keeps the encoded images as stored.
 
-The reader supports legacy DXT1/3/5, ATI1/2, BC4U/S, BC5U/S, exact uncompressed
-mask layouts and typed DXGI formats. Legacy DDS reads as linear because it lacks
-a colour-space tag. DX10 preserves sRGB. Role defaults to Other; normal metadata
-is absent. L8A8 retains its two stored channels as Rg8Unorm without expansion.
+## Features
 
-Only tightly packed 2D images are supported. Arrays, cubes, volumes, 1D resources,
-nonzero DX10 alpha/misc metadata, padded rows, numeric FourCCs, premultiplied
-DXT2/4 and typeless/unknown formats return explicit errors. Invalid sizes, short
-mips, excessive levels, invalid pitch/linear size and trailing bytes are errors.
-Reserved header words are not retained. A zero mip count means one level.
+- Reads and writes 1D, 2D, cube and volume textures, arrays of 1D and 2D textures, and cube arrays, with their mips
+- Reads legacy headers by FourCC or by channel masks, and DX10 headers by DXGI format
+- Writes the header bytes texconv writes, under texconv's choice of header or a chosen one (`WriteHeader`)
+- Keeps DX10 sRGB tags and alpha modes; reads premultiplied DXT2 and DXT4 as BC2 and BC3 with that alpha mode
+- Reads DX10 cubes whose `arraySize` counts faces rather than cubes, as FromSoftware's games write them
+- Converts to and from `primase_core::Texture` (one image) and `TextureLayers` (arrays, cubes, volumes)
+- Maps `TexFormat` and colour space to and from DXGI format numbers (`to_dxgi`, `from_dxgi`)
+- Builds for `wasm32-unknown-unknown`; no native code
+- Refuses what it cannot keep exactly, by name: a payload of the wrong size, typeless formats, unknown flags
 
-The legacy writer supports BC1/2/3 and sets DDS_HEADER flags from the actual
-texture shape. DDSD_MIPMAPCOUNT is set only when there is more than one level. It writes the supplied mip chain unchanged and
-does not preserve sRGB tagging; use DX10 when that tag matters. Neither writer
-serializes role or normal annotations.
+## Getting Started
 
-Run `cargo test -p primase-dds -- --nocapture`. Tests include synthetic headers,
-format mappings, malformed inputs and encoded-level roundtrips. The real-data
-census reads Sekiro's own DDS files (`census/dds` of `oracles.scripts.sekiro/pbr`,
-the real-data configuration in CONTRIBUTING.md). The legacy payload-identity gate
-selects DXT sources only, measuring header field differences separately; other
-formats participate in read and DX10 roundtrip gates.
+### Installation
 
-Header references: [DDS header](https://learn.microsoft.com/en-us/windows/win32/direct3ddds/dds-header), [DDS DX10](https://learn.microsoft.com/en-us/windows/win32/direct3ddds/dds-header-dxt10),
-[DDS pixel format](https://learn.microsoft.com/en-us/windows/win32/direct3ddds/dds-pixelformat).
+The crate is part of primase and is not on crates.io. Depend on it from Git, pinned to a commit:
 
-Censuses deduplicate input files by SHA256 within each configured root, reporting
-path counts separately from checked distinct contents. All paths are read and hashed.
+```toml
+[dependencies]
+primase-core = { git = "https://github.com/Kalmarv/primase", rev = "<commit>" }
+primase-dds = { git = "https://github.com/Kalmarv/primase", rev = "<commit>" }
+```
 
-## Example
+### Usage
 
 ```rust
-use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
+use primase_core::{ColorSpace, TexFormat};
+use primase_dds::{AlphaMode, Dds, HeaderKind, Shape, WriteHeader, parse, write};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let image = Texture {
-        width: 1, height: 1, format: TexFormat::Rgba8Unorm,
-        levels: vec![vec![255, 0, 0, 255]],
-        color_space: ColorSpace::Srgb, role: TexRole::Other, normal: None,
+    // one 8x8 BC1 cube with two levels: six faces of 4 blocks, then six faces of 1 block
+    let cube = Dds {
+        shape: Shape::Cube { cubes: 1 },
+        width: 8,
+        height: 8,
+        format: TexFormat::Bc1,
+        color_space: ColorSpace::Srgb,
+        alpha_mode: AlphaMode::Unknown,
+        levels: vec![vec![vec![0; 32]; 6], vec![vec![0; 8]; 6]],
     };
-    let bytes = primase_dds::write_dx10(&image)?;
-    let read = primase_dds::read(&bytes)?;
-    assert_eq!(read.levels, image.levels);
-    assert_eq!(read.color_space, image.color_space);
+    let bytes = write(&cube, WriteHeader::Auto)?;
+    let read = parse(&bytes)?;
+    // a legacy header can't state sRGB, so texconv's choice (and this one) is DX10
+    assert_eq!(read.header, HeaderKind::Dx10);
+    assert_eq!(read.dds, cube);
     Ok(())
 }
 ```
 
-This example needs no game files.
+`read` and `write_dx10` (or `write_legacy`) take a single 2D `Texture`; `read_layers` and `write_layers` take any
+shape. This example needs no game files.
+
+A header means what it means to DirectXTex (Microsoft's reference, may2026), whose `DecodeDDSHeader` and
+`EncodeDDSHeader` the reader and writer follow field by field. They differ from it on purpose here:
+
+- The payload must be exactly the layout's size; DirectXTex accepts trailing bytes.
+- Typeless DXGI formats and DX10 misc flags other than the cube flag are refused.
+- Legacy formats that DirectXTex converts as it loads are refused with what it would convert them to: 24-bit RGB,
+  A8R3G3B2, R3G3B2, the palettized P8 and A8P8, A4L4, L6V5U5, X8L8V8U8, A2W10V10U10, and A2R10G10B10 (which it reads
+  with red and blue swapped).
+- DX10 cubes whose `arraySize` counts faces are read; DirectXTex reads them only with `DDS_FLAGS_PERMISSIVE`.
+  `Parsed::faces_counted` says when a file was one.
+- A legacy pixel format with the FourCC flag and no FourCC, which DirectXTex refuses, reads as its channel masks say.
+- Legacy files read as linear, as there is no tag, except where an NVIDIA Texture Tools header sets its sRGB flag.
+- `WriteHeader::Auto` writes DX10 for a lone 1D texture and for an alpha mode, which texconv's default header loses.
+
+### Tests
+
+```sh
+cargo test -p primase-dds --test synthetic --test directxtex
+```
+
+`tests/fixtures/directxtex` holds 61 files that texconv and texassemble (DirectXTex may2026) wrote, one per layout,
+header and format family, with what DirectXTex's library reads from each (`generate.py` makes them). All of them
+read as DirectXTex reads them (330 checks of metadata and images). Each is written back byte for byte under the header
+texconv chose. With `tools.directxtex_dump` configured ([tests/inputs](tests/inputs/README.md)), DirectXTex's library
+also reads all 1,275 files the writer makes across shapes, formats, headers and alpha modes as this reader does.
+
+On the games' own files (`tests/census.rs`, `worlds/fromsoft/tests/environment_dds.rs`):
+
+| Files | Distinct | Read alike by DirectXTex | Notes |
+| --- | --- | --- | --- |
+| Sekiro textures (`census/dds`) | 813 | 813 | written back byte for byte under the same header, 79 of them legacy |
+| Sekiro cubes and volumes | 10,083 | 10,083 | 2,232 BC6H cubes count faces (DirectXTex: permissive load) |
+| Elden Ring environment textures | 218,353 | 2,820 distinct headers | 44,269 BC6H cubes count faces; 269 RGBA16F cubes do not |
+| TrackMania Nations Forever | 42 | 40 | 7 legacy cubes; 2 R8G8B8 files refused here, converted by DirectXTex |
+
+Licensed under GPL-3.0-or-later, as primase.

@@ -44,8 +44,8 @@ primase-meshops = { git = "https://github.com/Kalmarv/primase", rev = "<commit>"
 | Package | What it does |
 | --- | --- |
 | `primase-core` | The `World` store, core components, frames, the pass manager and the conversion loop |
-| `primase-texcodec` | BCn texture decoding and BC7 encoding behind one `TexFormat` |
-| `primase-dds` | DDS read and write (legacy and DX10 headers) |
+| `primase-texcodec` | BC1 to BC7 texture decoding and encoding behind one `TexFormat` |
+| `primase-dds` | DDS read and write in every layout: arrays, cubes, volumes, legacy and DX10 headers |
 | `primase-image` | PNG and JPEG pixels, sRGB transfer, mip chains and texture passes |
 | `primase-meshops` | Mesh operations, tessellation and mesh passes |
 | `primase-animation` | Clip evaluation, poses, morphs, skinning and retargeting |
