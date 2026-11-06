@@ -6,11 +6,11 @@ uncompressed formats of `primase_core::TexFormat` and lays out PS3 (RSX) texture
 ## Features
 
 - Decodes BC1 to BC7 and uncompressed formats to RGBA8 or RGBA32F, BC4 and BC5 in UNORM and SNORM, BC6H in UF16 and SF16
-- Encodes BC1, BC2, BC3, BC4 and BC5 (UNORM and SNORM) and BC6H (UF16 and SF16) with its own encoders
-- Encodes BC7 through `block_compression` 0.10.1, a pure-Rust port of Intel's ISPC texture compressor
+- Encodes BC1 to BC7, BC4 and BC5 in UNORM and SNORM and BC6H in UF16 and SF16, with its own encoders
+- Searches all eight BC7 modes and every partition, rotation and index selection for each block
 - Takes RGBA8 or RGBA32F input and fills partial edge blocks as DirectXTex fills them
 - Ports DirectXTex's BC6H encoder, with three of its errors fixed
-- Encodes each test image at least as well as texconv's CPU encoder, BC7 aside (measurements below)
+- Encodes each test image at least as well as texconv's CPU encoder (measurements below)
 - Flips textures vertically, in block space where every level allows it (`flip_vertical`)
 - Decodes PS3 GCM texture layouts, cubes and volumes included (`gcm`)
 - Offers `Bcdec`, an adapter to bcdec_rs 0.2.0, as an independent decoder for checks
@@ -73,10 +73,10 @@ cargo test -p primase-texcodec --test encode --test threads --test gates
 ```
 
 `tests/directxtex.rs` measures every encoder against texconv from DirectXTex may2026, at `-nogpu -bc u` and at its
-default settings. It needs `tools.texconv` and `tools.directxtex_dump` in the file `GAME_DATA` names
-([tests/inputs](tests/inputs/README.md)). Every block written here decodes the same here, in bcdec_rs and in
-DirectXTex's library. BC6H decodes exactly the same in all three, BC7 within 2e-5 of a level, and BC1 to BC5 within
-0.72 of a level, since DirectXTex does not round its palettes.
+default settings, and BC7 also at `-bc ux` (all modes). It needs `tools.texconv` and `tools.directxtex_dump` in the file
+`GAME_DATA` names ([tests/inputs](tests/inputs/README.md)). Every block written here decodes the same here, in bcdec_rs
+and in DirectXTex's library. BC6H decodes exactly the same in all three, BC7 within 2e-5 of a level, and BC1 to BC5
+within 0.72 of a level, since DirectXTex does not round its palettes.
 
 The mean PSNR in dB is over the stored channels, with BC1 measured opaque on RGB; higher is better. For BC6H the table
 gives the RMS of the difference in half-float bit patterns; lower is better. The synthetic set has 8 LDR and 7 HDR
@@ -92,14 +92,17 @@ images. The Sekiro set is a sample of the install's own DDS textures, decoded an
 | BC4 SNORM | 46.90 | 45.88 | 45.88 | 67.64 | 52.31 | 52.31 |
 | BC5 UNORM | 45.96 | 45.32 | 45.32 | 60.30 | 47.56 | 47.56 |
 | BC5 SNORM | 47.36 | 46.38 | 46.38 | 41.72 | 40.76 | 40.76 |
-| BC7 | 40.09 | 36.55 | 36.55 | 53.60 | 44.04 | 44.04 |
+| BC7 | 38.20 | 34.15 | 34.15 | 59.28 | 44.04 | 44.04 |
 | BC6H UF16 (RMS) | 552.39 | 621.64 | 621.64 | 16.40 | 19.35 | 19.35 |
 | BC6H SF16 (RMS) | 656.96 | 807.23 | 807.23 | | | |
 
-Image by image, no encode here falls below texconv's `-bc u` result. The closest is the 3x2 image, where both give the
-same PSNR. BC7 is the exception: one Sekiro image is 1.44 dB lower, so BC7 is held to texconv's mean instead. The
-Sekiro BC6H column covers 48 faces of 8 of the install's 2,232 BC6H environment cubes (`worlds/fromsoft/tests/environment_dds.rs`),
-with the largest ratio to texconv at 0.961.
+An exact encode has infinite PSNR and its row is left out of the mean, so the synthetic BC7 mean skips the `blocks`
+image, which BC7 encodes exactly here. texconv's `-bc ux` gives 34.15 dB on the synthetic BC7 set and 46.38 dB on the
+Sekiro one.
+
+Image by image, no encode here falls below any texconv setting measured. The closest is the 3x2 image, where both
+give the same PSNR. The Sekiro BC6H column covers 48 faces of 8 of the install's 2,232 BC6H environment cubes
+(`worlds/fromsoft/tests/environment_dds.rs`), with the largest ratio to texconv at 0.961.
 
 `tests/encode.rs` covers, without outside tools, exact one-colour blocks, all 14 BC6H modes, edge-block filling,
 clamping and NaN, BC1's alpha threshold, thread counts, and floors taken from texconv's encodes. The decoders' oracles

@@ -128,7 +128,6 @@ png = { version = "=0.18.1", default-features = false }
 zune-jpeg = { version = "=0.5.15", default-features = false, features = ["std"] }
 zune-core = { version = "=0.5.3", default-features = false, features = ["std"] }
 bcdec_rs = { version = "=0.2.0", default-features = false }
-block_compression = { version = "=0.10.1", default-features = false, features = ["bc7"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

@@ -1,11 +1,12 @@
 //! The encoders here measured against Microsoft's DirectXTex may2026 (`tools.texconv`, `tools.directxtex_dump`). Each
 //! image is encoded here and by texconv's CPU encoders (`-nogpu -m 1`), texconv once with uniform channel weights
-//! (`-bc u`, the weighting here) and once with its default (perceptual weights for BC1-BC3), and all are decoded here and
-//! measured against the source: per channel the largest difference and the PSNR in 8-bit levels, or for BC6H the RMS
-//! difference of half-float bit patterns (the measure both encoders minimize). The encodes of BC1-BC6H (this crate's
-//! own encoders) must be within [`LDR_MARGIN_DB`] and [`HDR_MARGIN`] of texconv's uniform ones on every image; BC7's
-//! (`block_compression`'s) mean PSNR over a set must be at least texconv's. BC1 is measured on opaque copies of the
-//! images (its one bit of alpha is measured apart: a texel is transparent here exactly where it is in texconv's).
+//! (`-bc u`, the weighting here) and once with its default (perceptual weights for BC1-BC3), and BC7 once more with
+//! uniform weights and all its modes (`-bc ux`: its default leaves out modes 0 and 2). All are decoded here and measured
+//! against the source: per channel the largest difference and the PSNR in 8-bit levels, or for BC6H the RMS difference
+//! of half-float bit patterns (the measure both encoders minimize). The encodes of BC1-BC6H must be within
+//! [`LDR_MARGIN_DB`] and [`HDR_MARGIN`] of texconv's uniform ones on every image, and BC7's at least as good as the best
+//! of texconv's three on every image. BC1 is measured on opaque copies of the images (its one bit of alpha is measured
+//! apart: a texel is transparent here exactly where it is in texconv's).
 //!
 //! The images: the synthetic set (tests/images), and a sample of Sekiro's own textures (`oracles.scripts.sekiro/pbr`:
 //! each file's largest stored level of at most 256x256, decoded here, encoded again in the formats of its kind).
@@ -29,8 +30,14 @@ const LDR_MARGIN_DB: f64 = 0.1;
 /// How far above texconv's (RMS of half patterns, as a fraction) a BC6H encode here may be.
 const HDR_MARGIN: f64 = 0.02;
 
-/// texconv's settings: uniform channel weights, and its default.
-const SETTINGS: [&[&str]; 2] = [&["-bc", "u"], &[]];
+/// texconv's settings for `format`: uniform channel weights, its default, and for BC7 uniform weights with all modes.
+fn settings(format: TexFormat) -> &'static [&'static [&'static str]] {
+    if format == TexFormat::Bc7 {
+        &[&["-bc", "u"], &[], &["-bc", "ux"]]
+    } else {
+        &[&["-bc", "u"], &[]]
+    }
+}
 
 /// texconv's name for a format, and the channels measured (alpha where the format stores it; BC1 apart).
 fn dxgi(format: TexFormat) -> (&'static str, usize) {
@@ -292,12 +299,12 @@ impl Source {
     }
 }
 
-/// One image in one format: the errors here and texconv's (uniform, default), and the blocks written here.
+/// One image in one format: the errors here and texconv's (in the order of [`settings`]), and the blocks written here.
 struct Row {
     format: TexFormat,
     name: String,
     ours: Errors,
-    theirs: [Errors; 2],
+    theirs: Vec<Errors>,
     width: u32,
     height: u32,
     blocks: Vec<u8>,
@@ -308,8 +315,8 @@ impl Row {
         matches!(self.format, TexFormat::Bc6hUfloat | TexFormat::Bc6hSfloat)
     }
 
-    /// The measure here and texconv's (uniform, default): PSNR (LDR) or RMS of half patterns (BC6H).
-    fn scores(&self) -> (f64, [f64; 2]) {
+    /// The measure here and texconv's (in the order of [`settings`]): PSNR (LDR) or RMS of half patterns (BC6H).
+    fn scores(&self) -> (f64, Vec<f64>) {
         let channels = dxgi(self.format).1;
         let score = |e: &Errors| {
             if self.hdr() {
@@ -318,14 +325,16 @@ impl Row {
                 e.psnr(channels)
             }
         };
-        (score(&self.ours), self.theirs.each_ref().map(score))
+        (score(&self.ours), self.theirs.iter().map(score).collect())
     }
 
-    /// Whether the encode here is within the margin of texconv's uniform one (BC7 is held to its mean instead).
+    /// Whether the encode here is within the margin of texconv's uniform one (for BC7, at least as good as each of
+    /// texconv's).
     fn within_margin(&self) -> bool {
-        let (ours, [uniform, _]) = self.scores();
+        let (ours, theirs) = self.scores();
+        let uniform = theirs[0];
         if self.format == TexFormat::Bc7 {
-            true
+            theirs.iter().all(|&t| ours >= t)
         } else if self.hdr() {
             ours <= uniform * (1. + HDR_MARGIN)
         } else {
@@ -335,22 +344,27 @@ impl Row {
 
     fn line(&self) -> String {
         let channels = dxgi(self.format).1;
-        let (ours, [uniform, default]) = self.scores();
+        let (ours, theirs) = self.scores();
         let unit = if self.hdr() { "half RMS" } else { "PSNR dB" };
+        let all = theirs
+            .get(2)
+            .map_or(String::new(), |m| format!(" {m:8.2} all modes"));
         format!(
-            "{:>9} {:<28} {unit}: here {ours:8.2}, texconv {uniform:8.2} uniform {default:8.2} default; largest difference here {:?}, texconv uniform {:?}",
+            "{:>9} {:<28} {unit}: here {ours:8.2}, texconv {:8.2} uniform {:8.2} default{all}; largest difference here {:?}, texconv uniform {:?}",
             dxgi(self.format).0,
             self.name,
+            theirs[0],
+            theirs[1],
             &self.ours.max[..channels],
             &self.theirs[0].max[..channels],
         )
     }
 }
 
-/// Each source encoded in `format` here and with texconv (both settings), all measured.
+/// Each source encoded in `format` here and with texconv (each of its [`settings`]), all measured.
 fn compare(exe: &Path, dir: &Path, format: TexFormat, sources: &[Source]) -> Vec<Row> {
     let files: Vec<(String, Vec<u8>)> = sources.iter().map(|s| (s.name.clone(), s.file())).collect();
-    let theirs: Vec<Vec<Vec<u8>>> = SETTINGS
+    let theirs: Vec<Vec<Vec<u8>>> = settings(format)
         .iter()
         .map(|args| texconv(exe, dir, dxgi(format).0, args, &files))
         .collect();
@@ -363,7 +377,7 @@ fn compare(exe: &Path, dir: &Path, format: TexFormat, sources: &[Source]) -> Vec
                 format,
                 name: s.name.clone(),
                 ours: s.errors(format, &blocks),
-                theirs: [0, 1].map(|t| s.errors(format, &theirs[t][k])),
+                theirs: theirs.iter().map(|t| s.errors(format, &t[k])).collect(),
                 width: s.width,
                 height: s.height,
                 blocks,
@@ -481,27 +495,31 @@ fn decoded_alike(dump: &Path, rows: &[Row]) -> String {
 
 /// Prints the rows and a summary by format, and fails on any row outside the margin.
 fn report(rows: &[Row]) {
-    let mut by_format = BTreeMap::<&str, (usize, f64, f64, f64, usize)>::new();
+    // per format: the finite rows, the sums of the scores here and of texconv's, and the rows outside the margin
+    let mut by_format = BTreeMap::<&str, (usize, f64, Vec<f64>, usize)>::new();
     for r in rows {
         eprintln!("{}", r.line());
-        let (ours, [uniform, default]) = r.scores();
+        let (ours, theirs) = r.scores();
         let e = by_format.entry(dxgi(r.format).0).or_default();
+        e.2.resize(theirs.len(), 0.);
         // finite scores only in the means (an exact encode's PSNR is infinite)
-        if ours.is_finite() && uniform.is_finite() && default.is_finite() {
+        if ours.is_finite() && theirs.iter().all(|t| t.is_finite()) {
             e.0 += 1;
             e.1 += ours;
-            e.2 += uniform;
-            e.3 += default;
+            e.2.iter_mut().zip(&theirs).for_each(|(sum, t)| *sum += t);
         }
-        e.4 += usize::from(!r.within_margin());
+        e.3 += usize::from(!r.within_margin());
     }
-    for (format, (n, ours, uniform, default, outside)) in &by_format {
+    for (format, (n, ours, theirs, outside)) in &by_format {
         let n = *n as f64;
+        let all = theirs
+            .get(2)
+            .map_or(String::new(), |m| format!(" {:.2} all modes", m / n));
         eprintln!(
-            "{format:>9}: mean over the finite rows here {:.2}, texconv {:.2} uniform {:.2} default; {outside} outside the margin",
+            "{format:>9}: mean over the finite rows here {:.2}, texconv {:.2} uniform {:.2} default{all}; {outside} outside the margin",
             ours / n,
-            uniform / n,
-            default / n
+            theirs[0] / n,
+            theirs[1] / n
         );
     }
     let outside: Vec<String> = rows
@@ -514,9 +532,6 @@ fn report(rows: &[Row]) {
         "outside the margin of texconv's encode:\n{}",
         outside.join("\n")
     );
-    if let Some((_, ours, uniform, _, _)) = by_format.get("BC7_UNORM") {
-        assert!(ours >= uniform, "BC7's mean PSNR is below texconv's");
-    }
 }
 
 /// The sources as `format` is measured on them: opaque copies for BC1.

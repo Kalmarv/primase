@@ -489,7 +489,7 @@ fn other_formats_are_refused_by_name() {
     }
 }
 
-// ---- BC7 (block_compression)
+// ---- BC7
 
 fn noise(w: u32, h: u32, seed: u32) -> Vec<u8> {
     let mut random = Random::new(seed);

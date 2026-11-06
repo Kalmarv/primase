@@ -1,9 +1,9 @@
-//! Block encoders behind [`TexEncoder`]: BC1, BC2 and BC3 (colour: [`color`]; BC3's alpha: [`single`]), BC4 and BC5
-//! UNORM and SNORM ([`single`]), BC6H UF16 and SF16 ([`bc6h`], DirectXTex's encoder ported), all here in Rust; BC7
-//! through `block_compression` (a pure-Rust CPU port of Intel's ISPC texture compressor: all BC7 modes, no native code).
+//! Block encoders behind [`TexEncoder`], all here in Rust: BC1, BC2 and BC3 (colour: [`color`]; BC3's alpha:
+//! [`single`]), BC4 and BC5 UNORM and SNORM ([`single`]), BC6H UF16 and SF16 ([`bc6h`], DirectXTex's encoder ported) and
+//! BC7 ([`bc7`]).
 //!
 //! Input is straight RGBA, rows top first, as the decoders output: bytes (`v / 255`) or floats. No colour transfer is
-//! applied. UNORM formats clamp floats to 0..=1 and SNORM ones to -1..=1; bytes for an SNORM format are biased as the
+//! applied. UNORM formats clamp floats to 0..=1 and SNORM ones to -1..=1 (BC7 then rounds them to 8-bit levels); bytes for an SNORM format are biased as the
 //! decoders bias them (`v / 255 * 2 - 1`). BC6H takes floats as they are (clamped to its range; bytes are `v / 255`).
 //! NaN encodes as 0. BC1 makes a texel of alpha below 0.5 (a byte below 128) transparent, in a three-colour block.
 //!
@@ -12,15 +12,12 @@
 //!
 //! A level is encoded on [`Encoder::threads`] threads, a row of blocks at a time; the bytes are the same on any count.
 //! Every encoder is plain Rust arithmetic without CPU-specific dispatch: the same input gives the same bytes.
-//!
-//! BC7 uses the crate's `slow` settings (all mode groups, extra refinement): `alpha_slow` when any texel's alpha is below
-//! 1 (alpha is part of the error), else `opaque_slow` (alpha is not fitted and stays 1).
 mod bc6h;
+mod bc7;
 mod color;
 mod single;
 
 use crate::{Error, Result, buffer};
-use block_compression::{BC7Settings, CompressionVariant, encode::compress_rgba8};
 use primase_core::TexFormat;
 use primase_foundations::parallel::{Threads, rows_mut};
 
@@ -147,7 +144,7 @@ fn colour(texels: &[[f32; 4]; 16], palettes: color::Palettes) -> [u8; 8] {
     )
 }
 
-/// One block of `texels` in `format` (one of BC1-BC6H); the block's bytes are the first `format.block_bytes()`.
+/// One block of `texels` in `format` (one of BC1-BC7); the block's bytes are the first `format.block_bytes()`.
 fn encode_block(format: TexFormat, texels: &[[f32; 4]; 16]) -> [u8; 16] {
     use TexFormat::*;
     let mut out = [0u8; 16];
@@ -180,12 +177,13 @@ fn encode_block(format: TexFormat, texels: &[[f32; 4]; 16]) -> [u8; 16] {
         Bc6hUfloat | Bc6hSfloat => {
             out = bc6h::encode(&texels.map(|t| [t[0], t[1], t[2]]), format == Bc6hSfloat);
         }
+        Bc7 => out = bc7::encode(&texels.map(|t| t.map(|v| unorm(v).round() as u8))),
         _ => {}
     }
     out
 }
 
-/// Encodes a level in BC1-BC6H, a row of blocks per task.
+/// Encodes a level in BC1-BC7, a row of blocks per task.
 fn encode_blocks(
     threads: Threads,
     format: TexFormat,
@@ -218,58 +216,18 @@ fn encode_blocks(
     Ok(out)
 }
 
-/// Encodes a level as BC7 through `block_compression`, a row of blocks per task, partial blocks filled here (the crate
-/// takes whole blocks only).
-fn encode_bc7(threads: Threads, width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>> {
-    let size = sizes(TexFormat::Bc7, width, height, Source::Bytes(rgba))?;
-    let settings = if rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 255) {
-        BC7Settings::alpha_slow()
-    } else {
-        BC7Settings::opaque_slow()
-    };
-    let variant = CompressionVariant::BC7(settings);
-    let blocks_x = width.div_ceil(4);
-    let mut out = buffer(size)?;
-    rows_mut(threads, &mut out, blocks_x as usize * 16, |by, row| {
-        let by = by as u32;
-        let rows = (height - by * 4).min(4);
-        // the row of blocks as whole blocks: four rows of `blocks_x * 4` texels
-        let mut strip = Vec::with_capacity(blocks_x as usize * 64);
-        for y in 0..4 {
-            let source = (by * 4 + fill(y, rows)) * width;
-            for x in 0..blocks_x * 4 {
-                let (bx, s) = (x / 4, x % 4);
-                let column = bx * 4 + fill(s, (width - bx * 4).min(4));
-                let i = (source + column) as usize * 4;
-                strip.extend_from_slice(&rgba[i..i + 4]);
-            }
-        }
-        compress_rgba8(variant, &strip, row, blocks_x * 4, 4, blocks_x * 16);
-    })?;
-    Ok(out)
-}
-
-/// Rounds floats to bytes (0..=1 to 0..=255; NaN is 0) for the BC7 encoder.
-fn to_bytes(rgba: &[f32]) -> Result<Vec<u8>> {
-    let mut out = Vec::new();
-    out.try_reserve_exact(rgba.len()).map_err(|_| Error::Allocation)?;
-    out.extend(rgba.iter().map(|&v| unorm(v).round() as u8));
-    Ok(out)
-}
-
-/// The formats encoded here, BC7 apart.
+/// The formats encoded here.
 fn encodes(format: TexFormat) -> bool {
     use TexFormat::*;
     matches!(
         format,
-        Bc1 | Bc2 | Bc3 | Bc4Unorm | Bc4Snorm | Bc5Unorm | Bc5Snorm | Bc6hUfloat | Bc6hSfloat
+        Bc1 | Bc2 | Bc3 | Bc4Unorm | Bc4Snorm | Bc5Unorm | Bc5Snorm | Bc6hUfloat | Bc6hSfloat | Bc7
     )
 }
 
 impl TexEncoder for Encoder {
     fn encode_rgba8(&self, format: TexFormat, width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>> {
         match format {
-            TexFormat::Bc7 => encode_bc7(self.threads, width, height, rgba),
             f if encodes(f) => encode_blocks(self.threads, f, width, height, Source::Bytes(rgba)),
             other => Err(Error::Unsupported(other)),
         }
@@ -277,10 +235,6 @@ impl TexEncoder for Encoder {
 
     fn encode_rgba32f(&self, format: TexFormat, width: u32, height: u32, rgba: &[f32]) -> Result<Vec<u8>> {
         match format {
-            TexFormat::Bc7 => {
-                sizes(format, width, height, Source::Floats(rgba))?;
-                encode_bc7(self.threads, width, height, &to_bytes(rgba)?)
-            }
             f if encodes(f) => encode_blocks(self.threads, f, width, height, Source::Floats(rgba)),
             other => Err(Error::Unsupported(other)),
         }
