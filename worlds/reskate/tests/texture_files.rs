@@ -44,7 +44,7 @@ fn a_dds_of_no_size_is_refused() {
     file[12..16].copy_from_slice(&0u32.to_le_bytes());
     file[16..20].copy_from_slice(&0u32.to_le_bytes());
     let e = read(file).err().unwrap();
-    assert!(e.contains("t.dds") && e.contains("zero dimensions"), "{e}");
+    assert!(e.contains("t.dds") && e.contains("0 x 0 pixels"), "{e}");
 }
 
 /// 2^32-1 square overflowed a u64 level size (`w * h * 4`): a panic with overflow checks, a wrapped slice without. (A
@@ -62,7 +62,7 @@ fn a_dds_of_absurd_size_is_refused() {
 fn a_dds_cut_short_or_followed_by_bytes_is_refused() {
     let file = dds(4, 4, TexFormat::Bc1, vec![vec![0; 8]; 3]);
     let e = read(file[..file.len() - 3].to_vec()).err().unwrap();
-    assert!(e.contains("truncated mip"), "{e}");
+    assert!(e.contains("truncated payload"), "{e}");
     let mut long = file;
     long.push(0);
     assert!(read(long).err().unwrap().contains("trailing bytes"));
