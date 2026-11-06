@@ -5,7 +5,7 @@
 //! A source drawn with a precise depth buffer (Riders Republic's reversed float depth) can lay one surface a few
 //! millimetres over another and show only the upper: The Deck's bowl decks lie 3.7 mm over the plaza's concrete,
 //! 440 m2 of it. A destination with less depth precision draws both, fighting in blotches that move with the view
-//! (Caleb in skate., 2026-10-25). What the source showed there is the upper surface alone, so the pass leaves the
+//! (seen in skate., 2026-10-25). What the source showed there is the upper surface alone, so the pass leaves the
 //! lower out where the upper covers it.
 //!
 //! **Which triangles.** Every placed triangle of a triangle-list primitive whose materials (its own and every

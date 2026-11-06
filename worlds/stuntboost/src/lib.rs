@@ -11,7 +11,7 @@
 //! converts by its unit alone, and a STUNTBOOST unit has no one true length. Its props are modelled at real size in
 //! centimetres (an AA battery 5.15 units, a door 204), while its fingerboard's deck is 0.967 units long. So the scale
 //! is the program's, a required argument of [`read::read_level`]: `0.01` reads the props at their real size (the
-//! board then 1 cm long, a fingerboard); about `0.83` reads the board as a 0.80 m skateboard deck (Caleb's choice for
+//! board then 1 cm long, a fingerboard); about `0.83` reads the board as a 0.80 m skateboard deck (the choice for
 //! skate., the room giant around it). Positions, translations and everything derived from them (collision) are in
 //! metres; the application-specific vertex attributes stay as stored.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
