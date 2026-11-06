@@ -1,6 +1,8 @@
 [package]
 name = "primase-meshops"
 description = "Deterministic reference mesh transformations and tessellation"
+keywords = ["mesh", "tessellation", "geometry", "3d", "gamedev"]
+categories = ["game-development", "graphics"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

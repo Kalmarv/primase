@@ -1,6 +1,8 @@
 [package]
 name = "primase-havok"
 description = "Havok convex cores as triangles, and Havok skeletons and animations as world data with their clip lowering"
+keywords = ["havok", "collision", "skeleton", "animation", "gamedev"]
+categories = ["game-development"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,6 +1,8 @@
 [package]
 name = "primase-shred"
 description = "Tony Hawk: SHRED's RME archive and rigid scene reader"
+keywords = ["tony-hawk", "shred", "ps3", "modding", "gamedev"]
+categories = ["game-development", "parser-implementations"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

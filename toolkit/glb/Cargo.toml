@@ -1,6 +1,8 @@
 [package]
 name = "primase-glb"
 description = "The GLB codec: the container, a strict mesh reader, a mesh-file loader and a single-mesh encoder"
+keywords = ["glb", "gltf", "mesh", "3d"]
+categories = ["game-development", "rendering::data-formats"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

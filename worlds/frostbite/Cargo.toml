@@ -1,6 +1,8 @@
 [package]
 name = "primase-frostbite"
 description = "Frostbite in a world: the entries of a data folder read into components, and the passes that give them core meanings"
+keywords = ["frostbite", "ebx", "skate", "modding", "gamedev"]
+categories = ["game-development", "parser-implementations"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

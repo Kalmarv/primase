@@ -1,6 +1,8 @@
 [package]
 name = "primase-peak"
 description = "PEAK over the Unity reader: what its own scripts hand every shader (its fog texture and light volume)"
+keywords = ["peak", "unity", "modding", "gamedev"]
+categories = ["game-development"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

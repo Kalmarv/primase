@@ -1,6 +1,8 @@
 [package]
 name = "primase-gltf"
 description = "Our own glTF 2.0 / GLB writer from the world"
+keywords = ["gltf", "glb", "3d", "export", "gamedev"]
+categories = ["game-development", "rendering::data-formats"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

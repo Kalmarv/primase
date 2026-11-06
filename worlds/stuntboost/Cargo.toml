@@ -1,6 +1,8 @@
 [package]
 name = "primase-stuntboost"
 description = "STUNTBOOST over the MonoGame reader: a level's parts, nodes (the exporter's name grammar), baked atlases and its lowerings"
+keywords = ["stuntboost", "monogame", "modding", "gamedev"]
+categories = ["game-development"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

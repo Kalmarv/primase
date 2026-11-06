@@ -1,6 +1,8 @@
 [package]
 name = "primase-image"
 description = "PNG and JPEG pixels, exact sRGB transfer, and deterministic image mip chains"
+keywords = ["png", "jpeg", "srgb", "mipmap", "gamedev"]
+categories = ["multimedia::images", "game-development"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

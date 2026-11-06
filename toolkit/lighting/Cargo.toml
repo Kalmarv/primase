@@ -1,6 +1,8 @@
 [package]
 name = "primase-lighting"
 description = "Lighting approximations: ambient light as a grid of fill lights, kept off surfaces"
+keywords = ["lighting", "ambient", "3d", "gamedev"]
+categories = ["game-development", "rendering"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

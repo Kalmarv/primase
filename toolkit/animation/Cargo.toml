@@ -1,6 +1,8 @@
 [package]
 name = "primase-animation"
 description = "Clip evaluation, pose composition, morph application and skinning for primase's rig components"
+keywords = ["animation", "skinning", "morph", "skeleton", "gamedev"]
+categories = ["game-development", "graphics"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

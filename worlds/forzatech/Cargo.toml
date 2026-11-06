@@ -1,6 +1,8 @@
 [package]
 name = "primase-forzatech"
 description = "Forza Horizon 6 (ForzaTech): a track's placements, models, materials and textures in an x/z box"
+keywords = ["forza", "forza-horizon", "modding", "gamedev"]
+categories = ["game-development", "parser-implementations"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

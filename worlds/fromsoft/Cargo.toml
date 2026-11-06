@@ -1,6 +1,8 @@
 [package]
 name = "primase-fromsoft"
 description = "Strict FromSoftware archive and binder readers"
+keywords = ["fromsoftware", "sekiro", "elden-ring", "modding", "gamedev"]
+categories = ["game-development", "parser-implementations"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

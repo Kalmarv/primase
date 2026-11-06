@@ -1,6 +1,8 @@
 [package]
 name = "primase-core"
 description = "primase core: the world store, core components, frames, the pass manager and gates"
+keywords = ["gamedev", "3d", "world", "ecs", "reverse-engineering"]
+categories = ["game-development", "data-structures"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

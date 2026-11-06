@@ -1,6 +1,8 @@
 [package]
 name = "primase-gta"
 description = "GTA V read from an install into the world"
+keywords = ["gta5", "rage", "modding", "gamedev"]
+categories = ["game-development", "parser-implementations"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

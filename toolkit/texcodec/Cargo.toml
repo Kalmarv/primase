@@ -1,6 +1,8 @@
 [package]
 name = "primase-texcodec"
 description = "Texture block codecs behind one TexFormat: BCn decode/encode, SNORM BC4/BC5, gates"
+keywords = ["bcn", "bc7", "texture", "dds", "gamedev"]
+categories = ["game-development", "compression", "multimedia::images"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

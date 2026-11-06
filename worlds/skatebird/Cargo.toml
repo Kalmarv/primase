@@ -1,6 +1,8 @@
 [package]
 name = "primase-skatebird"
 description = "SkateBIRD over the Unity reader: what its own scripts say (reset points, mission givers)"
+keywords = ["skatebird", "unity", "modding", "gamedev"]
+categories = ["game-development"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

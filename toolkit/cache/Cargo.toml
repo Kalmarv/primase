@@ -1,6 +1,8 @@
 [package]
 name = "primase-cache"
 description = "Content-addressed disk cache for heavy pure steps: verified entries, safe across processes, size-capped"
+keywords = ["cache", "content-addressed", "disk-cache"]
+categories = ["caching", "filesystem"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

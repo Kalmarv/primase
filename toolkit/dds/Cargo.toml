@@ -1,6 +1,8 @@
 [package]
 name = "primase-dds"
 description = "DDS read and write (legacy FourCC and DX10 headers)"
+keywords = ["dds", "texture", "directx", "gamedev"]
+categories = ["game-development", "multimedia::images", "parser-implementations"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,6 +1,8 @@
 [package]
 name = "primase-exactsum"
 description = "An order-independent exact sum of f64s (Shewchuk's expansions), rounded once"
+keywords = ["sum", "floating-point", "exact", "shewchuk"]
+categories = ["mathematics", "algorithms"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,6 +1,8 @@
 [package]
 name = "primase-anvil"
 description = "Anvil worlds: forge archives read through anvil-formats into a world, and the passes that lower them"
+keywords = ["anvil", "ubisoft", "forge", "modding", "gamedev"]
+categories = ["game-development", "parser-implementations"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

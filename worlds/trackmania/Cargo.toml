@@ -1,6 +1,8 @@
 [package]
 name = "primase-trackmania"
 description = "TrackMania Nations Forever over the GameBox reader: a map's blocks placed from the game's own block models (its packs and GameData), their meshes, materials, textures and collision, and their lowerings"
+keywords = ["trackmania", "gbx", "tmnf", "modding", "gamedev"]
+categories = ["game-development", "parser-implementations"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

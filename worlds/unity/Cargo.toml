@@ -1,6 +1,8 @@
 [package]
 name = "primase-unity"
 description = "Unity players' data files (SerializedFile, type trees, streamed resources) read into the world"
+keywords = ["unity", "serialized-file", "modding", "gamedev"]
+categories = ["game-development", "parser-implementations"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,6 +1,8 @@
 [package]
 name = "primase-monogame"
 description = "MonoGame (XNA 4.0, FNA) content: the XNB container, its type-reader table and the built-in readers' values"
+keywords = ["monogame", "xna", "xnb", "modding", "gamedev"]
+categories = ["game-development", "parser-implementations"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

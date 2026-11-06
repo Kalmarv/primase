@@ -1,6 +1,8 @@
 [package]
 name = "primase-blender"
 description = "Blender (Cycles): a world written as a scene whose materials are live shader node graphs of core's material model, saved as a .blend and rendered in Cycles"
+keywords = ["blender", "cycles", "3d", "export", "gamedev"]
+categories = ["game-development", "rendering"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
