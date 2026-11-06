@@ -454,6 +454,8 @@ Licence: GPL-3.0-or-later for the whole workspace; dependencies must be GPL-3-co
 Toolchain: pinned in `rust-toolchain.toml` (latest stable). Landing is the one check, and no test is run before it: it
 runs `cargo fmt --check`, `cargo clippy --workspace --all-targets` with no warnings, the unit, architecture and
 real-data declaration tests, and the real-data tests named for the change. Commit messages say what changed.
+CI (`.github/workflows/ci.yml`) runs the same checks except the real-data tests on Windows and Linux for every push
+and pull request.
 
 ## Open design questions
 
