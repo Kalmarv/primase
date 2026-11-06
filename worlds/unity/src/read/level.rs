@@ -168,6 +168,9 @@ pub struct LevelReport {
     /// The largest distance a lowered hips translation is off the body position between keys, as a fraction of the
     /// avatar's human scale.
     pub humanoid_worst_hips_between_keys: f64,
+    /// The largest difference of a lowered channel of weighted legacy curves from its curves, halfway between its keys
+    /// (in the curves' units).
+    pub worst_weighted_curve_error: f32,
     /// RenderSettings names a sun (`unity.render_settings` holds it when it is a light read).
     pub sun_named: bool,
     /// Colliders read: those that collide, and those that do not by reason (inactive or disabled, trigger,
@@ -186,7 +189,7 @@ pub struct LevelReport {
     pub lod_groups: BTreeMap<&'static str, u64>,
     /// Forms made of coarser LOD levels.
     pub lod_forms: usize,
-    /// Textures whose pixels were not decoded, by reason (`crunched texture format 28`, ...).
+    /// Textures whose pixels were not decoded, by reason (`an empty texture`, a format with no world format, ...).
     pub textures_not_decoded: BTreeMap<String, u64>,
     /// Unity drawing rules and references not reproduced, by what: counts of renderer submeshes, materials or
     /// properties.
@@ -1067,6 +1070,23 @@ impl Builder<'_> {
                             self.notice(
                                 "animation clip rotation keys renormalised to unit length",
                                 report.renormalised_keys as u64,
+                            );
+                            self.notice(
+                                &format!(
+                                    "animation clip channels of weighted legacy curves sampled at {} keys a stretch \
+                                     (Bezier curves in time, no cubics; the report's worst_weighted_curve_error is \
+                                     the largest difference halfway between keys)",
+                                    crate::clipdata::WEIGHTED_STEPS
+                                ),
+                                report.weighted_channels as u64,
+                            );
+                            self.report.worst_weighted_curve_error = self
+                                .report
+                                .worst_weighted_curve_error
+                                .max(report.worst_weighted_error);
+                            self.notice(
+                                "ping-pong legacy clips unrolled into a loop of twice their length",
+                                u64::from(report.ping_pong_unrolled),
                             );
                             let entity = if report.channels == 0 {
                                 self.notice("animation clips that drive no joint of a rig (not made)", 1);
@@ -2562,7 +2582,7 @@ mod tests {
         assert_eq!(json["colliders_not_colliding"]["trigger"], 5);
         assert_eq!(json["skipped"]["no mesh"], 1);
         // every field of the struct is there
-        assert_eq!(json.as_object().map(serde_json::Map::len), Some(37));
+        assert_eq!(json.as_object().map(serde_json::Map::len), Some(38));
     }
 
     #[test]

@@ -29,6 +29,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloc-no-stdlib"
+version = "2.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc7bb162ec39d46ab1ca8c77bf72e890535becd1751bb45f64c597edb4c8c6b3"
+
+[[package]]
+name = "alloc-stdlib"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e76a019e91224d279006ff972f1e984179a6e9feb050adba6ce8274aef23195"
+dependencies = [
+ "alloc-no-stdlib",
+]
+
+[[package]]
 name = "alloca"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -166,6 +181,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "brotli-decompressor"
+version = "5.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a32acac15fe1967bc3986b2a6347dffc965602354ea6f450ad07e8bfd253583"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+]
+
+[[package]]
 name = "bytemuck"
 version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -184,6 +209,12 @@ dependencies = [
  "quote",
  "syn 3.0.9",
 ]
+
+[[package]]
+name = "byteorder"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
@@ -341,6 +372,21 @@ checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "crc"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5eb8a2a1cd12ab0d987a5d5e825195d372001a4094a0376319d5a0ad71c1ba0d"
+dependencies = [
+ "crc-catalog",
+]
+
+[[package]]
+name = "crc-catalog"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853"
 
 [[package]]
 name = "crc32fast"
@@ -980,6 +1026,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
 
 [[package]]
+name = "lzma-rs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "297e814c836ae64db86b36cf2a557ba54368d03f6afcd7d947c266692f71115e"
+dependencies = [
+ "byteorder",
+ "crc",
+]
+
+[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1169,7 +1225,7 @@ dependencies = [
 
 [[package]]
 name = "primase-animation"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "primase-core",
  "serde",
@@ -1179,7 +1235,7 @@ dependencies = [
 
 [[package]]
 name = "primase-anvil"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anvil-formats",
  "dxcontainer",
@@ -1200,7 +1256,7 @@ dependencies = [
 
 [[package]]
 name = "primase-blender"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "iridia-interface",
  "primase-core",
@@ -1215,7 +1271,7 @@ dependencies = [
 
 [[package]]
 name = "primase-cache"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "primase-core",
  "sha2",
@@ -1223,7 +1279,7 @@ dependencies = [
 
 [[package]]
 name = "primase-checks"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "fromsoft-formats",
  "frostbite-formats",
@@ -1255,7 +1311,7 @@ dependencies = [
 
 [[package]]
 name = "primase-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "half",
  "iridia",
@@ -1272,7 +1328,7 @@ dependencies = [
 
 [[package]]
 name = "primase-dds"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "primase-core",
  "primase-testdata",
@@ -1283,11 +1339,11 @@ dependencies = [
 
 [[package]]
 name = "primase-exactsum"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "primase-examples"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "forzatech-formats",
  "fromsoft-formats",
@@ -1307,7 +1363,7 @@ dependencies = [
 
 [[package]]
 name = "primase-forzatech"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "forzatech-formats",
  "primase-core",
@@ -1322,14 +1378,16 @@ dependencies = [
 
 [[package]]
 name = "primase-foundations"
-version = "0.3.3"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8f1ac54cab06733f0b3398524582727077c55ed3495dca565f29df560abd409"
+checksum = "7619497476ce97fa8e331f105850a93c13a823e6dea195c165d528734b756dc8"
 dependencies = [
+ "brotli-decompressor",
  "flate2",
  "half",
  "libloading",
  "lz4_flex",
+ "lzma-rs",
  "oozextract",
  "quantydb-sqlite",
  "ruzstd",
@@ -1339,7 +1397,7 @@ dependencies = [
 
 [[package]]
 name = "primase-fromsoft"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes",
  "criterion",
@@ -1374,7 +1432,7 @@ dependencies = [
 
 [[package]]
 name = "primase-frostbite"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "frostbite-formats",
  "half",
@@ -1392,7 +1450,7 @@ dependencies = [
 
 [[package]]
 name = "primase-glb"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "iridia-interface",
@@ -1404,7 +1462,7 @@ dependencies = [
 
 [[package]]
 name = "primase-gltf"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "iridia-interface",
@@ -1423,7 +1481,7 @@ dependencies = [
 
 [[package]]
 name = "primase-gta"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dxcontainer",
  "iridia",
@@ -1448,7 +1506,7 @@ dependencies = [
 
 [[package]]
 name = "primase-havok"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "havok-cloth",
  "havok-formats",
@@ -1463,7 +1521,7 @@ dependencies = [
 
 [[package]]
 name = "primase-image"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "iridia-interface",
  "png",
@@ -1481,7 +1539,7 @@ dependencies = [
 
 [[package]]
 name = "primase-lighting"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "primase-core",
  "primase-foundations",
@@ -1492,7 +1550,7 @@ dependencies = [
 
 [[package]]
 name = "primase-meshops"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "primase-core",
  "primase-testdata",
@@ -1501,7 +1559,7 @@ dependencies = [
 
 [[package]]
 name = "primase-monogame"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "iridia",
  "iridia-mojo",
@@ -1536,7 +1594,7 @@ dependencies = [
 
 [[package]]
 name = "primase-peak"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "half",
  "primase-core",
@@ -1549,7 +1607,7 @@ dependencies = [
 
 [[package]]
 name = "primase-reskate"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "frostbite-formats",
  "half",
@@ -1575,7 +1633,7 @@ dependencies = [
 
 [[package]]
 name = "primase-shaunwhite"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anvil-formats",
  "iridia",
@@ -1595,7 +1653,7 @@ dependencies = [
 
 [[package]]
 name = "primase-shred"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "havok-formats",
  "morpheme-formats",
@@ -1613,7 +1671,7 @@ dependencies = [
 
 [[package]]
 name = "primase-skatebird"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "iridia",
  "iridia-exec",
@@ -1632,7 +1690,7 @@ dependencies = [
 
 [[package]]
 name = "primase-stuntboost"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "iridia",
  "iridia-exec",
@@ -1662,7 +1720,7 @@ dependencies = [
 
 [[package]]
 name = "primase-texcodec"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bcdec_rs",
  "half",
@@ -1677,7 +1735,7 @@ dependencies = [
 
 [[package]]
 name = "primase-trackmania"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "gbx-formats",
  "primase-core",
@@ -1692,7 +1750,7 @@ dependencies = [
 
 [[package]]
 name = "primase-unity"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "iridia",
  "iridia-dxbc",
@@ -2190,9 +2248,9 @@ checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 
 [[package]]
 name = "unity-formats"
-version = "0.3.1"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c1c13460f2b5a6442e84bf88755e503eb2831c96e57ff9c2382f06148290fd4"
+checksum = "cf91d182042cb12ffaa8beee7d8ca7dc584726531ece17c68cd9891f4d5566cf"
 dependencies = [
  "half",
  "primase-foundations",

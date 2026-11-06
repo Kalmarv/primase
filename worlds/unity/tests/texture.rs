@@ -4,9 +4,9 @@
 //! read with `tools.unity_tpk`.
 //!
 //! Every texture's size, level count and colour space; level 0 decoded to RGBA8 against the image, per TextureFormat:
-//! uncompressed and BC7 exactly; DXT1 and DXT5 within 1, named "oracle decoder's BC1-3 palette rounding": the
-//! interpolated palette entries are rounded otherwise by the oracle's decoder, while ours and bcdec (decoded as well)
-//! agree bit for bit, which is asserted.
+//! uncompressed and BC7 exactly; DXT1 and DXT5, and the crunched ones (which unpack to DXT1 and DXT5 blocks), within 1,
+//! named "oracle decoder's BC1-3 palette rounding": the interpolated palette entries are rounded otherwise by the
+//! oracle's decoder, while ours and bcdec (decoded as well) agree bit for bit, which is asserted.
 
 #![allow(clippy::unwrap_used)]
 
@@ -44,7 +44,8 @@ struct Pixels {
 /// The largest channel difference allowed for a TextureFormat.
 fn tolerance(format: i64) -> u8 {
     match format {
-        10 | 12 => 1,
+        // DXT1, DXT5 and their crunched forms
+        10 | 12 | 28 | 29 => 1,
         _ => 0,
     }
 }
@@ -55,9 +56,9 @@ fn rgba8(t: &Texture) -> Vec<u8> {
         .unwrap()
 }
 
-/// What the texture reader leaves undecoded on purpose (its `Unsupported` reasons): textures without pixels, and
-/// crunched formats (a second compression the reader does not unpack). Any other decode failure fails the gate.
-const NOT_DECODED: [&str; 2] = ["an empty texture", "crunched texture format"];
+/// What the texture reader leaves undecoded on purpose (its `Unsupported` reasons): textures without pixels. Any other
+/// decode failure fails the gate.
+const NOT_DECODED: [&str; 1] = ["an empty texture"];
 
 #[test]
 fn textures_match_the_oracle() {

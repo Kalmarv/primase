@@ -33,7 +33,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.99"
 license = "GPL-3.0-or-later"
@@ -49,32 +49,32 @@ encoding_rs = { version = "=0.8.42", default-features = false, features = ["allo
 aes = { version = "=0.9.3", default-features = false }
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
 fromsoft-formats = { version = "0.15.0" }
-primase-fromsoft = { version = "0.1.0", path = "worlds/fromsoft" }
+primase-fromsoft = { version = "0.2.0", path = "worlds/fromsoft" }
 lz4_flex = { version = "=0.14.0", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 quantydb-sqlite = { version = "=0.4.0", default-features = false }
 ruzstd = { version = "=0.7.3", default-features = false, features = ["std", "hash"] }
 libloading = { version = "=0.9.0", default-features = false, features = ["std"] }
 oozextract = { version = "=0.5.7", default-features = false, features = ["verbose_errors"] }
-primase-core = { version = "0.1.0", path = "core" }
+primase-core = { version = "0.2.0", path = "core" }
 primase-testdata = "0.1.9"
-primase-texcodec = { version = "0.1.0", path = "toolkit/texcodec" }
-primase-dds = { version = "0.1.0", path = "toolkit/dds" }
-primase-image = { version = "0.1.0", path = "toolkit/image" }
-primase-meshops = { version = "0.1.0", path = "toolkit/meshops" }
-primase-animation = { version = "0.1.0", path = "toolkit/animation" }
-primase-lighting = { version = "0.1.0", path = "toolkit/lighting" }
-primase-glb = { version = "0.1.0", path = "toolkit/glb" }
-primase-exactsum = { version = "0.1.0", path = "toolkit/exactsum" }
+primase-texcodec = { version = "0.2.0", path = "toolkit/texcodec" }
+primase-dds = { version = "0.2.0", path = "toolkit/dds" }
+primase-image = { version = "0.2.0", path = "toolkit/image" }
+primase-meshops = { version = "0.2.0", path = "toolkit/meshops" }
+primase-animation = { version = "0.2.0", path = "toolkit/animation" }
+primase-lighting = { version = "0.2.0", path = "toolkit/lighting" }
+primase-glb = { version = "0.2.0", path = "toolkit/glb" }
+primase-exactsum = { version = "0.2.0", path = "toolkit/exactsum" }
 dxcontainer = { version = "0.5.0" }
 rsx-reader = { version = "0.5.0" }
-primase-cache = { version = "0.1.0", path = "toolkit/cache" }
+primase-cache = { version = "0.2.0", path = "toolkit/cache" }
 havok-cloth = { version = "0.3.0" }
 havok-formats = { version = "0.9.0" }
-primase-havok = { version = "0.1.0", path = "toolkit/havok" }
+primase-havok = { version = "0.2.0", path = "toolkit/havok" }
 morpheme-formats = { version = "0.1.1" }
 rme-formats = { version = "0.5.0" }
-unity-formats = { version = "0.3.1" }
+unity-formats = { version = "0.5.0" }
 gbx-formats = { version = "0.1.0" }
 monogame-formats = { version = "0.1.1" }
 lua51-bytecode = { version = "0.2.0" }
@@ -86,21 +86,21 @@ iridia = { version = "0.5.0" }
 iridia-exec = { version = "0.5.0" }
 iridia-dxil = { version = "0.5.0" }
 iridia-mojo = { version = "0.5.0" }
-primase-frostbite = { version = "0.1.0", path = "worlds/frostbite" }
-primase-gltf = { version = "0.1.0", path = "formats/gltf" }
-primase-reskate = { version = "0.1.0", path = "worlds/reskate" }
-primase-blender = { version = "0.1.0", path = "worlds/blender" }
-primase-unity = { version = "0.1.0", path = "worlds/unity" }
-primase-skatebird = { version = "0.1.0", path = "worlds/skatebird" }
-primase-peak = { version = "0.1.0", path = "worlds/peak" }
-primase-stuntboost = { version = "0.1.0", path = "worlds/stuntboost" }
-primase-gta = { version = "0.1.0", path = "worlds/gta" }
-primase-monogame = { version = "0.1.0", path = "worlds/monogame" }
-primase-anvil = { version = "0.1.0", path = "worlds/anvil" }
-primase-shaunwhite = { version = "0.1.0", path = "worlds/shaunwhite" }
-primase-shred = { version = "0.1.0", path = "worlds/shred" }
-primase-trackmania = { version = "0.1.0", path = "worlds/trackmania" }
-primase-forzatech = { version = "0.1.0", path = "worlds/forzatech" }
+primase-frostbite = { version = "0.2.0", path = "worlds/frostbite" }
+primase-gltf = { version = "0.2.0", path = "formats/gltf" }
+primase-reskate = { version = "0.2.0", path = "worlds/reskate" }
+primase-blender = { version = "0.2.0", path = "worlds/blender" }
+primase-unity = { version = "0.2.0", path = "worlds/unity" }
+primase-skatebird = { version = "0.2.0", path = "worlds/skatebird" }
+primase-peak = { version = "0.2.0", path = "worlds/peak" }
+primase-stuntboost = { version = "0.2.0", path = "worlds/stuntboost" }
+primase-gta = { version = "0.2.0", path = "worlds/gta" }
+primase-monogame = { version = "0.2.0", path = "worlds/monogame" }
+primase-anvil = { version = "0.2.0", path = "worlds/anvil" }
+primase-shaunwhite = { version = "0.2.0", path = "worlds/shaunwhite" }
+primase-shred = { version = "0.2.0", path = "worlds/shred" }
+primase-trackmania = { version = "0.2.0", path = "worlds/trackmania" }
+primase-forzatech = { version = "0.2.0", path = "worlds/forzatech" }
 anvil-formats = { version = "0.2.1" }
 dxil-reader = { version = "0.5.0" }
 frostbite-formats = { version = "0.3.0" }

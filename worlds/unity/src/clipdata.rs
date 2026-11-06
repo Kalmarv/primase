@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use primase_core::{
     Channel, Clip, ClipTarget, Entity, Extrapolation, Interpolation, JointId, MorphId, Property, Rest,
 };
-use unity_formats::clip::{ClipData, Curve, Storage, Track};
+use unity_formats::clip::{ClipData, Curve, Key, Storage, Track};
 use unity_formats::{Error, Result};
 
 use crate::components::UNITY;
@@ -29,6 +29,14 @@ pub struct ClipLowering {
     pub keys: usize,
     /// Rotation keys renormalised to unit length (they were not within 1e-4 of it).
     pub renormalised_keys: usize,
+    /// Channels of weighted legacy curves (a Bezier curve in time and value, no cubic in time), sampled at
+    /// [`WEIGHTED_STEPS`] keys a stretch between the curves' own keys, and the largest difference of such a channel from
+    /// its curves halfway between its keys.
+    pub weighted_channels: usize,
+    pub worst_weighted_error: f32,
+    /// Whether a ping-pong clip (a legacy clip's wrap mode 4) was unrolled into a loop of twice its length: forwards,
+    /// then its keys mirrored.
+    pub ping_pong_unrolled: bool,
     /// Transform curves whose path is no joint of the rig, by attribute (`position`, `rotation`, `scale`).
     pub unresolved: std::collections::BTreeMap<&'static str, usize>,
     /// Blend shape curves lowered to morph channels, and those whose renderer or shape the character lacks.
@@ -86,16 +94,21 @@ fn convert(property: Property, v: &[f32]) -> Vec<f32> {
     }
 }
 
+/// The keys a channel of weighted curves has between two keys of its curves.
+pub const WEIGHTED_STEPS: usize = 8;
+
 /// This transform track as a joint channel on `target`, in the world's frame: its curves sampled at the union of
 /// their key times, as a Hermite spline (each curve is a cubic between its keys, which the Hermite form with the curve's own
 /// values and slopes at the keys states exactly; the tangents are per second), as a Linear channel when
-/// every curve is dense or constant, and as a one-key channel when every curve is constant. `None` for a
-/// binding that is not position, rotation or scale of a Transform. An error for steps mixed with smooth segments.
+/// every curve is dense or constant, and as a one-key channel when every curve is constant. A track with a weighted
+/// segment is sampled at [`WEIGHTED_STEPS`] keys a stretch, its values and slopes exact at each, and counted in `report`
+/// with the largest difference from its curves halfway between keys. `None` for a binding that is not position,
+/// rotation or scale of a Transform. An error for steps mixed with smooth segments.
 pub fn track_channel(
     track: &Track,
     target: ClipTarget,
     duration: f32,
-    renormalised: &mut usize,
+    report: &mut ClipLowering,
 ) -> Result<Option<Channel>> {
     let property = match (track.binding.type_id, track.binding.attribute) {
         (4, 1) => Property::Translation,
@@ -127,7 +140,22 @@ pub fn track_channel(
     times.sort_by(f32::total_cmp);
     times.dedup();
     let all_constant = track.curves.iter().all(Curve::is_constant);
-    let all_linear = track.curves.iter().all(|c| c.storage != Storage::Streamed);
+    // dense and constant curves are linear between their keys; streamed and legacy keyframe curves are cubics
+    let all_linear = track
+        .curves
+        .iter()
+        .all(|c| matches!(c.storage, Storage::Dense | Storage::Constant));
+    let weighted = !stepped && !all_constant && track.curves.iter().any(Curve::is_weighted);
+    if weighted {
+        let mut dense = Vec::with_capacity(times.len().saturating_mul(WEIGHTED_STEPS));
+        for w in times.windows(2) {
+            dense
+                .extend((0..WEIGHTED_STEPS).map(|i| w[0] + (w[1] - w[0]) * i as f32 / WEIGHTED_STEPS as f32));
+        }
+        dense.extend(times.last());
+        dense.dedup();
+        times = dense;
+    }
     let interpolation = if stepped {
         Interpolation::Step
     } else if all_constant || all_linear {
@@ -146,7 +174,7 @@ pub fn track_channel(
             let length = value.iter().map(|x| x * x).sum::<f32>().sqrt();
             if (length - 1.0).abs() > 1e-4 && length > 0.0 {
                 value.iter_mut().for_each(|x| *x /= length);
-                *renormalised += 1;
+                report.renormalised_keys += 1;
             }
         }
         if interpolation == Interpolation::Hermite {
@@ -161,6 +189,27 @@ pub fn track_channel(
         }
     }
     debug_assert_eq!(width, property.width());
+    if weighted {
+        report.weighted_channels += 1;
+        // each curve against the Hermite spline of its samples, halfway between them
+        for c in &track.curves {
+            let spline = Curve {
+                storage: Storage::Streamed,
+                keys: times
+                    .iter()
+                    .map(|&t| {
+                        let (value, in_slope, out_slope) = c.sample(t);
+                        Key::new(t, value, in_slope, out_slope)
+                    })
+                    .collect(),
+            };
+            for w in times.windows(2) {
+                let mid = 0.5 * (w[0] + w[1]);
+                let error = (spline.sample(mid).0 - c.sample(mid).0).abs();
+                report.worst_weighted_error = report.worst_weighted_error.max(error);
+            }
+        }
+    }
     Ok(Some(Channel {
         target,
         property,
@@ -186,6 +235,13 @@ pub fn lower_clip(
     let mut morph_seen = BTreeSet::new();
     for track in &data.tracks {
         let b = &track.binding;
+        if b.is_pptr {
+            *report
+                .not_lowered
+                .entry("object reference (PPtr) curves: a material or sprite swap")
+                .or_default() += 1;
+            continue;
+        }
         let kind = match (b.type_id, b.attribute) {
             (4, 1) => "position",
             (4, 2) => "rotation",
@@ -216,7 +272,7 @@ pub fn lower_clip(
                     track,
                     ClipTarget::Morph { geometry, morph },
                     data.duration,
-                    &mut report.renormalised_keys,
+                    &mut report,
                 )?
                 .expect("a blend shape curve is a channel");
                 if !morph_seen.insert((geometry, morph)) {
@@ -243,7 +299,7 @@ pub fn lower_clip(
             continue;
         };
         let target = ClipTarget::Joint { skeleton, joint };
-        let channel = track_channel(track, target, data.duration, &mut report.renormalised_keys)?
+        let channel = track_channel(track, target, data.duration, &mut report)?
             .expect("a position, rotation or scale curve is a channel");
         if !seen.insert((joint, channel.property)) {
             return Err(invalid(format!(
@@ -275,12 +331,20 @@ pub fn lower_clip(
         }
         report.humanoid = Some(lowering);
     }
+    let mut duration = data.duration;
+    if data.ping_pong {
+        for c in &mut channels {
+            ping_pong(c, data.duration);
+        }
+        duration *= 2.0;
+        report.ping_pong_unrolled = true;
+    }
     report.channels = channels.len();
     Ok((
         Clip {
             name: data.name.clone(),
-            duration: data.duration,
-            extrapolation: if data.looping {
+            duration,
+            extrapolation: if data.looping || data.ping_pong {
                 Extrapolation::Loop
             } else {
                 Extrapolation::Hold
@@ -293,19 +357,52 @@ pub fn lower_clip(
     ))
 }
 
+/// `c` played forwards over `duration`, then backwards to its start, over `2 duration`: each key mirrored at
+/// `2 duration - t`, a Hermite key's tangents negated and swapped (at the turn, the key's outgoing tangent is its
+/// incoming one negated), a step's value held over the mirror of the stretch it held forwards.
+fn ping_pong(c: &mut Channel, duration: f32) {
+    let width = c.property.width();
+    let hermite = c.interpolation == Interpolation::Hermite;
+    let per_key = if hermite { 3 * width } else { width };
+    let (times, forward) = (c.times.clone(), c.values.clone());
+    let end = 2.0 * duration;
+    for (i, &t) in times.iter().enumerate().rev() {
+        let key = &forward[i * per_key..(i + 1) * per_key];
+        let (at, values): (f32, Vec<f32>) = match c.interpolation {
+            // backwards, a key's value holds from the mirror of where the next key began (the clip's end, for the last)
+            Interpolation::Step => (end - times.get(i + 1).copied().unwrap_or(duration), key.to_vec()),
+            Interpolation::Linear => (end - t, key.to_vec()),
+            Interpolation::Hermite => {
+                let (into, rest) = key.split_at(width);
+                let (value, out) = rest.split_at(width);
+                let mirrored = out
+                    .iter()
+                    .map(|x| -x)
+                    .chain(value.iter().copied())
+                    .chain(into.iter().map(|x| -x))
+                    .collect();
+                (end - t, mirrored)
+            }
+        };
+        let Some(&last) = c.times.last() else { return };
+        if at > last {
+            c.times.push(at);
+            c.values.extend(values);
+        } else if at == last && hermite {
+            let n = c.values.len();
+            c.values[n - width..].copy_from_slice(&values[2 * width..]);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use unity_formats::clip::{GenericBinding, Key};
+    use unity_formats::clip::GenericBinding;
 
     use super::*;
 
     fn key(time: f32, value: f32, in_slope: f32, out_slope: f32) -> Key {
-        Key {
-            time,
-            value,
-            in_slope,
-            out_slope,
-        }
+        Key::new(time, value, in_slope, out_slope)
     }
 
     /// Hand-worked: a position whose three curves have two keys 0.5 s apart, the first leaving at 2 per second, the second
@@ -331,7 +428,7 @@ mod tests {
             skeleton: world.spawn(),
             joint: JointId(0),
         };
-        let channel = track_channel(&track, target, 0.5, &mut 0)
+        let channel = track_channel(&track, target, 0.5, &mut ClipLowering::default())
             .expect("lowers")
             .expect("a position");
         assert_eq!(channel.interpolation, Interpolation::Hermite);
@@ -378,7 +475,7 @@ mod tests {
                 },
             ],
         };
-        let mut renormalised = 0;
+        let mut renormalised = ClipLowering::default();
         let c = track_channel(&track, target.clone(), 1.0, &mut renormalised)
             .unwrap()
             .unwrap();
@@ -443,7 +540,10 @@ mod tests {
             name: "blink".into(),
             duration: 1.0,
             looping: false,
+            ping_pong: false,
+            legacy: false,
             tracks,
+            pptr_targets: Vec::new(),
             events: 0,
             worst_continuity_error: 0.0,
         };
@@ -473,5 +573,137 @@ mod tests {
         assert_eq!(c.values.len(), 6);
         assert!((c.values[4] - 100.0).abs() < 1e-5, "{:?}", c.values);
         assert!(lower_clip(&clip(vec![track(5, 6), track(5, 6)]), &none, &morph, None).is_err());
+    }
+
+    fn legacy_clip(tracks: Vec<Track>, ping_pong: bool) -> ClipData {
+        ClipData {
+            name: "door".into(),
+            duration: 1.0,
+            looping: false,
+            ping_pong,
+            legacy: true,
+            tracks,
+            pptr_targets: Vec::new(),
+            events: 0,
+            worst_continuity_error: 0.0,
+        }
+    }
+
+    fn scale_track(curve: Curve) -> Track {
+        Track {
+            binding: GenericBinding {
+                path: 1,
+                attribute: 3,
+                type_id: 4,
+                is_pptr: false,
+            },
+            curves: vec![curve.clone(), curve.clone(), curve],
+        }
+    }
+
+    /// A legacy clip's keyframe curves are cubics between their keys, so a Hermite channel; an object reference
+    /// curve (a material swap on a SkinnedMeshRenderer, class 137 like a blend shape's) is counted, not lowered as a
+    /// blend shape.
+    #[test]
+    fn legacy_keyframes_are_hermite_and_pptr_curves_are_not_blend_shapes() {
+        let curve = Curve {
+            storage: Storage::Keyframes,
+            keys: vec![key(0.0, 1.0, 0.0, 2.0), key(1.0, 2.0, 0.5, 0.0)],
+        };
+        let swap = Track {
+            binding: GenericBinding {
+                path: 5,
+                attribute: 0,
+                type_id: 137,
+                is_pptr: true,
+            },
+            curves: vec![Curve {
+                storage: Storage::Keyframes,
+                keys: vec![key(0.0, 0.0, f32::INFINITY, f32::INFINITY)],
+            }],
+        };
+        let mut world = primase_core::World::new();
+        let skeleton = world.spawn();
+        let joint = |_: u32| Some((skeleton, JointId(0)));
+        let morph =
+            |_: u32, _: u32| -> Option<(Entity, MorphId)> { panic!("a PPtr curve is no blend shape") };
+        let (clip, report) = lower_clip(
+            &legacy_clip(vec![scale_track(curve), swap], false),
+            &joint,
+            &morph,
+            None,
+        )
+        .unwrap();
+        assert_eq!(clip.channels.len(), 1);
+        assert_eq!(clip.channels[0].interpolation, Interpolation::Hermite);
+        assert_eq!(report.not_lowered.values().sum::<usize>(), 1);
+        assert!(report.not_lowered.keys().any(|k| k.contains("PPtr")));
+    }
+
+    /// A weighted segment is sampled at `WEIGHTED_STEPS` keys, each with the curve's exact value and slope; the Hermite
+    /// spline between them is within a small error of the Bezier curve, which the report states.
+    #[test]
+    fn weighted_curves_are_sampled_with_their_error_reported() {
+        let curve = Curve {
+            storage: Storage::Keyframes,
+            keys: vec![
+                Key {
+                    out_weight: Some(0.9),
+                    ..key(0.0, 0.0, 0.0, 3.0)
+                },
+                Key {
+                    in_weight: Some(0.1),
+                    ..key(1.0, 1.0, 0.0, 0.0)
+                },
+            ],
+        };
+        let mut world = primase_core::World::new();
+        let target = ClipTarget::Joint {
+            skeleton: world.spawn(),
+            joint: JointId(0),
+        };
+        let mut report = ClipLowering::default();
+        let c = track_channel(&scale_track(curve.clone()), target, 1.0, &mut report)
+            .unwrap()
+            .unwrap();
+        assert_eq!(c.times.len(), WEIGHTED_STEPS + 1);
+        assert_eq!(report.weighted_channels, 1);
+        for (i, &t) in c.times.iter().enumerate() {
+            assert!((c.values[i * 9 + 3] - curve.sample(t).0).abs() < 1e-6, "{t}");
+        }
+        assert!(
+            report.worst_weighted_error > 0.0 && report.worst_weighted_error < 0.05,
+            "{}",
+            report.worst_weighted_error
+        );
+    }
+
+    /// A ping-pong clip is a loop of twice its length: its keys, then the same keys mirrored, a Hermite key's tangents
+    /// negated and swapped.
+    #[test]
+    fn ping_pong_clips_unroll_into_a_loop() {
+        let curve = Curve {
+            storage: Storage::Keyframes,
+            keys: vec![
+                key(0.0, 1.0, 0.0, 2.0),
+                key(0.25, 1.5, 1.0, 1.0),
+                key(1.0, 2.0, 0.5, 0.0),
+            ],
+        };
+        let mut world = primase_core::World::new();
+        let skeleton = world.spawn();
+        let joint = |_: u32| Some((skeleton, JointId(0)));
+        let morph = |_: u32, _: u32| None;
+        let (clip, report) =
+            lower_clip(&legacy_clip(vec![scale_track(curve)], true), &joint, &morph, None).unwrap();
+        assert!(report.ping_pong_unrolled);
+        assert_eq!((clip.duration, clip.extrapolation), (2.0, Extrapolation::Loop));
+        let c = &clip.channels[0];
+        assert_eq!(c.times, vec![0.0, 0.25, 1.0, 1.75, 2.0]);
+        // the x scale of each key: in tangent, value, out tangent
+        let x = |k: usize| [c.values[k * 9], c.values[k * 9 + 3], c.values[k * 9 + 6]];
+        assert_eq!(x(2), [0.5, 2.0, -0.5]);
+        assert_eq!(x(3), [-1.0, 1.5, -1.0]);
+        assert_eq!(x(4), [-2.0, 1.0, -0.0]);
     }
 }
