@@ -1,5 +1,5 @@
-//! Elden Ring's far tiles (`m60_X_Z_02`) hold environment probe groups (`GIIV`/`GILM` 09xx) that no box of the tile's
-//! layout names: one, or on high ground a second stacked on top of it. The reader records each as stored
+//! Elden Ring's far tiles (`m60_X_Z_02`, `m61_X_Z_02`) hold environment probe groups (`GIIV`/`GILM` 09xx) that no box of
+//! the tile's layout names: one, or on high ground more stacked on top of it. The reader records each as stored
 //! (`FarTileEnvironmentGroup`), and `place-fromsoft-far-tile-environment` gives each a region placed by a box fitted
 //! to the groups' own volumes (`Placement::FarTile`, how `Fitted`); these tests hold that rule over every
 //! installed far tile, and hold the boxes against the volumes: their `W` coefficients are dark in cells buried under
@@ -124,9 +124,9 @@ fn layers(regions: &[EnvironmentRegion]) -> Vec<Layer> {
     out
 }
 
-/// Every installed far tile with environment packages (48 in the installed build, all `m60`: 46 `_02` and two `_12`)
-/// gets one far-tile region for each group of its packages that no box names, stacked from the ground up in the order
-/// of their numbers (layer 0 the lowest), each placed by the fitted box; a far tile without packages gets none.
+/// Every installed far tile with environment packages (67 in the installed build: 47 of one group, 19 of two and one of
+/// four) gets one far-tile region for each group of its packages that no box names, stacked from the ground up in the
+/// order of their numbers (layer 0 the lowest), each placed by the fitted box; a far tile without packages gets none.
 #[test]
 fn every_far_tile_group_is_a_fitted_layer() -> Result<()> {
     with_install(|archive, decoder| {
@@ -163,7 +163,7 @@ fn every_far_tile_group_is_a_fitted_layer() -> Result<()> {
         }
         println!("far tiles by layers: {tiles_by_layers:?}; {without} without packages");
         assert!(
-            tiles_by_layers.values().sum::<usize>() >= 48,
+            tiles_by_layers.values().sum::<usize>() >= 67,
             "{tiles_by_layers:?}"
         );
         assert!(tiles_by_layers.contains_key(&2), "no far tile with two layers");
@@ -264,7 +264,7 @@ fn heights(archive: &Archive, decoder: &Decoder<'_>, far: MapId) -> Result<Vec<f
     Ok(hi)
 }
 
-/// The `W` volumes of state 05, high tier, of `groups` stacked by rows in that order (the first at the bottom), decoded:
+/// The `W` volumes of state 05, in the best tier the tile installs (`m61` tiles have no high tier), of `groups` stacked by rows in that order (the first at the bottom), decoded:
 /// per texel the mean of its three coefficients `(rgb - 0.5) * 2 * 2^((a - 0.5) * 20)`, as `[slice][row][column]` with
 /// the stack's size.
 fn stacked(
@@ -276,8 +276,9 @@ fn stacked(
     let paths = fromsoft_formats::envmap::packages(archive, area)?;
     let package = paths
         .iter()
-        .find(|p| p.state == 5 && p.tier == fromsoft_formats::envmap::Tier::High)
-        .ok_or("no state 05 high package")?;
+        .filter(|p| p.state == 5)
+        .min_by_key(|p| p.tier)
+        .ok_or_else(|| format!("{area}: no state 05 package"))?;
     let binder = Binder::read(&archive.read(&package.path, decoder)?, decoder)?;
     let codec = primase_texcodec::Decoder::default();
     let mut found = std::collections::BTreeMap::new();
@@ -536,13 +537,14 @@ fn far_tile_boxes_fit_their_volumes_against_collision() -> Result<()> {
     })
 }
 
-/// On every installed far tile with two layers (15 in the installed build: 14 `_02` tiles and `m60_11_13_12`), the
-/// volumes stacked in the pass's order (the lower group number at the bottom) separate buried from open cells better
-/// than stacked the other way round, in the same box.
+/// On every installed far tile with more than one layer, the volumes stacked in the pass's order (the lower group number
+/// at the bottom) separate buried from open cells, in the same box, at least as well as with any two neighbouring layers
+/// swapped, and better than with one of those swaps at least. The measure is a ranking, so a swap that moves no buried
+/// cell (two layers high above the ground) leaves it as it was; such a swap is printed.
 #[test]
 fn far_tile_layers_stack_in_group_order() -> Result<()> {
     with_install(|archive, decoder| {
-        let mut stacked_tiles = 0;
+        let mut stacked_tiles = std::collections::BTreeMap::<usize, usize>::new();
         for name in far_tile_names() {
             let Some((_, regions)) = far_regions(archive, decoder, &name)? else {
                 continue;
@@ -551,23 +553,35 @@ fn far_tile_layers_stack_in_group_order() -> Result<()> {
             if layers.len() < 2 {
                 continue;
             }
-            assert_eq!(layers.len(), 2, "{name}: more than two layers");
             let t = tile(archive, decoder, &name, &layers)?;
-            let ordered = t.stack.separation(&t.w, t.size, &t.heights, 2);
-            let (swapped, size) = stacked(archive, decoder, &name, &[t.groups[1], t.groups[0]])?;
-            let reversed = t.stack.separation(&swapped, size, &t.heights, 2);
-            println!(
-                "{name}: group {:04} under {:04}: AUC {ordered:.5}, swapped {reversed:.5}",
-                t.groups[0], t.groups[1]
-            );
+            let n = layers.len();
+            let ordered = t.stack.separation(&t.w, t.size, &t.heights, n);
+            let mut worse = 0;
+            for i in 1..n {
+                let mut groups = t.groups.clone();
+                groups.swap(i - 1, i);
+                let (swapped, size) = stacked(archive, decoder, &name, &groups)?;
+                let reversed = t.stack.separation(&swapped, size, &t.heights, n);
+                println!(
+                    "{name}: group {:04} under {:04}: AUC {ordered:.5}, swapped {reversed:.5}",
+                    t.groups[i - 1],
+                    t.groups[i]
+                );
+                assert!(
+                    ordered >= reversed,
+                    "{name}: layers {} and {i} swapped separate better ({reversed} against {ordered})",
+                    i - 1
+                );
+                worse += usize::from(ordered > reversed);
+            }
             assert!(
-                ordered > reversed,
-                "{name}: the swapped layers separate as well ({reversed} against {ordered})"
+                worse > 0,
+                "{name}: no swap of neighbouring layers separates worse"
             );
-            stacked_tiles += 1;
+            *stacked_tiles.entry(n).or_default() += 1;
         }
-        println!("{stacked_tiles} far tiles with two layers, each in group order");
-        assert!(stacked_tiles >= 15, "{stacked_tiles} far tiles with two layers");
+        println!("far tiles with more than one layer, by layers, each in group order: {stacked_tiles:?}");
+        assert!(stacked_tiles.values().sum::<usize>() >= 20, "{stacked_tiles:?}");
         Ok(())
     })
 }
