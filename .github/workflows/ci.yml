@@ -19,3 +19,39 @@ jobs:
       # the unit tests, the architecture rules and the real-data declarations, as landing runs them (CONTRIBUTING.md,
       # Landing); the real-data tests themselves need the installs, which a runner does not have
       - run: cargo test --workspace --locked --lib --bins --test architecture --test real_data_inputs
+      # docs.rs builds these docs; a link to a private or missing item is an error here
+      - run: cargo doc --workspace --no-deps --locked
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+  release:
+    # a commit that moves a version releases it once every check passed (CONTRIBUTING.md, Releasing)
+    needs: [check]
+    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    concurrency: release
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.99.0"
+      - id: plan
+        run: python3 .github/release.py plan
+      - if: steps.plan.outputs.crates
+        run: python3 .github/release.py verify
+        env:
+          PLAN: ${{ steps.plan.outputs.plan }}
+      - if: steps.plan.outputs.crates
+        id: auth
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+      - if: steps.plan.outputs.plan != '[]'
+        run: python3 .github/release.py publish
+        env:
+          PLAN: ${{ steps.plan.outputs.plan }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

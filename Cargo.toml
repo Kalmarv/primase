@@ -38,7 +38,7 @@ edition = "2024"
 rust-version = "1.99"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/kalmarv/primase"
-publish = false
+publish = true
 
 # Every third-party crate is pinned here, default features off, and used through `workspace = true`.
 # Adding one: see CONTRIBUTING.md "Dependencies".
@@ -48,64 +48,64 @@ toml = { version = "=1.1.8", default-features = false, features = ["parse", "ser
 encoding_rs = { version = "=0.8.42", default-features = false, features = ["alloc"] }
 aes = { version = "=0.9.3", default-features = false }
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
-fromsoft-formats = { git = "https://github.com/Kalmarv/fromsoft-formats", rev = "869920c07de01c35b12df73e0e0944d0a5b06c1f", version = "0.14.0" }
-primase-fromsoft = { path = "worlds/fromsoft" }
+fromsoft-formats = { version = "0.15.0" }
+primase-fromsoft = { version = "0.1.0", path = "worlds/fromsoft" }
 lz4_flex = { version = "=0.14.0", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 quantydb-sqlite = { version = "=0.4.0", default-features = false }
 ruzstd = { version = "=0.7.3", default-features = false, features = ["std", "hash"] }
 libloading = { version = "=0.9.0", default-features = false, features = ["std"] }
 oozextract = { version = "=0.5.7", default-features = false, features = ["verbose_errors"] }
-primase-core = { path = "core" }
+primase-core = { version = "0.1.0", path = "core" }
 primase-testdata = "0.1.8"
-primase-texcodec = { path = "toolkit/texcodec" }
-primase-dds = { path = "toolkit/dds" }
-primase-image = { path = "toolkit/image" }
-primase-meshops = { path = "toolkit/meshops" }
-primase-animation = { path = "toolkit/animation" }
-primase-lighting = { path = "toolkit/lighting" }
-primase-glb = { path = "toolkit/glb" }
-primase-exactsum = { path = "toolkit/exactsum" }
-dxcontainer = { git = "https://github.com/Kalmarv/dx", rev = "39883bd084ad1db1f66416f41b25cf2529f9eec1" }
-rsx-reader = { git = "https://github.com/Kalmarv/dx", rev = "39883bd084ad1db1f66416f41b25cf2529f9eec1" }
-primase-cache = { path = "toolkit/cache" }
-havok-cloth = { git = "https://github.com/Kalmarv/havok-cloth", rev = "c68c5cba8560f76147f230dd672d2a5c63c82c84" }
-havok-formats = { git = "https://github.com/Kalmarv/havok-formats", rev = "eb2aba273217c2ece6e5a59981ddfd6b41a02497" }
-primase-havok = { path = "toolkit/havok" }
-morpheme-formats = { git = "https://github.com/Kalmarv/morpheme-formats", rev = "187d8827c679eca818707036e8678657ad029628" }
-rme-formats = { git = "https://github.com/Kalmarv/rme-formats", rev = "82e69614412274fdd78fd4bc45f7d89def75a045" }
-unity-formats = { git = "https://github.com/Kalmarv/unity-formats", rev = "3b5c8561a4576be65d84a42f105664ba290a9fe5", version = "0.3.1" }
-gbx-formats = { git = "https://github.com/Kalmarv/gbx-formats", rev = "b0cfa1132fce4285b3125398d79e9749bef9bc19" }
-monogame-formats = { git = "https://github.com/Kalmarv/monogame-formats", rev = "7e8091ef9881b91815403154f14fb6eec2b4cfc9" }
-lua51-bytecode = { git = "https://github.com/Kalmarv/lua51-bytecode", rev = "1ba5d089f5a1ba4061e3edb77b80ac93d1802300" }
-dxbc-reader = { git = "https://github.com/Kalmarv/dx", rev = "39883bd084ad1db1f66416f41b25cf2529f9eec1" }
-iridia-dxbc = { git = "https://github.com/Kalmarv/iridia", rev = "84e015ac67da163eb2b55434c40654f1670b7f0f" }
-iridia-d3d9 = { git = "https://github.com/Kalmarv/iridia", rev = "84e015ac67da163eb2b55434c40654f1670b7f0f" }
-iridia-interface = { git = "https://github.com/Kalmarv/iridia", rev = "84e015ac67da163eb2b55434c40654f1670b7f0f" }
-iridia = { git = "https://github.com/Kalmarv/iridia", rev = "84e015ac67da163eb2b55434c40654f1670b7f0f" }
-iridia-exec = { git = "https://github.com/Kalmarv/iridia", rev = "84e015ac67da163eb2b55434c40654f1670b7f0f" }
-iridia-dxil = { git = "https://github.com/Kalmarv/iridia", rev = "84e015ac67da163eb2b55434c40654f1670b7f0f" }
-iridia-mojo = { git = "https://github.com/Kalmarv/iridia", rev = "84e015ac67da163eb2b55434c40654f1670b7f0f" }
-primase-frostbite = { path = "worlds/frostbite" }
-primase-gltf = { path = "formats/gltf" }
-primase-reskate = { path = "worlds/reskate" }
-primase-blender = { path = "worlds/blender" }
-primase-unity = { path = "worlds/unity" }
-primase-skatebird = { path = "worlds/skatebird" }
-primase-peak = { path = "worlds/peak" }
-primase-stuntboost = { path = "worlds/stuntboost" }
-primase-gta = { path = "worlds/gta" }
-primase-monogame = { path = "worlds/monogame" }
-primase-anvil = { path = "worlds/anvil" }
-primase-shaunwhite = { path = "worlds/shaunwhite" }
-primase-shred = { path = "worlds/shred" }
-primase-trackmania = { path = "worlds/trackmania" }
-primase-forzatech = { path = "worlds/forzatech" }
-anvil-formats = { git = "https://github.com/Kalmarv/anvil-formats", rev = "77b898230d491dcdfc8c8fcdb858801132e4ca40" }
-dxil-reader = { git = "https://github.com/Kalmarv/dx", rev = "39883bd084ad1db1f66416f41b25cf2529f9eec1" }
-frostbite-formats = { git = "https://github.com/Kalmarv/frostbite-formats", rev = "c362662975d4cc57a1b4e836c7f1e96740bc8a5a" }
-forzatech-formats = { git = "https://github.com/Kalmarv/forzatech-formats", rev = "ee318b957c97127b1c5eef1f8af6983c39038208", version = "0.1.0" }
-rage-engine-formats = { git = "https://github.com/Kalmarv/rage-engine-formats", rev = "b3705f7bb24c2151ae7df827f6cf9dae8be1d703" }
+primase-texcodec = { version = "0.1.0", path = "toolkit/texcodec" }
+primase-dds = { version = "0.1.0", path = "toolkit/dds" }
+primase-image = { version = "0.1.0", path = "toolkit/image" }
+primase-meshops = { version = "0.1.0", path = "toolkit/meshops" }
+primase-animation = { version = "0.1.0", path = "toolkit/animation" }
+primase-lighting = { version = "0.1.0", path = "toolkit/lighting" }
+primase-glb = { version = "0.1.0", path = "toolkit/glb" }
+primase-exactsum = { version = "0.1.0", path = "toolkit/exactsum" }
+dxcontainer = { version = "0.5.0" }
+rsx-reader = { version = "0.5.0" }
+primase-cache = { version = "0.1.0", path = "toolkit/cache" }
+havok-cloth = { version = "0.3.0" }
+havok-formats = { version = "0.9.0" }
+primase-havok = { version = "0.1.0", path = "toolkit/havok" }
+morpheme-formats = { version = "0.1.1" }
+rme-formats = { version = "0.5.0" }
+unity-formats = { version = "0.3.1" }
+gbx-formats = { version = "0.1.0" }
+monogame-formats = { version = "0.1.1" }
+lua51-bytecode = { version = "0.2.0" }
+dxbc-reader = { version = "0.5.0" }
+iridia-dxbc = { version = "0.5.0" }
+iridia-d3d9 = { version = "0.5.0" }
+iridia-interface = { version = "0.5.0" }
+iridia = { version = "0.5.0" }
+iridia-exec = { version = "0.5.0" }
+iridia-dxil = { version = "0.5.0" }
+iridia-mojo = { version = "0.5.0" }
+primase-frostbite = { version = "0.1.0", path = "worlds/frostbite" }
+primase-gltf = { version = "0.1.0", path = "formats/gltf" }
+primase-reskate = { version = "0.1.0", path = "worlds/reskate" }
+primase-blender = { version = "0.1.0", path = "worlds/blender" }
+primase-unity = { version = "0.1.0", path = "worlds/unity" }
+primase-skatebird = { version = "0.1.0", path = "worlds/skatebird" }
+primase-peak = { version = "0.1.0", path = "worlds/peak" }
+primase-stuntboost = { version = "0.1.0", path = "worlds/stuntboost" }
+primase-gta = { version = "0.1.0", path = "worlds/gta" }
+primase-monogame = { version = "0.1.0", path = "worlds/monogame" }
+primase-anvil = { version = "0.1.0", path = "worlds/anvil" }
+primase-shaunwhite = { version = "0.1.0", path = "worlds/shaunwhite" }
+primase-shred = { version = "0.1.0", path = "worlds/shred" }
+primase-trackmania = { version = "0.1.0", path = "worlds/trackmania" }
+primase-forzatech = { version = "0.1.0", path = "worlds/forzatech" }
+anvil-formats = { version = "0.2.1" }
+dxil-reader = { version = "0.5.0" }
+frostbite-formats = { version = "0.3.0" }
+forzatech-formats = { version = "0.1.0" }
+rage-engine-formats = { version = "0.3.0" }
 
 thiserror = { version = "=2.0.21", default-features = false, features = ["std"] }
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
@@ -118,7 +118,7 @@ sha1 = { version = "=0.11.0", default-features = false }
 quick-xml = { version = "=0.42.0", default-features = false }
 # naga 30.0.1 plus three changes it lacks (the WGSL writer writes ray queries; `Statement::ImageAtomic` has an optional
 # result; `Exchange` on 32-bit images): the primase-naga fork, its README says what and why
-naga = { package = "primase-naga", git = "https://github.com/Kalmarv/primase-naga", rev = "8e6519c3eac6f08519c61c40cb6516ea95f6dde9", default-features = false, features = ["wgsl-out"] }
+naga = { version = "30.0.1", package = "primase-naga", default-features = false, features = ["wgsl-out"] }
 # benches (CONTRIBUTING.md, "Priorities"): dev-dependencies only, without its plots and its rayon
 criterion = { version = "=0.8.2", default-features = false }
 

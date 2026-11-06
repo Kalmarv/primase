@@ -221,11 +221,12 @@ someone looking for one finds it without primase. Any primase crate may use them
 | [havok-formats](https://github.com/Kalmarv/havok-formats), [morpheme-formats](https://github.com/Kalmarv/morpheme-formats), [lua51-bytecode](https://github.com/Kalmarv/lua51-bytecode) | middleware formats |
 | [primase-naga](https://github.com/Kalmarv/primase-naga) | a fork of naga carrying changes upstream has not released |
 
-They are git dependencies pinned to a commit (`[workspace.dependencies]`). A change to one is made, checked and pushed
-in its repository; primase then moves its `rev` to that commit. Every repository that uses a shared crate (most use
-primase-foundations) names the same commit of it as primase does: two commits of one repository are two different crates
-to cargo, and their types don't meet. To work on one beside primase, point cargo at a local checkout without editing the
-manifest: `cargo check --config "patch.'https://github.com/Kalmarv/dx'.dxbc-reader.path='../dx/dxbc-reader'"`.
+They are crates.io dependencies at a version (`[workspace.dependencies]`). A change to one is made, checked and released
+in its repository (a version bump that its CI publishes, see its Releasing section); primase then moves to that version.
+Every crate that uses a shared crate (most use primase-foundations, several use dx) depends on a version semver-compatible
+with primase's: two incompatible versions of one crate are two different crates to cargo, and their types don't meet. To
+work on one beside primase before it is released, point cargo at a local checkout without editing the manifest:
+`cargo check --config "patch.crates-io.dxbc-reader.path='../dx/dxbc-reader'"`.
 
 Names are owned: core, toolkit and formats name no game, engine or destination; a world crate uses only its own
 (`[package.metadata.primase] names`): a game crate its games and engine, an engine crate its engine, a destination
@@ -455,7 +456,20 @@ Toolchain: pinned in `rust-toolchain.toml` (latest stable). Landing is the one c
 runs `cargo fmt --check`, `cargo clippy --workspace --all-targets` with no warnings, the unit, architecture and
 real-data declaration tests, and the real-data tests named for the change. Commit messages say what changed.
 CI (`.github/workflows/ci.yml`) runs the same checks except the real-data tests on Windows and Linux for every push
-and pull request.
+and pull request, and `cargo doc` with warnings as errors (docs.rs builds the published crates' documentation).
+
+## Releasing
+
+A release is a commit that changes a version. Once every CI job has passed on main, CI's release job
+(`.github/release.py`) publishes each crate whose version crates.io does not have yet, in dependency order (trusted
+publishing: no token is stored anywhere), tags the commit `v<version>` (`<package>-v<version>` for a package with a
+version of its own) and creates the GitHub Release with the commits since the previous release as its notes.
+A commit that changes no version only runs CI.
+
+1. Bump the version when a change is worth releasing: a patch (0.x.Y) for fixes and data or manifest additions, a minor
+   (0.X.0) for new API or any breaking change before 1.0. Run `cargo check` so `Cargo.lock` follows.
+2. Push to main. Never publish by hand; a new crate's first release is the one exception (the token holder makes it,
+   then the crate gets its trusted-publishing config).
 
 ## Open design questions
 

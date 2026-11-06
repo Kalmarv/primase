@@ -19,12 +19,10 @@ under the legacy or the DX10 header, and keeps the encoded images as stored.
 
 ### Installation
 
-The crate is part of primase and is not on crates.io. Depend on it from Git, pinned to a commit:
+The crate is part of primase and is published on crates.io with it:
 
-```toml
-[dependencies]
-primase-core = { git = "https://github.com/Kalmarv/primase", rev = "<commit>" }
-primase-dds = { git = "https://github.com/Kalmarv/primase", rev = "<commit>" }
+```sh
+cargo add primase-core primase-dds
 ```
 
 ### Usage

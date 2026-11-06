@@ -1,5 +1,7 @@
 # primase
 
+[![crates.io: primase-core](https://img.shields.io/crates/v/primase-core?label=primase-core)](https://crates.io/crates/primase-core) [![crates.io: primase-gltf](https://img.shields.io/crates/v/primase-gltf?label=primase-gltf)](https://crates.io/crates/primase-gltf) [![crates.io: primase-reskate](https://img.shields.io/crates/v/primase-reskate?label=primase-reskate)](https://crates.io/crates/primase-reskate) [![docs.rs](https://img.shields.io/docsrs/primase-core)](https://docs.rs/primase-core) [![CI](https://img.shields.io/github/actions/workflow/status/Kalmarv/primase/ci.yml?branch=main&label=CI)](https://github.com/Kalmarv/primase/actions/workflows/ci.yml)
+
 A Rust library for reading 3D game worlds into a shared in-memory world, transforming them with passes, and writing them out as glTF, Blender scenes or skate. maps. It has no command line: a program composes the readers, passes and writers it needs.
 
 ## Features
@@ -33,12 +35,10 @@ On Windows, archives compressed with Oodle are read with the game's own `oo2core
 
 ### Installation
 
-primase is not published on crates.io. Depend on its crates from Git, pinned to a commit:
+Every package below is published on crates.io, all at one version:
 
-```toml
-[dependencies]
-primase-core = { git = "https://github.com/Kalmarv/primase", rev = "<commit>" }
-primase-meshops = { git = "https://github.com/Kalmarv/primase", rev = "<commit>" }
+```sh
+cargo add primase-core primase-meshops
 ```
 
 | Package | What it does |
@@ -71,7 +71,7 @@ primase-meshops = { git = "https://github.com/Kalmarv/primase", rev = "<commit>"
 | `primase-reskate` | The skate. destination: preparation passes, the ReSkate Studio map writer, compile and post-compile |
 | `primase-blender` | The Blender destination: writer, `.blend` save and Cycles render |
 
-The game and engine format readers, the iridia shader lifter and `primase-foundations` live in their own repositories and are pinned by commit in the root `Cargo.toml`. A program that uses one of them directly must pin the same commit primase does, or cargo treats the two as different crates.
+The game and engine format readers, the iridia shader lifter and `primase-foundations` live in their own repositories and are crates.io dependencies at the versions the root `Cargo.toml` names. A program that uses one of them directly together with primase needs a version semver-compatible with primase's, so that cargo resolves the two to one crate and their types meet.
 
 ### Usage
 

@@ -22,12 +22,10 @@ uncompressed formats of `primase_core::TexFormat` and lays out PS3 (RSX) texture
 
 ### Installation
 
-The crate is part of primase and is not on crates.io. Depend on it from Git, pinned to a commit:
+The crate is part of primase and is published on crates.io with it:
 
-```toml
-[dependencies]
-primase-core = { git = "https://github.com/Kalmarv/primase", rev = "<commit>" }
-primase-texcodec = { git = "https://github.com/Kalmarv/primase", rev = "<commit>" }
+```sh
+cargo add primase-core primase-texcodec
 ```
 
 ### Usage
