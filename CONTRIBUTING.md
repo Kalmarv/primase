@@ -460,16 +460,17 @@ and pull request, and `cargo doc` with warnings as errors (docs.rs builds the pu
 
 ## Releasing
 
-A release is a commit that changes a version. Once every CI job has passed on main, CI's release job
-(`.github/release.py`) publishes each crate whose version crates.io does not have yet, in dependency order (trusted
-publishing: no token is stored anywhere), tags the commit `v<version>` (`<package>-v<version>` for a package with a
-version of its own) and creates the GitHub Release with the commits since the previous release as its notes.
-A commit that changes no version only runs CI.
+1. Raise the version in the workspace and in the crates' dependencies on each other (a patch, 0.x.Y, for fixes and data
+   or manifest additions; a minor, 0.X.0, for new API or any breaking change before 1.0; then `cargo check`, so
+   `Cargo.lock` follows) and put the change's CHANGELOG lines under a `## <version> (<date>)` heading, in one commit.
+2. Push it to main. Once every check has passed, release-plz publishes each crate whose version crates.io does not have
+   yet (trusted publishing: no token is stored anywhere), tags the commit `v<version>` and creates the GitHub Release
+   with that CHANGELOG section as its notes.
 
-1. Bump the version when a change is worth releasing: a patch (0.x.Y) for fixes and data or manifest additions, a minor
-   (0.X.0) for new API or any breaking change before 1.0. Run `cargo check` so `Cargo.lock` follows.
-2. Push to main. Never publish by hand; a new crate's first release is the one exception (the token holder makes it,
-   then the crate gets its trusted-publishing config).
+A commit that raises no version only runs CI. Never release by hand.
+
+A new crate's first version can't come from trusted publishing: the token holder publishes it by hand, then adds its
+trusted-publishing config (workflow `ci.yml`).
 
 ## Open design questions
 

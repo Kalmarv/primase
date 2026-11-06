@@ -1,0 +1,15 @@
+# Releases (CONTRIBUTING.md, Releasing): CI runs `release-plz release` on main once every check passed. It publishes
+# each crate whose version crates.io does not have yet, then tags the carrier's new version and creates its GitHub
+# Release with that version's CHANGELOG section as notes. Versions are raised by hand: no release pull requests.
+[workspace]
+changelog_path = "./CHANGELOG.md"  # from the cargo workspace
+git_tag_enable = false
+git_release_enable = false
+
+[[package]]
+# the carrier: one tag and one Release for the version this repository's packages share
+name = "primase-core"
+git_tag_enable = true
+git_tag_name = "v{{ version }}"
+git_release_enable = true
+git_release_name = "primase {{ version }}"
