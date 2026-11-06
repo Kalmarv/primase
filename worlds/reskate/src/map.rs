@@ -704,7 +704,7 @@ pub struct MapWriter {
     leaves_packed: usize,
     /// Mesh files a later decision dropped (a blend chain's form not taken) after they may have been written.
     pub discarded: Vec<String>,
-    /// Mesh files (meshes/<name>), written at the end.
+    /// Mesh files (`meshes/<name>`), written at the end.
     pub mesh_files: BTreeMap<String, Vec<u8>>,
     /// Other files (relative to the map folder).
     pub files: BTreeMap<String, Vec<u8>>,

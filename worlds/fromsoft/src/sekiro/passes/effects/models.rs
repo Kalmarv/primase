@@ -1,7 +1,7 @@
 //! The models effects' mesh particles draw (`fromsoft.effect_model`), each made the `core.mesh` its particles draw on its
 //! own entity: posed by its bones as `fromsoft-apply-rigid-skinning` poses a placed model, and each mesh's level-0 face
 //! set decoded as `lower-fromsoft-geometry` decodes one (positions, normals and UV0 in the world frame, with the further
-//! UV sets and the vertex colours a material binary's programs read, [`source_streams`]). Each FLVER material is a
+//! UV sets and the vertex colours a material binary's programs read, `source_streams`). Each FLVER material is a
 //! `pbr.material` of its own, unlit: its colour texture (the effect texture its `_a` path names) times the vertex colour,
 //! alpha-blended. The material definitions (`S[A]_add_GXFlver` and the like) are not read, so what their programs do
 //! beyond that is not drawn, counted on each material.

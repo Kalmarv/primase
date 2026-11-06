@@ -24,7 +24,7 @@
 //! (counted). The program's output is lit, so the surface comes out of five evaluations, each with one white directional light (x,
 //! -x, y, -y, z) and nothing else ([`primase_unity::bind::directional_light`]: ambient, light probes and shadows off),
 //! the tangent frame the identity and the world position zero, `_Color` white: each is max(0, n.l) x albedo, so per
-//! colour channel the vector (P[x] - P[-x], P[y] - P[-y], P[z]) is the albedo times the unit normal: its length the
+//! colour channel the vector (P\[x\] - P\[-x\], P\[y\] - P\[-y\], P\[z\]) is the albedo times the unit normal: its length the
 //! albedo, and the normal its direction in the channel of the largest albedo (flat where the albedo is black,
 //! counted). When the two maps have one tiling and size one bake gives both; otherwise each is baked in its own
 //! coordinate. The program's constant fields are reported as evaluated: those the material sets, those the

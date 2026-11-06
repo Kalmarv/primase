@@ -9,11 +9,11 @@ use frostbite_formats::folder::Source;
 use frostbite_formats::listing::Bundle;
 use frostbite_formats::{Error, Result};
 
-/// The geometry of `meshset` (an entity [`read_entry`] made from a MeshSet of `bundle`, whose LODs' geometry
+/// The geometry of `meshset` (an entity [`read_entry`](crate::read::entry::read_entry) made from a MeshSet of `bundle`, whose LODs' geometry
 /// chunks the bundle or its TOC holds): level 0 as the entity's own `core.mesh` and every other level as an entity
 /// of its own holding that level's mesh, listed in the entity's `core.lods` (named for the entity and `#lod<n>`).
 /// A primitive is a section: its position, texture coordinate and colour streams as stored, its triangles, and the
-/// section's material (the `frostbite.material` of its key where [`resolve_materials`] made one); the
+/// section's material (the `frostbite.material` of its key where [`resolve_materials`](crate::read::program::resolve_materials) made one); the
 /// elements [`crate::geometry`] does not decode are in each level's `frostbite.vertex_elements`. Everything is read
 /// before anything is added to `w`; a chunk the bundle and its TOC do not hold, a section whose data does not fit
 /// its chunk, or an element the decoder does not know is an error naming it.

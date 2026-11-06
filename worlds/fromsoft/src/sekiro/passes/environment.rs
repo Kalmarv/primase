@@ -32,7 +32,7 @@
 //!
 //! A field stored at several hours of the day, where the program sampled none (`sample-fromsoft-draw-params`), is
 //! lowered at the lowering pass's default hour, sampled the same way, and the choice is counted with where the hour comes from
-//! ([`crate::sekiro::passes::draw_params::default_hour`]: neither game's data states the hour a map is entered at). That
+//! (`crate::sekiro::passes::draw_params::default_hour`: neither game's data states the hour a map is entered at). That
 //! hour is the scene's then: where no program stated one (`core.time_of_day`), the pass states the default hour, counted
 //! with its source, for the programs that key their values by the hour (Elden Ring's sky).
 //!

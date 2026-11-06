@@ -244,7 +244,7 @@ impl Component for AnvilLods {
 
 /// A collision placement's RigidBody filter (`anvil.collision_filter`; the reader's `CollisionFilter` reads it): its
 /// `QueryFlags` and two `CollisionLayerBits` as bit masks by the registry's slots
-/// ([`query`], [`layer`]), and its `IsGround` as stored (what it marks
+/// ([`query`], `layer`), and its `IsGround` as stored (what it marks
 /// isn't established: fences, lights and steel sheets among its 33,960, docs/placement.md §19.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AnvilCollisionFilter {

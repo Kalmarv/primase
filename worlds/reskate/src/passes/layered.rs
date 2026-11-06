@@ -352,7 +352,7 @@ type PlannedPart = (
 );
 
 /// `lower-layered-reskate`: every `core.layered` primitive becomes its base layer (slot 0) and decal overlays
-/// ([`overlay_parts`]) drawn right after it, each overlay's material a decal copy of its layer's `skate.material`
+/// (`overlay_parts`) drawn right after it, each overlay's material a decal copy of its layer's `skate.material`
 /// (black for a null slot and for the darkening overlay) marked [`VertexBlend`], its opacities in
 /// [`BlendOpacity`]. The layered materials themselves are removed. The ReSkate writer emits the overlays with
 /// Studio's `vertex_blend`, and the post-compile stage moves them onto the stock decal row.

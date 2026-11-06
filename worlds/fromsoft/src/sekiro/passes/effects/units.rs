@@ -2,7 +2,7 @@
 //! distance limits and lighting. The numbers are the fxr project's (EvenTorset/fxr, Unlicense: sourced); a value the project
 //! does not name is counted in [`Notes`] and given the nearest core meaning.
 //!
-//! **The frame.** A file's local axes are converted to core's by negating z ([`crate::pose::placed`] does it for matrices): a
+//! **The frame.** A file's local axes are converted to core's by negating z (`crate::pose::placed` does it for matrices): a
 //! direction the project states as "north (+Z)" is core's `-Z`, "south" `+Z`. The vectors here are core's.
 
 use super::value::Notes;

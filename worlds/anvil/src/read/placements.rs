@@ -605,7 +605,7 @@ impl<'a> Placer<'a> {
         self
     }
 
-    /// The placer reading, with each Material, its template's shader permutations ([`AnvilShaders`], on an
+    /// The placer reading, with each Material, its template's shader permutations ([`AnvilShaders`](crate::components::AnvilShaders), on an
     /// entity per template).
     pub fn with_shaders(mut self) -> Placer<'a> {
         self.read_shaders = true;

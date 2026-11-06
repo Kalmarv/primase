@@ -836,7 +836,7 @@ impl Component for SpeedTreeInputs {
     }
 }
 
-/// Per primitive of a prototype, the streams it carries only because the layered M[Multiple] shaders read them as
+/// Per primitive of a prototype, the streams it carries only because the layered M\[Multiple\] shaders read them as
 /// vertex inputs, in the order lowered: the FLVER Byte4C UV members (member `n` is `Color(n)`, UNORM8 exactly as
 /// stored: layer weights, snow, tint and detail), the second UV set (`TexCoord(1)`, the `zw` of the packed first
 /// input) and the second vertex colour ([`SECOND_COLOUR`]). Their meaning belongs to the passes that evaluate those

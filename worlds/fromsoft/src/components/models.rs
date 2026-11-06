@@ -25,7 +25,7 @@ impl Component for SourceModel {
         self.0.resident_bytes()
     }
 }
-/// The same model statically posed by [`lower_model`] (`fromsoft.rigid_model`), beside the source it came from.
+/// The same model statically posed by `lower_model` (`fromsoft.rigid_model`), beside the source it came from.
 #[derive(Clone, Debug)]
 pub struct RigidModel(pub Arc<Model>);
 impl RigidModel {

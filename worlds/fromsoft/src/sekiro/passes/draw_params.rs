@@ -51,7 +51,7 @@
 //!
 //! A field of one sample is the game's at every hour (the lookup's one key) and stays as stored; so do the sets the read
 //! left unresolved, which are not part of the scene's environment. `lower-fromsoft-environment` samples the same way at
-//! the lowering pass's default hour where no program chose one ([`sample_at`]). The hour is the scene's: the pass states it as the
+//! the lowering pass's default hour where no program chose one (`sample_at`). The hour is the scene's: the pass states it as the
 //! world's `core.time_of_day`, which the programs that key their values by the hour read.
 use crate::sekiro::source::{DrawField, DrawParam, FieldType, SetChosen};
 use fromsoft_formats::Game;

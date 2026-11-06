@@ -12,7 +12,7 @@
 //!   matrix). Core has no general node hierarchy, so the nodes above the joints are joints too: their transforms (and
 //!   channels that animate them) are kept exactly, with no composing. Each skeleton has one rig
 //!   (`core.rig_instance`). The writer writes a rig as a root node of its own (the rig's name and transform) with the
-//!   joints below it ([`crate::write`]), and the reader reads that back as it is written: a root that no drawn skin
+//!   joints below it ([`crate::write()`]), and the reader reads that back as it is written: a root that no drawn skin
 //!   names as a joint, with no mesh, light or camera and no animation channel, is the rig (its name the node's,
 //!   `core.transform` its local transform), not a joint. Any other root is a joint, and the rig is at the origin, the
 //!   scene's space.

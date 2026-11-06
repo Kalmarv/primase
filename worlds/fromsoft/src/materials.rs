@@ -407,7 +407,7 @@ pub const TRANSFORMED_ALPHA_CUT: &str = "pre-transform alpha test lowered as a h
 /// What a lowering counts where the binding states no reference because the program's discard compares a value it never
 /// writes (an Elden Ring G-buffer program writes no target's alpha: `C[Fur]` discards where its strand card's alpha
 /// times the vertex colour's is below `FC_AlphaRef.x`), and the lowering read the tested slot from the program's
-/// dataflow and made the base colour of it ([`crate::passes::program_reads::Reads::coverage`]): the base colour's
+/// dataflow and made the base colour of it (`crate::passes::program_reads::Reads::coverage`): the base colour's
 /// alpha is the tested value, cut at the material's `g_AlphaRef`.
 pub const COVERAGE_ALPHA_CUT: &str = "alpha test of an unwritten value lowered as a hard cutoff of its coverage slot at the material's g_AlphaRef";
 

@@ -4,7 +4,7 @@
 //! The map writer used to snap them while it assembled the map's collision. This pass gives the same answer
 //! without writing anything: for each marker it assembles only the 256 m collision cells the marker's search reaches,
 //! as the writer files them (the world's collision soups cleaned, the placed prototypes' collision placed by the
-//! writer's own rules: [`crate::map::placement_fate`], the hull soups and the water surfaces), and runs the writer's
+//! writer's own rules: `crate::map::placement_fate`, the hull soups and the water surfaces), and runs the writer's
 //! own snap kernels on them. A marker whose snap finds ground gets that position and height and no snap; its default
 //! lift for a snapped point (a spawn's 0.3 m, a trainer spot's 0.5 m) is written out, so the writer adds the same.
 //! One whose snap finds nothing keeps its position and its snap becomes `none` (counted), as the writer treated it.

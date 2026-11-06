@@ -14,7 +14,7 @@
 //! [`pack_light_lists`] for no lights in every tile.
 //!
 //! The pixel program's inputs are what the material's own vertex program writes for a vertex at that point
-//! ([`layer_bake::VertexStage`], run in the same frame: its normal up, its tangent along +x, its texture coordinates the
+//! (`layer_bake::VertexStage`, run in the same frame: its normal up, its tangent along +x, its texture coordinates the
 //! run's), and the pixel's position its own: the middle of the one-pixel view at the surface's device depth. The vertex
 //! program is bound as it states its inputs itself ([`resolve_vertex`]), not as the scene's meshes give them: the vertex
 //! is the probe's. An input the vertex program does not write refuses the program.

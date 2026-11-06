@@ -3,7 +3,7 @@
 //! any texture holds. The detail form of a material ([`primase_core::detail`]) is read and proven from such runs.
 //!
 //! The program is resolved as the bake resolves it ([`resolve`], no metaparam: the engine's constants by their roles,
-//! frozen as the program bake freezes them, [`layer_bake::program_constants`]), for a material
+//! frozen as the program bake freezes them, `layer_bake::program_constants`), for a material
 //! ([`ProgramProbe::with_material`]) or none ([`ProgramProbe::new`]). The material's own words
 //! ([`ProgramProbe::material`]) are as the binding writes them, and the caller may set them ([`ProgramProbe::set_words`]):
 //! the program reads them as named fields or through `SAT_MtdParam` ([`MaterialForm`]). The engine's own textures read as
@@ -79,14 +79,14 @@ pub struct ProgramProbe {
     /// material or leaves unknown (the alpha reference excepted, frozen as the bake freezes it).
     pub material: Vec<MaterialWords>,
     /// The program's other named constants: the engine's, as the bake freezes them
-    /// ([`layer_bake::program_constants`]).
+    /// (`layer_bake::program_constants`).
     pub engine_fields: Vec<MaterialWords>,
     /// The binding's outputs, by role and target.
     pub outputs: Vec<OutputBinding>,
     /// The resolved roles, including Unknown reasons. A word in `material` is not by itself evidence that
     /// the engine supplies it from the material; callers designing scene controls must inspect this binding.
     pub binding: StageBinding,
-    /// The engine's own textures ([`ProgramTexture::Engine`]: the decal textures of the `_Paint` programs), by register,
+    /// The engine's own textures (`ProgramTexture::Engine`: the decal textures of the `_Paint` programs), by register,
     /// each the value the bake reads it as (the binding's default, its reason counted in [`ProgramProbe::policies`]):
     /// the answer a caller gives them, the rest of the program's textures being the material's.
     pub engine: BTreeMap<u32, [f32; 4]>,

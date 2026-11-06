@@ -46,7 +46,7 @@ pub struct PixelState {
 }
 
 /// The vertex stage of a bake whose material has a vertex program: the program run once at each corner of a texture
-/// cell ([`super::vertex`]), where the pixel program's inputs are read from what it writes there.
+/// cell (`super::vertex`), where the pixel program's inputs are read from what it writes there.
 #[derive(Clone, Debug)]
 pub struct VertexState {
     /// The program's container as stored.

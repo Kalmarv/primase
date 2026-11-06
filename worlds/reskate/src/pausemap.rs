@@ -243,7 +243,7 @@ impl PauseMap {
         }
     }
 
-    /// Triangles whose vertex i is at basis * pos[i] + origin (map coordinates), painted with `paint`. Refused: an
+    /// Triangles whose vertex i is at basis * pos\[i\] + origin (map coordinates), painted with `paint`. Refused: an
     /// index past the vertices, or texture coordinates that don't cover every vertex a textured paint samples.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(

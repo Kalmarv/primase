@@ -79,7 +79,7 @@
 //!   skeleton under its parent, each with the joint's local transform (its rig's `core.rig_pose`, else its rest) as
 //!   translation, rotation and scale (a matrix where it has no such form, which no animation may then drive).
 //! - **Skins**: a placement with `core.skin_instance` draws its prototype's mesh with that binding's skin: one glTF skin
-//!   per (rig, prototype, binding), its joints the rig's joint nodes ([`crate::rig`]: the binding's palettes unified
+//!   per (rig, prototype, binding), its joints the rig's joint nodes (`crate::rig`: the binding's palettes unified
 //!   into one list; slot indices rewritten; a whole-bound primitive spelled out as `JOINTS_0`/`WEIGHTS_0`), the inverse
 //!   binds as stored. The skinned node has no transform (glTF places a skinned mesh by its joints) and sits at the
 //!   scene's root. Weights must sum to 1 as stored (glTF requires it): others are refused, naming the pass that

@@ -1,5 +1,5 @@
 //! STUNTBOOST's lowerings, each choice the program's: collision with surfaces ([`collision`]), spawns as markers
-//! ([`spawns`]), the materials and the baked atlas ([`materials`]), and what the game never draws or a static map has
+//! ([`spawns`](mod@spawns)), the materials and the baked atlas ([`materials`]), and what the game never draws or a static map has
 //! no use for, left out ([`hidden`]).
 pub mod collision;
 pub mod hidden;

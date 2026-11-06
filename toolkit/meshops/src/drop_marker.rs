@@ -26,7 +26,7 @@ pub const STATED_DROP: f32 = 2.0;
 pub enum MarkerAt {
     /// The median of the placements' ground positions, on the highest collision under it.
     Centre,
-    /// (x, y, z), metres, core's frame: kept, with collision within [`STATED_DROP`] under it.
+    /// (x, y, z), metres, core's frame: kept, with collision within `STATED_DROP` under it.
     Stated([f32; 3]),
     /// On the highest collision at or below (x, y, z), core's frame: a placement's origin, so a roof over it is never
     /// chosen.

@@ -84,7 +84,7 @@ impl Component for FrostbiteEbx {
 
 /// A texture resource's header as stored, on the entity that holds its `core.texture` (a 2D map) or `core.texture_layers`
 /// (an array, a cube or a volume): the Frostbite format ordinal
-/// (the core texture's colour space is the format's own: [`crate::entry::format_colour_space`]), the fields the
+/// (the core texture's colour space is the format's own: [`crate::read::entry::format_colour_space`]), the fields the
 /// reader does not interpret, and the GUID of the chunk the pixels were read from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrostbiteTexture {
@@ -218,7 +218,7 @@ fn checked(v: Value) -> Result<Option<Value>, primase_core::JsonError> {
 
 /// Where a `core.shader` came from in a CompiledBytecode resource, and the bytes around its container as stored: the
 /// container's number among the resource's (`index` of `count`) and its offset in the payload, the tag the payload's
-/// header carries at [`crate::bytecode::TAG_AT`] (`RC2S` for the raster and compute programs, `RPTR` for the raytracing
+/// header carries at [`frostbite_formats::bytecode::TAG_AT`] (`RC2S` for the raster and compute programs, `RPTR` for the raytracing
 /// ones), the bytes before the first container (on container 0 only) and the bytes after this container up to the next
 /// or the payload's end. The header's and the trailing fields are not interpreted.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -421,7 +421,7 @@ pub struct FrostbiteMaterial {
     /// The streamable texture set the key's lookup row names, and its resource name where a bundle holds it.
     pub texture_set: Option<(u64, Option<String>)>,
     /// What each texture parameter of the depot block leads to, in the block's order, once
-    /// [`Source::resolve_textures`](frostbite_formats::folder::Source::resolve_textures) has run (empty before it).
+    /// [`resolve_textures`](crate::read::textures::resolve_textures) has run (empty before it).
     pub textures: Vec<MaterialTexture>,
     pub unresolved: Vec<String>,
 }

@@ -45,7 +45,7 @@ pub struct EncodingOptions {
     /// share of ReSkate 2.1.0-pre's pool ([`crate::map::CULL_ID_POOL`] x [`crate::map::CULL_ID_SHARE`]). In pool mode
     /// the blend chains take what the map's other objects leave of it.
     pub cull_ids: usize,
-    /// The scene's warnings for the map's stats, taken before a pass left placements out ([`leave_out_optional`]):
+    /// The scene's warnings for the map's stats, taken before a pass left placements out ([`leave_out_optional`](crate::reference::leave_out_optional)):
     /// the reference reads them from the whole scene before its writer filters. `None`: from the world as given.
     pub scene_warnings: Option<Vec<String>>,
 }

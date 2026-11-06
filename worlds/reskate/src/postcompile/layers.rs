@@ -399,7 +399,7 @@ pub const MAX_THREADS: usize = 16;
 
 /// [`check`] on `threads` threads (at least one). Tiles are checked independently, then merged in tile order, so the
 /// report does not depend on the thread count: a tile's checks at both finest LODs first, every tile's, then the
-/// decal-class pairs at other LODs ([`Tile::lod_pair`]), which need to know, from every tile, which placements back
+/// decal-class pairs at other LODs (`Tile::lod_pair`), which need to know, from every tile, which placements back
 /// which.
 pub fn check_threads(
     level: &Level,

@@ -1055,7 +1055,7 @@ fn material_parameters(
     Ok(constants)
 }
 
-/// The material's own parameters a vertex program reads ([`material_parameters`]: `shader`'s stored interface, and
+/// The material's own parameters a vertex program reads (`material_parameters`: `shader`'s stored interface, and
 /// the constant layout of its program), for the vertex stage of a material whose pixel stage [`resolve`] binds.
 pub fn vertex_material_parameters(
     shader: &Shader,
@@ -1152,7 +1152,7 @@ pub(crate) fn engine_role(name: &str) -> Option<ConstantRole> {
 ///   1 / 1080) in all 61 `cbSceneParam` bindings of a captured frame of the game running at 1920 x 1080. The forward programs (Sekiro's sky dome) find their
 ///   screen coordinate as the pixel position times the reciprocals.
 /// - `FC_VolumeFogParam[4]`, the volumetric fog's parameters: no fog, as the frame's fog volume is bound as none
-///   ([`ENGINE_VOLUME_FOG_NEUTRAL`]); [`NO_FOG_PARAMETERS`] below.
+///   ([`ENGINE_VOLUME_FOG_NEUTRAL`]); `NO_FOG_PARAMETERS` below.
 /// - the direction towards the light (`cbLight`'s `Vec_0` of each light set in Elden Ring, `FC_DirLightVec_0` in
 ///   Sekiro): below.
 /// - `FC_DepthComputeParam` (`x`, `z`): the projection's two depth terms, device depth `x + z / depth`. Elden Ring:
@@ -1331,7 +1331,7 @@ fn scene_values(
 /// The primary light's `Vec_0.w` ([`SUN_SPREAD_POLICY`]).
 const SUN_SPREAD: f32 = 1.0;
 
-/// Why Elden Ring's primary light's `Vec_0.w` is [`SUN_SPREAD`]: no capture holds an Elden Ring `cbLight`. Sekiro's
+/// Why Elden Ring's primary light's `Vec_0.w` is `SUN_SPREAD`: no capture holds an Elden Ring `cbLight`. Sekiro's
 /// light sets state 1 there in 243 of the 248 one-set `cbLight` reads of the nine frames of three captured sessions;
 /// the other 5 read a set of four equal lights of colour 1.5 whose every `w` is 50, not the area's sun.
 pub const SUN_SPREAD_POLICY: &str = "the primary light's highlight spread (cbLight Vec_0.w) is 1, as Sekiro's area light \
@@ -1640,7 +1640,7 @@ fn tangent_set(interface: &Interface, index: u32) -> Option<u8> {
 
 /// Bind then validate further tangent sets against every primitive drawing this material. A shared material
 /// cannot silently use a vector absent from one of its layouts, including set 0. A material that SpeedTree meshes draw
-/// binds its program's inputs by what their layouts declare ([`speedtree_inputs`]). A four-float `TEXCOORD<n>` that
+/// binds its program's inputs by what their layouts declare (`speedtree_inputs`). A four-float `TEXCOORD<n>` that
 /// [`resolve_vertex`] takes as the Byte4C member `Color(n)` is the Half4 member `Point(n)` (a pivot in the model's
 /// space) where every primitive drawing the material stores one there; where some do and some do not it is left
 /// `Unknown` and named in [`VertexBinding::stores_differ`], never guessed.
@@ -1801,7 +1801,7 @@ fn speedtree_inputs(inputs: &mut [InputBinding], meshes: &[Option<&crate::sekiro
 ///   packed `TEXCOORD0` as lanes (`xy` the first UV set, `zw` the second: `TexCoord(1)`); `COLOR1` as the
 ///   second vertex colour ([`SECOND_COLOUR`]); `TEXCOORD1` to `TEXCOORD6` as the FLVER Byte4C members the layered
 ///   programs read as layer weights, tint and detail (the geometry lowering's `Color(n)` streams); a further
-///   `TEXCOORD<n>` of integers as lanes of the UV sets after those of the packed inputs before it ([`further_uv_sets`]:
+///   `TEXCOORD<n>` of integers as lanes of the UV sets after those of the packed inputs before it (`further_uv_sets`:
 ///   `C[Fur]`'s `TEXCOORD1` is the third set, `TexCoord(2)`, which its strand card is sampled with); the pipeline's
 ///   instance index as itself; anything else `Unknown` with the reason. A mesh that stores no second UV set or colour
 ///   has no such stream, and what the engine then feeds is not known; nor has a mesh whose lowering keeps no further

@@ -620,7 +620,7 @@ pub fn assemble(
 }
 
 /// Reads the effects the events of clip `clip` start (its `fromsoft.clip_events` in `world`) from the effect binders of its
-/// character ([`binders_for_clip`]): the effect files and the textures they name ([`read_files`]), and on the clip a
+/// character ([`binders_for_clip`]): the effect files and the textures they name (`read_files`), and on the clip a
 /// `fromsoft.clip_effect_uses` saying which events start which effect. A clip with no events, or whose events start no effect,
 /// is left as it is. `cache` keeps the binders read from one clip to the next.
 ///

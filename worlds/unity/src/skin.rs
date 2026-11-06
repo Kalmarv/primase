@@ -1,11 +1,11 @@
 //! What a Unity skin draws: the pure rules `limit-unity-skin-weights` and the reader share, over the formats crate's
 //! [`MeshSkin`] and the player's quality levels, with no file or archive in them.
 //!
-//! - [`skin_limit`]: the skin weights limit a mesh is drawn with, by the stated quality level or by what every level
+//! - `skin_limit`: the skin weights limit a mesh is drawn with, by the stated quality level or by what every level
 //!   agrees on.
 //! - [`skin_streams`]: a skin's `Joints(k)` and `Weights(k)` streams under a limit, the vertices that beyond it keep
 //!   their first influences renormalised.
-//! - [`weights_sum_to_one`]: whether stored weights sum to 1, which sets the skin's weight rule.
+//! - `weights_sum_to_one`: whether stored weights sum to 1, which sets the skin's weight rule.
 
 use primase_core::skin::SUM_TOLERANCE;
 use primase_core::{Semantic, Stream};

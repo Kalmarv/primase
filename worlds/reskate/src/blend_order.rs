@@ -93,7 +93,7 @@ const PAD: f32 = 0.01;
 /// What the split did over a map (`stats.json`'s `blend_order`).
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct Stats {
-    /// The budget of objects added: `--blend-objects` ([`crate::map::WriterOptions::blend_objects`]), or the
+    /// The budget of objects added: `--blend-objects` (`crate::map::WriterOptions::blend_objects`), or the
     /// level's share of the cull-ID pool less the IDs the rest of the map takes ([`crate::map::CULL_ID_POOL`]).
     pub cap: usize,
     /// Whether the budget came from the cull-ID pool (not `--blend-objects`).
@@ -109,7 +109,7 @@ pub struct Stats {
     /// order), and their overlay triangles.
     pub tiles_shared: usize,
     pub overlay_triangles_shared: usize,
-    /// Tiles whose chain overlays stayed in the tile mesh because no lift up to [`MAX_LIFT_STEP`] stays distinct as
+    /// Tiles whose chain overlays stayed in the tile mesh because no lift up to `MAX_LIFT_STEP` stays distinct as
     /// an f32 at their translation (or it is not finite), and their overlay triangles.
     pub tiles_unliftable: usize,
     pub overlay_triangles_unliftable: usize,
@@ -157,7 +157,7 @@ fn dominant_axis(g: &Geometry, t: &[u32; 3]) -> u8 {
     (2 * i + usize::from(m[i] < 0.0)) as u8
 }
 
-/// The unit vector of an axis ([`dominant_axis`]).
+/// The unit vector of an axis (`dominant_axis`).
 pub fn axis_vector(axis: u8) -> Vec3 {
     let s = if axis.is_multiple_of(2) { 1.0 } else { -1.0 };
     match axis / 2 {
@@ -508,7 +508,7 @@ pub fn lift(rank: u8, ranks: u8, step: f32) -> f32 {
 /// The ranks of a tile's vertex-alpha decals (material, first use in the tile, geometry), above the chain's: a decal
 /// is drawn over every decal it overlaps that the tile used first, one rank above the highest of them (so a decal
 /// overlapping none is [`CHAIN_RANKS`] + 1). Two decals overlap where both have a triangle whose x/z bounds meet one
-/// [`DECAL_CELL`] (coarser than the triangles: an overlap it finds may not be one, which only costs a rank). `None`
+/// `DECAL_CELL` (coarser than the triangles: an overlap it finds may not be one, which only costs a rank). `None`
 /// past rank 255.
 pub fn decal_ranks(decals: &[(usize, usize, &Geometry)]) -> Option<BTreeMap<usize, u8>> {
     let mut order: Vec<&(usize, usize, &Geometry)> = decals.iter().collect();

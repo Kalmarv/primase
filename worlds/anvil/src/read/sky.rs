@@ -116,7 +116,7 @@ pub fn read_look(
     }
 }
 
-/// Convert the *evaluated lighting multiplier* cb1[39].x into core's log2 stops. PS_SunSkyModel (ShaderDataDX11
+/// Convert the *evaluated lighting multiplier* cb1\[39\].x into core's log2 stops. PS_SunSkyModel (ShaderDataDX11
 /// 1815) and DeferredAmbientOnly (448) multiply radiance by this value directly: it is a positive linear scale,
 /// not EV and not the grading controller's property also named Exposure. This function requires an actual
 /// resolved frame value; it must not be fed MinEV/MaxEV, t23, or the grading Exposure without their own mapping.

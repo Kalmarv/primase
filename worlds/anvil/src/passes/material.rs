@@ -190,7 +190,7 @@ pub(super) fn uv_motion_notice(f: &[f32]) -> Option<String> {
 pub enum AlphaChoice {
     Opaque,
     Mask(f32),
-    /// Each Material's as its prelude states it ([`prelude_alpha`]).
+    /// Each Material's as its prelude states it (`prelude_alpha`).
     Prelude,
 }
 

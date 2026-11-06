@@ -9,7 +9,7 @@
 //! static mesh (`dynamic` 0) of a bound model has each vertex in the space of the one bone its NORMAL.w names, which
 //! moves it rigidly (SoulsFormats' FLVER2 mesh and Smithbox's FLVER renderer state the same rule): it is posed into
 //! the bind pose by that bone's rest, as `fromsoft-apply-rigid-skinning` poses it
-//! ([`crate::passes::rigid::pose_static_mesh`]), and each vertex gets `Joints(0)` that bone and `Weights(0)` 1, so the
+//! (`crate::passes::rigid::pose_static_mesh`), and each vertex gets `Joints(0)` that bone and `Weights(0)` 1, so the
 //! skin moves it with the bone exactly. A static mesh whose layout stores no normal W follows its node (`NodeIndex`)
 //! the same way. Refused, by name: a dynamic mesh with a palette (palette-relative indices), a static mesh with a
 //! palette (its NORMAL.w would name a palette entry), one with no normal W whose node names no bone, and a static

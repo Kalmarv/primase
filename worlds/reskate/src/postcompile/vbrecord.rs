@@ -16,7 +16,7 @@
 //!   tessellation keeps the surviving source vertices' weights, so every distinct weight of the
 //!   vertices the primitive draws (Studio drops the others: a lowered overlay shares its source primitive's
 //!   vertices), as a half float (a weight exactly halfway between two halves: either, as Studio rounds such a tie
-//!   away from the even half: [`half_choices`]), occurs in its key's sections;
+//!   away from the even half: `half_choices`), occurs in its key's sections;
 //! - a primitive's candidates are the vertex-blend keys of its GLB's MeshSets whose sections contain all of its weights
 //!   other than 0 and 1 (those are not distinctive; a primitive with no other weight, a small piece of one layer or of
 //!   a decal's fade, allows every key of its GLB); a material's key is one all its primitives allow, and a key belongs

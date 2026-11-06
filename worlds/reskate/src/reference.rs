@@ -24,15 +24,15 @@ pub fn lod_choice(s: &str) -> Result<primase_core::LodChoice> {
     })
 }
 
-/// The reference build's `--lod` as a pass, run before [`write_map`] (which refuses a world with levels of detail):
+/// The reference build's `--lod` as a pass, run before [`write_map`](crate::write::map::write_map) (which refuses a world with levels of detail):
 /// each prototype keeps the form `lod` takes (`--lod`, default `default`).
 pub fn select_lod(world: &mut World, lod: primase_core::LodChoice) -> Result<primase_core::pass::RunReport> {
     run_passes(world, vec![Box::new(primase_core::SelectLod { choice: lod })])
 }
 
-/// The reference build's `--max-priority N` as a pass, run last before [`write_map`]: the scene's warnings as the
+/// The reference build's `--max-priority N` as a pass, run last before [`write_map`](crate::write::map::write_map): the scene's warnings as the
 /// reference reports them (from the whole scene, before its writer leaves placements out), for
-/// [`EncodingOptions::scene_warnings`], then `drop-optional{max=N}` (nothing left out without N). The scene is read
+/// [`EncodingOptions::scene_warnings`](crate::assembly::EncodingOptions::scene_warnings), then `drop-optional{max=N}` (nothing left out without N). The scene is read
 /// with its files loaded (`interchange::load`): the warnings look at the meshes, and textures need pixels.
 pub fn leave_out_optional(
     world: &mut World,

@@ -277,7 +277,7 @@ fn pixels(t: &Texture) -> Result<Vec<u8>> {
         .map_err(|e| invalid("Sekiro PBR pixels", 0, e))
 }
 /// What a lowering counts where an alpha-tested material is coloured with its coverage texture and its program's colour
-/// slot, on another UV set, is the base colour's factor as its mean ([`mean_colour_of`]).
+/// slot, on another UV set, is the base colour's factor as its mean (`mean_colour_of`).
 pub const COVERAGE_COLOUR_FACTOR: &str = "alpha-tested material drawn with its coverage texture: its colour slot's mean colour is the base colour factor (the colour slot is on its own UV set)";
 
 /// The mean colour of the colour texture `name`, linear RGB: of the reader's copy where it already decoded it, else the

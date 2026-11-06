@@ -11,7 +11,7 @@
 //! base address plus an offset in it. The base differs by level (`0x72300000` in level 01, `0x71040000` in 02,
 //! `0x6FFA0000` in 03, `0x734D0000` or `0x73210000` in 04, `0x73000000` in 06, `0x757C0000` in the shared forge) and the
 //! image stores it: three header words, at 0x154, 0x158 and 0x280, point at the offsets 0x3B0, 0x390 and 0x3D0 of the
-//! image itself, in all 18 distinct trees of the game's cells (nine forges). [`Blob::new`] takes the base from them and refuses a blob whose
+//! image itself, in all 18 distinct trees of the game's cells (nine forges). `Blob::new` takes the base from them and refuses a blob whose
 //! three disagree.
 //!
 //! The blob's header, at 0x100: `[0][N][A][B]`, `[M][..][..][L]`, `[C]`, with `N` nodes, `M` branches (the trunk
@@ -506,7 +506,7 @@ impl Tree {
     }
 
     /// The leaf shader's shading normal at `at` (the tree's own frame): away from the [`crown`](Tree::crown) with its z raised to
-    /// [`CROWN_NORMAL_Z`] and the vector normalised again (unit length); straight up at the centre itself.
+    /// `CROWN_NORMAL_Z` and the vector normalised again (unit length); straight up at the centre itself.
     pub fn crown_normal(&self, at: [f32; 3]) -> [f32; 3] {
         let mut out = unit(sub(at, self.crown)).unwrap_or([0., 0., 1.]);
         out[2] = out[2].max(CROWN_NORMAL_Z);

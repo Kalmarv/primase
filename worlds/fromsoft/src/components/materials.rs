@@ -8,7 +8,7 @@ use fromsoft_formats::{
 use primase_core::world::Component;
 use std::collections::BTreeMap;
 
-/// A source material class [`resolve`] names in [`Material::skip`]: one the game draws as something other than a
+/// A source material class `resolve` names in [`Material::skip`]: one the game draws as something other than a
 /// surface. Serialized as its description.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub enum SkipClass {

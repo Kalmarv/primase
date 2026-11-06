@@ -203,7 +203,7 @@ impl Component for Skeleton {
         crate::json::to_value(self).map(Some)
     }
     /// Ids unique; each parent a joint of the skeleton other than itself; no cycle through parents; every rest finite;
-    /// a TRS rotation of unit length (within [`UNIT_TOLERANCE`]).
+    /// a TRS rotation of unit length (within `UNIT_TOLERANCE`).
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
         let mut parents = BTreeMap::new();
         for j in &self.joints {

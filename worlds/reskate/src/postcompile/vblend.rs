@@ -13,7 +13,7 @@
 //! Both rows draw the stock declaration `[Pos:Half4, Color0:UByte4N, TexCoord0:Half2, SubMaterial:UByte4,
 //! TangentSpace:UByte4N]`, one stream each. Studio's `[Pos:Float3, TexCoord0:Half2, TangentSpace:UByte4N]` sections
 //! of a retargeted key are rewritten into it: positions to half floats (w = 1; a decal section's never behind its
-//! own surface, see [`half_in_front`]), texture coordinates and tangent frames copied byte for byte, `Color0` and the sub-material index from the caller. A `vertex_blend` material's
+//! own surface, see `half_in_front`), texture coordinates and tangent frames copied byte for byte, `Color0` and the sub-material index from the caller. A `vertex_blend` material's
 //! sections have `TexCoord0:Half4` instead, the per-vertex weight in `z` (Studio 20261012 and later; see
 //! [`crate::postcompile::vbrecord`]): the weight is handed to the caller ([`SectionInput::blend`]) and `x, y` are
 //! written as the stock `Half2`. Everything else of the MeshSet is kept; vertex offsets, the stride byte, the

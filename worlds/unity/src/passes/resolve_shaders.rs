@@ -34,19 +34,19 @@
 //!   not its declared size), so the register is not told, and its read bytes are such gaps.
 //! - **Textures.** A texture parameter binds the texture the material's property of that name holds; a property the
 //!   material leaves unset takes the shader's declared default, valued from the editor oracle
-//!   (`primase-oracles/unity/default-textures`: [`default_colour`], whose doc states the version and colour-space gap;
+//!   (`primase-oracles/unity/default-textures`: `default_colour`, whose doc states the version and colour-space gap;
 //!   a player holds no default texture of the engine), counted by name (an empty or unknown name is the engine's
 //!   fallback grey); a default it does not value is `Missing`. A texture the material has no property of that a game's
 //!   script sets for every shader is that global's texture (`unity.shader_globals`), counted by name; one no script
-//!   sets when the level loads samples Unity's grey for a global never set ([`NEVER_SET_TEXTURE`], in a Linear colour
+//!   sets when the level loads samples Unity's grey for a global never set (`NEVER_SET_TEXTURE`, in a Linear colour
 //!   space; `Missing` in Gamma, not measured), and one whose value the stored scripts do not decide is `Missing` with
 //!   why. A texture of Unity's own that the material has
 //!   no property of is the frame's ([`frame_texture`]: the camera's depth and colour, the main light's shadow map or
 //!   screen-space shadows, the occlusion, the nearest reflection probe, the light-probe volume), counted by name; the
 //!   other engine textures the parameters name are `Missing` with the reason, and a slot the parameters do not name is
 //!   `Missing` (a 2021.2 player stores a variant's textures in its parameter blob, which
-//!   [`crate::program::parameter_blob`] reads: the pass's common parameters name none). The sampler state is Unity's
-//!   packed value ([`crate::components::Parameters::samplers`]): not decoded.
+//!   [`unity_formats::program::parameter_blob`] reads: the pass's common parameters name none). The sampler state is Unity's
+//!   packed value (`crate::components::Parameters::samplers`): not decoded.
 //! - **Outputs.** The fragment stage's first target is the finished colour of a forward pass; the others `Unknown`
 //!   (what the render pipeline binds past the first target, and what reads it, is the project's and not read).
 //! - **State.** The pass's stored render state (`m_State`), each value the material's property where the pass binds

@@ -291,10 +291,10 @@ fn flag(values: &[EventValue], name: &str) -> bool {
 }
 
 /// The effects the events of `source` start, by the community template's field names: an event of a type whose first field is
-/// an effect number ([`EFFECT_NUMBERS`]) names the effect directly, at the dummy polygon of its `Dummy Poly ID` (a blade's
+/// an effect number (`EFFECT_NUMBERS`) names the effect directly, at the dummy polygon of its `Dummy Poly ID` (a blade's
 /// `Dummy Poly - Blade Base ID`), following it when `Follow Dummy Poly` is set. What names an effect another way, or does not
 /// show it does, is counted, not guessed: the goods and magic events (the effect is a row of a param), the throw and foot
-/// events (an index into one), the types the template names an effect in that the stock files do not bear out ([`UNPROVEN`]),
+/// events (an index into one), the types the template names an effect in that the stock files do not bear out (`UNPROVEN`),
 /// and an effect on a weapon's dummy polygon (the weapon's model is not in the read).
 pub fn clip_effect_uses(source: &SourceEvents) -> ClipEffectUses {
     let mut uses = Vec::new();

@@ -193,8 +193,8 @@ fn make_finite(p: &mut Primitive, used: &BTreeSet<u32>, notices: &mut MeshNotice
 /// so front faces stay front, and a tangent's w negated, since a mirror flips the bitangent cross(n, t) * w (both
 /// conventions point the bitangent along the normal map's +Y). Texture coordinates move to the world's top-left
 /// origin, v becoming 1 - v; a channel of 3 or 4 components gives its u and v. Normals keep three components
-/// (stored as half4, the fourth is padding). Quads become triangles and line strips lines ([`topology`]); each
-/// primitive is made finite as core requires ([`make_finite`]). What could not be read as stored is counted in the
+/// (stored as half4, the fourth is padding). Quads become triangles and line strips lines (`topology`); each
+/// primitive is made finite as core requires (`make_finite`). What could not be read as stored is counted in the
 /// returned notices, over the primitives returned (and those left out).
 pub fn primitives(mesh: &UnityMeshData, range: Range<usize>) -> Result<(Drawn, MeshNotices)> {
     let (out, _, notices) = primitives_with(mesh, range, None)?;
@@ -240,7 +240,7 @@ pub fn primitives_and_morphs(
 }
 
 /// [`primitives`] with the skin's streams as `limit` draws them: `Joints(k)` (the bone slots, 16
-/// bits) and `Weights(k)` (floats) for each set of four influences ([`MeshSkin::sets`]); a vertex with more
+/// bits) and `Weights(k)` (floats) for each set of four influences (`MeshSkin::sets`); a vertex with more
 /// influences than `limit` allows keeps its first ones renormalised, and the bone slot of a zero-weight influence
 /// beyond the bind poses is set to 0 (both counted). An error for a mesh without a skin.
 pub fn skinned_primitives(

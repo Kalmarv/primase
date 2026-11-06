@@ -441,7 +441,7 @@ fn rig_to_occurrence(w: &World, rig: Entity, e: Entity) -> Result<Affine, String
     Ok(compose(&inverse, &r))
 }
 
-/// `normalize-skin-weights`: every skinned primitive's weights (`core.skin` with [`Influences::Streams`]) made to sum
+/// `normalize-skin-weights`: every skinned primitive's weights (`core.skin` with [`Influences::Streams`](primase_core::skin::Influences::Streams)) made to sum
 /// to 1 per vertex, as glTF and most engines require: float weights divided by their sum; normalised byte or short
 /// weights requantised to sum to exactly 255 or 65535 (each influence's share rounded down, the remainder given to the
 /// largest fractional parts, ties to the earlier influence). The skin's rule becomes `SumsToOne`. A vertex whose

@@ -1,6 +1,6 @@
 //! `core.particles`: a particle effect as a source states it, in game-neutral terms.
 //!
-//! One component on an entity placed by its [`Transform`](crate::components::Transform): a tree of [`Emitter`]s that follow
+//! One component on an entity placed by its [`Transform`]: a tree of [`Emitter`]s that follow
 //! the entity's frame (or their parents'), emit particles on a schedule from a shape, move them by a law and draw each as one
 //! of a few forms ([`Draw`]). Everything a renderer needs is here and in game-neutral words: the curves are constants,
 //! steps, lines or cubic Beziers of a stated [`Argument`] (the particle's age, the emitter's active time, the time the particle
@@ -9,7 +9,7 @@
 //! source's pass, which counts what it could not carry ([`ParticleSystem::lost`]); no renderer needs to know the source.
 //!
 //! **Determinism.** A system's picture at a time is a function of its description, its seed and its [`Input`]s: random draws
-//! are keyed by `(seed, emitter, scope index, stream)` through [`Draw::unit`](Rng::unit), never by the order particles are
+//! are keyed by `(seed, emitter, scope index, stream)` through [`unit()`], never by the order particles are
 //! processed in, so a renderer and a test that step the same description agree.
 //!
 //! **Units.** Metres, seconds, degrees (angles that a source gives in other units are converted by its pass), linear colour.

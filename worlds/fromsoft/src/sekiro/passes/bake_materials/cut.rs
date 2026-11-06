@@ -22,7 +22,7 @@ use iridia_interface::{AlphaComparison, ResourceId};
 use primase_core::shader::{ConstantRole, StageBinding};
 use std::collections::BTreeMap;
 
-/// What a material's notes and the bake's log count where the bake carries the cut ([`Compare`]).
+/// What a material's notes and the bake's log count where the bake carries the cut (`Compare`).
 pub const CARRIED_ALPHA_TEST: &str = "alpha test carried from the program's own compare: the value its discard \
      compares, evaluated from the program's samples in a run at its reference whose discards it matches at every \
      texel, is the baked albedo's alpha, cut at the material's reference, each texel quantized to UNORM8 on the side \

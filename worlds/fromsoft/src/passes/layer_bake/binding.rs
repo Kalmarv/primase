@@ -599,14 +599,14 @@ pub struct FrozenFrame {
     /// `View(CameraPosition)`, its depth terms `View(Perspective)`, `NearPlane`, `FarPlane`, `InverseFarPlane`,
     /// `DepthRange`, `DeviceDepthOffset` and `DeviceDepthScale`, and its matrices every view matrix role. `None` in a
     /// static bake, which has no view: [`FrozenFrame::camera_position`], [`FrozenFrame::view_matrix`] and
-    /// [`FrozenFrame::inverse_view_projection`] stand in, and the depth terms are left at zero ([`NO_DEPTH_POLICY`]).
+    /// [`FrozenFrame::inverse_view_projection`] stand in, and the depth terms are left at zero (`NO_DEPTH_POLICY`).
     pub camera: Option<FrameCamera>,
     /// The dominant directional light (`Frame(DirectionToLight)`, `LightColour`, `LightSpecularColour`): `None` in a
     /// static bake, which lights nothing ([`NO_DIRECTIONAL_LIGHT_POLICY`]).
     pub sun: Option<FrameSun>,
 }
 
-/// A perspective camera's depth terms, as a frame states them ([`FrozenFrame::depth`]): its near and far clip planes
+/// A perspective camera's depth terms, as a frame states them (`FrozenFrame::depth`): its near and far clip planes
 /// along the view axis (world units), the far one where its device depth reaches 0 (a reversed depth), so a point at
 /// depth `d` has device depth `offset + scale / d` ([`FrameDepth::device_depth`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -844,7 +844,7 @@ pub(crate) fn sampled_period(interface: &Interface, material: &LayeredMaterial) 
 
 impl Prepared {
     /// Frozen-frame preview binding of a layered material straight from its source: resolves the program's binding
-    /// ([`resolve`], unbound slots given their counted preview colours) and binds it ([`Prepared::from_binding`]).
+    /// ([`resolve()`], unbound slots given their counted preview colours) and binds it ([`Prepared::from_binding`]).
     /// The caller supplies decoded views by texture name, each through the game's view of it. A program that reads the global time
     /// (`FC_GlobalTime`, which scrolls some layers' texture coordinates) is sampled at `sample_time` seconds.
     pub fn new(

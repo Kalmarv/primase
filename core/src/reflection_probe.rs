@@ -13,7 +13,7 @@ use serde_json::Value;
 pub enum ProbeMipPolicy {
     /// Sample this LOD independently of roughness.
     Fixed(f32),
-    /// Map perceptual roughness in [0,1] linearly onto this inclusive LOD interval.
+    /// Map perceptual roughness in \[0,1\] linearly onto this inclusive LOD interval.
     LinearRoughness { minimum: f32, maximum: f32 },
 }
 
@@ -36,7 +36,7 @@ pub struct ProbeState {
 pub struct EnvironmentProbeBlend {
     pub state_a: ProbeState,
     pub state_b: ProbeState,
-    /// Finite, inclusive [0,1]. The endpoints still retain both states and their provenance.
+    /// Finite, inclusive \[0,1\]. The endpoints still retain both states and their provenance.
     pub factor: f32,
 }
 

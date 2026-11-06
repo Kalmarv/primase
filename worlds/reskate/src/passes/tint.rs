@@ -11,7 +11,7 @@
 //! tinted, counted: a primitive no material of which takes it is left whole, and one drawn also with a material that
 //! takes it is split for that one. Per-primitive components follow the split (`World::rebuild_primitives`). Only a
 //! triangle list is split; a primitive of another topology keeps its material, counted.
-//! A primitive spreading its triangles over more than [`MAX_COLOURS`] colours (vegetation and clutter gradients) keeps
+//! A primitive spreading its triangles over more than `MAX_COLOURS` colours (vegetation and clutter gradients) keeps
 //! one tint, their mean weighted by triangles: counted, with its triangles. `COLOR_0`'s alpha (a fade) is left for
 //! `lower-vertex-alpha-reskate`.
 //!

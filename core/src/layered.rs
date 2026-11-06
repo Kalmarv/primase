@@ -182,7 +182,7 @@ pub enum Source {
 }
 
 /// One weight channel per pixel: a named form of its sources, or an [`Expression`] of them for what no named form
-/// spells. Every form follows the [numeric rules](expression) and is the operations of its [`Channel::expression`].
+/// spells. Every form follows the numeric rules and is the operations of its [`Channel::expression`].
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Channel {

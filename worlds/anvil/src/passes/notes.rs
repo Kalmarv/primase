@@ -182,7 +182,7 @@ pub fn note_anvil_content(w: &mut World) -> PassLog {
     log
 }
 
-/// [`note_anvil_content`] as a pass.
+/// `note_anvil_content` as a pass.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NoteAnvilContent;
 

@@ -37,9 +37,9 @@ pub fn read_world_programs(
 }
 
 /// For every `unity.material` of `w` whose shader is one of `shaders`, the programs of its draw pass under
-/// `pipeline` ([`UnityMaterial::draw_pass`]) as stored, each stage's (vertex, fragment, geometry, hull, domain): every
+/// `pipeline` ([`UnityMaterial::draw_pass`](crate::components::UnityMaterial::draw_pass)) as stored, each stage's (vertex, fragment, geometry, hull, domain): every
 /// variant with its D3D11 code, and the shader's declared texture defaults, as `unity.programs` on the material's
-/// entity (choosing a variant is the caller's, [`UnityPrograms::variant`]). A material without a shader object, draw
+/// entity (choosing a variant is the caller's, [`UnityPrograms::variant`](crate::components::UnityPrograms::variant)). A material without a shader object, draw
 /// pass or D3D11 code is left out, counted by reason; so are variants whose code holds no DXBC container.
 pub fn read_programs(
     player: &unity_formats::player::Player,

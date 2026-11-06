@@ -455,7 +455,7 @@ pub fn resolve_material(
     Ok(e)
 }
 
-/// The materials of a MeshSet entity's section keys ([`read_entry`] made it): one `frostbite.material`
+/// The materials of a MeshSet entity's section keys ([`read_entry`](crate::read::entry::read_entry) made it): one `frostbite.material`
 /// entity for each distinct key, recorded in the MeshSet's `materials`. Entities made for earlier keys stay when
 /// a later key's resolution is an error.
 pub fn resolve_materials(

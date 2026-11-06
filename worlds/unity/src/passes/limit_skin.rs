@@ -10,7 +10,7 @@
 //!
 //! `quality` names a level of the player. It is optional, with a stated meaning for absence: a mesh whose skin every
 //! level draws alike is limited by what they agree on, and a mesh the levels draw differently is refused naming the
-//! levels ([`crate::skin::skin_limit`]), so the program states the level exactly where the player's levels differ.
+//! levels (`crate::skin::skin_limit`), so the program states the level exactly where the player's levels differ.
 //! The pass chooses nothing: a level the player does not list, or one listed twice, is refused.
 
 use std::collections::BTreeMap;

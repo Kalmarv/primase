@@ -2,7 +2,7 @@
 //! the legacy header or the DX10 one. Payloads are retained verbatim, never decoded.
 //!
 //! A header means what it means to DirectXTex (Microsoft's reference, may2026), whose `DecodeDDSHeader` and
-//! `EncodeDDSHeader` this follows field by field: [`parse`] reads every layout texconv reads, and [`write`] writes the
+//! `EncodeDDSHeader` this follows field by field: [`parse`] reads every layout texconv reads, and [`write()`] writes the
 //! header bytes texconv writes. The differences are deliberate and listed in the README: this reader is stricter (the
 //! payload must be exactly the layout's size; typeless formats, unknown DX10 misc flags and the legacy formats
 //! DirectXTex converts as it loads are refused rather than altered), it reads the face-counted DX10 cubes DirectXTex
@@ -138,7 +138,7 @@ pub struct Parsed {
     pub faces_counted: bool,
 }
 
-/// Which header [`write`] writes. Each matches a texconv choice byte for byte where they can.
+/// Which header [`write()`] writes. Each matches a texconv choice byte for byte where they can.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WriteHeader {
     /// The legacy header where it states everything the [`Dds`] holds, else DX10: texconv's default, except that

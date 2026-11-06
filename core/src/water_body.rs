@@ -8,7 +8,7 @@ use crate::{Component, Entity, Geometry, JsonError, World};
 
 /// `core.water_body`: the optics of the water a material's surface covers, in the world's units (metres, seconds,
 /// linear RGB), on a material entity whose [`crate::MaterialUsage`] is water. What the surface itself reflects stays
-/// [`crate::PbrMaterial`]'s; this is what lies under it and how the surface moves.
+/// [`crate::pbr::PbrMaterial`]'s; this is what lies under it and how the surface moves.
 ///
 /// The model it states, which a consumer draws as far as it can: a view ray enters the water at the surface and travels
 /// `d` metres through it to what is behind (the scene below, read from the frame or a closed volume). What is behind
@@ -43,7 +43,7 @@ pub struct WaterBody {
 /// One moving normal map of a [`WaterBody`].
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct WaveLayer {
-    /// The normal map (tangent space, as [`crate::PbrMaterial::normal_texture`]), its tiling in the reference's
+    /// The normal map (tangent space, as [`crate::pbr::PbrMaterial::normal_texture`]), its tiling in the reference's
     /// transform.
     pub normal: TextureRef,
     /// How far its coordinates move per second, in texture units after the transform: the map is sampled at

@@ -316,7 +316,7 @@ pub fn retain_primitives(mesh: &mut Mesh, mut keep: impl FnMut(&Primitive) -> bo
 }
 
 /// `lower-gta-pbr{night=state}`'s night copies ([`Night::State`]): every placed prototype whose meshes (its own and
-/// its LOD forms') draw a material with night-only geometry or night emission gets a copy ([`copy_prototype`]) whose
+/// its LOD forms') draw a material with night-only geometry or night emission gets a copy (`copy_prototype`) whose
 /// meshes draw night copies of those materials (each shader's components copied, once per material); each placement
 /// of it gets, first in its `core.state_override`, a switch to the copy while `gta.hour` is a night hour. The night
 /// material copies, which the caller lowers for night, are returned. An error without the `gta.hour` axis (the

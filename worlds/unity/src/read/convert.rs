@@ -64,7 +64,7 @@ impl<'a> UnityReader<'a> {
         self
     }
 
-    /// Read the scene into a new world: the world, the level report (as [`read_level`] gives it) and the report lines
+    /// Read the scene into a new world: the world, the level report (as `read_level` gives it) and the report lines
     /// [`Reader::read`] returns. The notices are kept for [`Reader::notices`].
     pub fn read_world(&mut self) -> Result<(World, LevelReport, Report)> {
         let mut w = World::new();

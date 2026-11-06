@@ -368,7 +368,7 @@ impl UnityPrograms {
 
 impl UnityPrograms {
     /// The variant of each stage a draw with the keywords `material` and `global` (their union is the draw's keyword
-    /// set, with the keywords [`UnityPrograms::required_keywords`] names: `implied`) and hardware tier `tier` uses.
+    /// set, with the keywords `UnityPrograms::required_keywords` names: `implied`) and hardware tier `tier` uses.
     /// Unity compiles each stage for the keyword sets that stage uses, so per stage the draw's keywords are restricted
     /// to those some variant of the stage has, and the variant is the one with exactly those, in that tier
     /// (`tests/program_pairing.rs` checks on every pass of two players that a fragment variant and a vertex variant so
@@ -847,7 +847,7 @@ impl Component for UnityTerrain {
         out.extend(self.material);
     }
 
-    /// Its heightmap as the reader requires it ([`check_heightmap`]).
+    /// Its heightmap as the reader requires it (`check_heightmap`).
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
         unity_formats::terrain::check_heightmap(self.resolution, &self.heights, self.holes.as_deref())
             .map_err(|e| e.to_string())

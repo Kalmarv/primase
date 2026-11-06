@@ -39,7 +39,7 @@ pub struct Options {
     /// Whether the larger maps above the map (Elden Ring's open-world tiles: [`fromsoft_formats::Game::parent_maps`]) also place
     /// their parts that belong to it: none (default: the map's own layout only) or included, moved into the map's frame.
     pub parents: Parents,
-    /// The area's draw-param file ([`draw_param`]): none (default: the graphics environment is not read), the file
+    /// The area's draw-param file (`draw_param`): none (default: the graphics environment is not read), the file
     /// of this stem (one of [`fromsoft_formats::area::draw_params`]) or the file one collision part's scene config names.
     pub draw_param: draw_param::DrawParams,
     /// Whether the animation binder of each kept object model (Sekiro's objects, Elden Ring's assets: doors, lifts) is
@@ -54,7 +54,7 @@ pub struct Options {
     /// of extern meshes) is read with it, as [`crate::sekiro::source::MapCollision::f_triangles`]: off by default
     /// (the read keeps the `h` binder's files only); `lower-fromsoft-collision{f-meshes=on}` lowers them.
     pub f_collision: bool,
-    /// Whether the point and spot lights of effect files (FXR) are read where they stand ([`effect_lights`]): the
+    /// Whether the point and spot lights of effect files (FXR) are read where they stand (`effect_lights`): the
     /// map's SFX regions, and the effects the kept objects (Sekiro) and assets (Elden Ring) spawn through their model
     /// effect row at the model's dummy polygons; off by default (it reads the effect binders and the params).
     /// `lower-fromsoft-lights` lowers them, in the BTL lights' unit.
@@ -63,7 +63,7 @@ pub struct Options {
     /// axis with no default: Sekiro's sky map's domes, rings and moon and the area's own unplaced domes; Elden Ring's
     /// assets of the area's sky map that its weathers show, each with the weathers that show it.
     pub sky: sky::Sky,
-    /// Whether the frame the game's renderer draws is read as the world's `core.render_graph` ([`super::render_graph`]):
+    /// Whether the frame the game's renderer draws is read as the world's `core.render_graph` (`super::render_graph`):
     /// off by default. Its programs are read from the install's engine binders; its steps are the game's, as recorded
     /// frames of the running game show them, whatever the area.
     pub render_graph: bool,
@@ -71,7 +71,7 @@ pub struct Options {
     /// heavy textures to the reader's load step after a registered selection pass requests them.
     /// Sekiro retains its source coefficient states for lower-fromsoft-irradiance.
     pub irradiance: bool,
-    /// Whether the effects themselves are read where they stand ([`effects`]): the same routes as `effect_lights`, but the whole
+    /// Whether the effects themselves are read where they stand (`effects`): the same routes as `effect_lights`, but the whole
     /// effect (`fromsoft.effect` on an entity placed there, the effect files and the textures they name) rather than its lights;
     /// off by default. `lower-fromsoft-effects` lowers them to `core.particles`.
     pub effects: bool,
@@ -200,14 +200,14 @@ pub struct Report {
     /// Distinct placed models (`obj/<model>`, `asset/<model>`, `<map>/<model>`) the archive does not hold.
     pub missing_models: Vec<String>,
     /// Each prototype's box as the region rule took it ([`world_bounds`]; `None` for a model that uses no vertex), by
-    /// its entity: what [`convert::AreaReader`] gives as the prototype's box.
+    /// its entity: what [`convert::AreaReader`](crate::sekiro::read::convert::AreaReader) gives as the prototype's box.
     pub prototype_boxes: BTreeMap<primase_core::Entity, Option<[[f32; 3]; 2]>>,
     /// The larger maps whose parts for this map were read (`parents: include`), and those parts.
     pub parent_maps: Vec<String>,
     pub parent_placements: usize,
     /// Parts of the layout of a kind the read does not place (enemies, players, dummy objects and assets, connect
     /// collisions), by the word for the kind: they stand in the MSB and in no world. The collision parts are read as
-    /// the collision files they name ([`collision`]).
+    /// the collision files they name (`collision`).
     pub unplaced_parts: BTreeMap<&'static str, usize>,
     /// The draw-param file and what the read chose and left of it (`fromsoft.draw_param`; empty unless asked for).
     pub draw_param: draw_param::Report,
@@ -231,7 +231,7 @@ pub struct Report {
     /// left without one, by reason ([`texture_switch`]).
     pub texture_switch: texture_switch::Report,
     /// Elden Ring: the placements given `core.lod_switch` from their draw param, and those left without one, by reason
-    /// ([`lod_switch`]).
+    /// (`lod_switch`).
     pub lod_switch: lod_switch::Report,
     /// With `states: Event`: the rules read and the parts decided or left at their default.
     pub states: Option<states::Report>,
@@ -1045,7 +1045,7 @@ fn select_placements(
 /// name is a `fromsoft.map_collision` entity; lights are `fromsoft.light` records where they stand; hang edges and
 /// spawn points are `fromsoft.area_extras`; what the read covered is `fromsoft.read_scope`.
 /// A model's posed box in the world frame (the file frame's z reversed), `[min, max]` metres: the extent the read's
-/// region rule uses and [`convert::AreaReader`] gives as a prototype's box. `None` for a model whose face sets use no
+/// region rule uses and [`convert::AreaReader`](crate::sekiro::read::convert::AreaReader) gives as a prototype's box. `None` for a model whose face sets use no
 /// vertex.
 pub fn world_bounds(model: &Model) -> std::result::Result<Option<[[f32; 3]; 2]>, String> {
     Ok(crate::pose::posed_bounds(model)?

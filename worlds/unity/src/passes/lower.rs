@@ -28,7 +28,7 @@
 //!     colour in the albedo, reading `_SpecColor`, `_Color`, `_Shininess`, `_MainTex` and `_BumpMap` through its own
 //!     tiling), lit by `UnityBlinnPhongLight` (`Lighting.cginc`:89-103): the highlight `_SpecColor` x pow(n.h, 128 x
 //!     `_Shininess`) x the gloss, `_MainTex`'s alpha. As GGX (approximated, counted): roughness
-//!     [`blinn_phong_roughness`]; `KHR_materials_specular` colour `_SpecColor` / 0.04 (its reflectance at normal
+//!     `blinn_phong_roughness`; `KHR_materials_specular` colour `_SpecColor` / 0.04 (its reflectance at normal
 //!     incidence `_SpecColor`, as Standard's specular setup reads `_SpecColor`, `UnityStandardInput.cginc`:143) and
 //!     strength texture `_MainTex` (A, the gloss). The cutout variant's `alphatest:_Cutoff` is its render type's
 //!     cutout at `_Cutoff`; the transparent one's `alpha:fade` its pass's SrcAlpha OneMinusSrcAlpha.
@@ -42,7 +42,7 @@
 //! - **Universal Render Pipeline/Unlit**: `_BaseMap` x `_BaseColor`, drawn lit (counted).
 //! - **Universal Render Pipeline/Nature/SpeedTree7**: `_MainTex` x `_Color`, a rough dielectric (counted).
 //! - **any other shader** (not modelled, counted by name): the base colour only, from Unity's usual property
-//!   names ([`other_base`]).
+//!   names (`other_base`).
 //!
 //! Every shader's alpha mode is what Unity draws it with: the draw pass of the subshader the player's pipeline takes
 //! ([`UnityMaterial::draw_pass`]: URP's forward pass, built-in's `ForwardBase`, not a per-light or shadow pass) and
@@ -73,8 +73,8 @@
 //! (wrap, filter) is counted.
 //!
 //! Each material also gets its draw order (Unity's render queue, the layer its alpha mode is) and, where its shader
-//! states it, its usage (`core.material_usage`, the named table [`SHADER_USAGE`]) and whether it ignores the vertex
-//! colour (`core.vertex_color`, [`IGNORES_VERTEX_COLOR`]; [`TAKES_VERTEX_COLOR`] keep the glTF convention); the rest
+//! states it, its usage (`core.material_usage`, the named table `SHADER_USAGE`) and whether it ignores the vertex
+//! colour (`core.vertex_color`, `IGNORES_VERTEX_COLOR`; `TAKES_VERTEX_COLOR` keep the glTF convention); the rest
 //! are counted by shader.
 
 use std::collections::BTreeMap;
@@ -217,7 +217,7 @@ const IGNORES_VERTEX_COLOR: [&str; 18] = [
     "Unlit/Texture",
 ];
 
-/// What a material's surfaces are, as its shader states it ([`SHADER_USAGE`]); `None` for an ordinary surface.
+/// What a material's surfaces are, as its shader states it (`SHADER_USAGE`); `None` for an ordinary surface.
 pub fn usage(m: &UnityMaterial) -> Option<MaterialUsage> {
     let (_, u) = SHADER_USAGE
         .iter()

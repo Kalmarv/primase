@@ -3,7 +3,7 @@
 //!
 //! - A drawable (`ydr`), a fragment (`yft`) or a drawable dictionary (`ydd`, each entry): a prototype per drawable
 //!   with the loading placements get ([`crate::read::assets`]): its mesh and levels of detail, materials, textures
-//!   resolved the way the game looks them up, embedded collision, skeleton, and its lights ([`GtaLights`]). The
+//!   resolved the way the game looks them up, embedded collision, skeleton, and its lights ([`GtaLights`](crate::components::GtaLights)). The
 //!   drawable is the chosen file itself, whichever copy of its name the game keeps live. The textures are resolved
 //!   through the map state whose archive set has the file live (Story's when neither does). The archetype that names
 //!   the drawable's texture dictionary is the first live map types file's that names the asset ([`GtaArchetype`], as a
@@ -15,7 +15,7 @@
 //!   it) and the light records of the prototypes, with no geometry or textures yet: [`GtaSource::load`] loads them,
 //!   as it loads a region's.
 //! - A texture dictionary (`ytd`): its textures, each a `core.texture` as the reader makes them for materials.
-//! - Static collision (`ybn`): the bound as a [`GtaBounds`] entity at the origin, and the install's material names.
+//! - Static collision (`ybn`): the bound as a [`GtaBounds`](crate::components::collision::GtaBounds) entity at the origin, and the install's material names.
 use std::collections::BTreeMap;
 
 use primase_core::asset::{Asset, Role};

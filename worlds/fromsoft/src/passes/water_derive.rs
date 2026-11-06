@@ -63,7 +63,7 @@ pub struct Measured {
     pub far_scatter: Option<[f32; 3]>,
     /// The Fresnel reflectance at normal incidence.
     pub f0: f32,
-    /// The largest difference of a measured weight from Schlick's with `f0`, over [`ELEVATIONS`].
+    /// The largest difference of a measured weight from Schlick's with `f0`, over `ELEVATIONS`.
     pub schlick_error: f32,
     /// The water depth over which the surface's opacity rises to its deep value; zero where it does not change.
     pub shore_fade: f32,
@@ -328,7 +328,7 @@ fn shore_fade(
 /// one texture, a coordinate offset by another texture): the first sample's carried.
 pub const WAVE_SAMPLED_TWICE: &str = "wave texture sampled at more than one coordinate (the first carried)";
 
-/// What a lowering counts where a texture's two lanes turn the normal by different angles ([`LANES_EQUAL`]).
+/// What a lowering counts where a texture's two lanes turn the normal by different angles (`LANES_EQUAL`).
 pub const WAVE_LANES_UNEQUAL: &str =
     "wave texture turning the normal by different strengths in its two lanes (the first's carried)";
 

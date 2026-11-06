@@ -213,7 +213,7 @@ impl PrepareReskateOverlays {
     }
 
     /// For the encoding the map will be written with (its render tile, instancing, limit and offset), checked
-    /// ([`check_grouping`]).
+    /// (`check_grouping`).
     pub fn for_encoding(mut self, e: &EncodingOptions) -> Result<PrepareReskateOverlays, String> {
         check_grouping(e)?;
         self.encoding = grouping_only(e);

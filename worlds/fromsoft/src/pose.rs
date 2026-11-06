@@ -324,8 +324,8 @@ pub(crate) fn static_bones(model: &Model, mesh: usize) -> StaticBones {
         .map_or(StaticBones::Unbound(node), StaticBones::Node)
 }
 
-/// Every vertex of every mesh in model space (file frame): static vertices posed by their bone ([`StaticBones`]), as
-/// [`lower_model`] poses them but whatever their weights; dynamic ones, and static ones whose bone is not one of the
+/// Every vertex of every mesh in model space (file frame): static vertices posed by their bone (`StaticBones`), as
+/// `lower_model` poses them but whatever their weights; dynamic ones, and static ones whose bone is not one of the
 /// model's, as stored. For measurements a reader makes before any pass runs (a model's extent), not a lowering.
 pub fn posed_positions(source: &Model) -> Result<Vec<Vec<[f32; 3]>>, String> {
     let worlds = bone_matrices(&source.bones)?;

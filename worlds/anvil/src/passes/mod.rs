@@ -1170,7 +1170,7 @@ impl<'t> GroundGrid<'t> {
 /// 128 samples, its side at `splat-px` a pixel: 64 m at 0.25 m is 256 pixels). The pieces' positions are the whole
 /// ground's, computed alike, so neighbours share their seam vertices exactly. Each piece (the whole, or a node's) is a
 /// prototype of its own, its collision (where drawn) over its own squares, its vertices local to its origin
-/// ([`local_origin`]: its box's least corner rounded down to 64 m, which keeps them exact), placed once there.
+/// (`local_origin`: its box's least corner rounded down to 64 m, which keeps them exact), placed once there.
 ///
 /// With `normals=near-camera` (required: `near-camera` or `none`) every `ground=` and `pieces=` draws **smooth
 /// normals**: each vertex's `Normal` is the engine's near-camera terrain normal at its sample, carried to core's frame
@@ -1242,7 +1242,7 @@ pub enum Steep {
     /// The triangles steeper than `threshold` degrees (by their face normal) are taken out of the top-down primitive into
     /// one primitive per node with a chart atlas: each connected face laid out in the vertical plane it looks along,
     /// at the top-down bake's pixel, each texel baked at its point of the surface with the vertical program's colour
-    /// ([`splat::DetailPlane::Vertical`]). The threshold is this pass's choice: the game's rule that splits its draw
+    /// (`splat::DetailPlane::Vertical`). The threshold is this pass's choice: the game's rule that splits its draw
     /// lists into flat, mixed and vertical triangles is not read.
     Chart {
         threshold: f64,
@@ -1256,7 +1256,7 @@ pub enum Steep {
 /// near-camera normal is read, the far normal it blends toward is not, so the program states which it draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GroundNormals {
-    /// The pixel program's near-camera normal `n0` at each sample, at every distance ([`GroundGrid::normals`]): read
+    /// The pixel program's near-camera normal `n0` at each sample, at every distance (`GroundGrid::normals`): read
     /// within about 27 m, an approximation beyond about 32 m (the mesh vertex normal the game blends to is not read),
     /// counted.
     NearCamera,

@@ -57,7 +57,7 @@ pub enum UnmappedJoints {
 ///
 /// Both skeletons must share a model space (metres, the same up and facing): the program turns one first. The mesh must
 /// be in the source skeleton's model space: every joint that carries weight has an inverse bind that is the inverse of
-/// its rest there (to within [`BIND_TOLERANCE`]), else the prototype is refused naming the joint. Two joint maps from
+/// its rest there (to within `BIND_TOLERANCE`), else the prototype is refused naming the joint. Two joint maps from
 /// one skeleton are refused (which is meant is not stated). A prototype already placed with a skin instance is refused (retarget, then place), as is one with morph targets (their deltas
 /// are not carried yet) or more than one binding. An asset listing the source skeleton as the prototype's rig lists the
 /// target instead.

@@ -1,7 +1,7 @@
 //! Collision for ReSkate Studio, laid out without writing anything: the world's triangles per 256 m cell plus the
 //! placed props' own collision, each cell cut into leaves until they are sparse enough for skate.'s grind-edge analysis
-//! ([`Leaf`]), each leaf written as one piece per surface ([`Leaf::pieces`]; the writer packs them,
-//! [`crate::collision_pack`]); and the marker snaps that search that collision (street, ground, open).
+//! (`Leaf`), each leaf written as one piece per surface (`Leaf::pieces`; the writer packs them,
+//! `crate::collision_pack`); and the marker snaps that search that collision (street, ground, open).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 

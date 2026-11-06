@@ -102,7 +102,7 @@ fn unsupported(entry: &Listed, what: impl std::fmt::Display) -> Error {
 /// `entry` of `bundle` as new entities of `w`: one, except a CompiledBytecode resource holding several containers
 /// (a shader each, named `<name>#<n>`) and a shader permutation (its own entity, then those of the programs it
 /// names). An EBX document, a texture resource, a ShaderBlockDepot and a
-/// CompiledBytecode resource are read; a chunk, another resource type, a texture of a shape [`texture_shape`] does
+/// CompiledBytecode resource are read; a chunk, another resource type, a texture of a shape `texture_shape` does
 /// not know or a colour format the texture reader does not decode, or a container whose interface cannot be read is
 /// an [`Error::Unsupported`] naming it.
 pub fn read_entry(src: &Source<'_>, bundle: &Bundle, entry: &Listed, w: &mut World) -> Result<Vec<Entity>> {

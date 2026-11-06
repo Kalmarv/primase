@@ -24,7 +24,7 @@ use crate::{WriteOptions, WriteReport, write_file};
 /// in a file must be loaded; a conditional placement or a state override is refused (the glTF is one world state:
 /// `resolve-state` chooses one). Levels of detail are counted, not chosen (`select-lod` chooses). Every name it does not
 /// list is left out, glTF having no form for it (a dialect's components, `core.source`, `core.shadows`, `core.layered`,
-/// Havok cloth): a conversion reports it as not written, and the writer counts it (see [`crate::write`]). A layered
+/// Havok cloth): a conversion reports it as not written, and the writer counts it (see [`crate::write()`]). A layered
 /// material is drawn only as the `pbr.material` a pass before the writer states for it.
 pub fn target() -> Target {
     Target::new("gltf")

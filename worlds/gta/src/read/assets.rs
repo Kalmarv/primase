@@ -18,7 +18,7 @@
 //!   drawable's own (a ydr's; no drawable dictionary entry of the install has one).
 //! - A material per (drawable, shader) with [`GtaShader`]: every parameter by stored name, textures resolved the way
 //!   the game looks them up: the drawable's own dictionary, then the archetype's texture dictionary, then that
-//!   dictionary's parents ([`TextureParents`]), then the resident shared dictionaries ([`RESIDENT`]).
+//!   dictionary's parents ([`TextureParents`]), then the resident shared dictionaries (`RESIDENT`).
 //! - A texture entity per (dictionary, texture): `core.texture` (blocks as stored, levels split, colour space from the
 //!   format; role `Other` until a pass knows which sampler reads it), `core.name`, `core.source`.
 #![allow(
@@ -131,7 +131,7 @@ impl Lookup<'_> {
     }
 
     /// The texture dictionaries the game searches after a drawable's own, by name hash: the archetype's, that
-    /// dictionary's parents ([`TextureParents::chain`]), then the resident shared dictionaries ([`RESIDENT`]).
+    /// dictionary's parents ([`TextureParents::chain`]), then the resident shared dictionaries (`RESIDENT`).
     pub fn texture_dictionaries(&self, txd: u32) -> Vec<u32> {
         std::iter::once(txd)
             .chain(self.parents.chain(txd))

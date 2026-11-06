@@ -38,7 +38,7 @@ pub struct MaterialNamespace(pub Vec<u8>);
 pub struct SamplerTexture {
     pub slot: u32,
     /// None: empty binding or a path absent from the supplied source archives;
-    /// the source path remains in ShredMaterial.samplers[slot].texture.
+    /// the source path remains in ShredMaterial.samplers\[slot\].texture.
     pub texture: Option<Entity>,
 }
 

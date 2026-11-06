@@ -2,18 +2,18 @@
 //! random ones: the [`DetailLerp`](primase_core::detail::DetailLerp) a program computes, or what differs. Both games'
 //! programs are read the same way: Sekiro's store an F0 reflectance ([`SurfaceLowering::GlossReflectance`]) and Elden
 //! Ring's a metallic factor ([`SurfaceLowering::MetallicGloss`]), the lowering the program's G-buffer roles say
-//! ([`outputs_of`]); a program whose weights are a ramp window of the base normal's alpha has them measured
-//! ([`ramp_weights`]), the others' are the family's stated forms ([`WEIGHT_SETS`]).
+//! (`outputs_of`); a program whose weights are a ramp window of the base normal's alpha has them measured
+//! (`ramp_weights`), the others' are the family's stated forms ([`WEIGHT_SETS`]).
 //!
 //! The textures are told apart by the samplers the program reads them through (its colour textures by the diffuse
-//! sampler, its normals by the bump sampler, its mask alone), then by what moves which output ([`identify`]): the base
+//! sampler, its normals by the bump sampler, its mask alone), then by what moves which output (`identify`): the base
 //! normal is the one normal texture that alone tips the normal over flat (only the base's `xy` gives the normal's `z`),
 //! the base colour the one colour moving the colour at both ends of the weights, each detail the colour and normal
 //! moving the outputs where the weights take it alone. The weights are the family's forms measured so far
 //! ([`WEIGHT_SETS`]): a program's are the set whose lane of the base normal moves its outputs. Each constant of the
 //! equation is read from a run whose samples isolate it (a detail taken alone at an end of the weights, or weighed most
 //! where none is, the chain then inverted; the reflectance mix at 0 or 1 by the base mask; a lane set so the term in
-//! question is unsaturated, the mix read on the colour lane where it is read most closely, [`widest`]); each detail's
+//! question is unsaturated, the mix read on the colour lane where it is read most closely, `widest`); each detail's
 //! gloss scale is the base normal's z where its gloss moves in proportion to it, else the constant read; the alpha is
 //! the one detail's whose colour alpha moves the program's alpha, where the binding gives that lane a role (`Coverage`
 //! or `Opacity`), and none where it gives none; the program's tangent frame is read from the base normal alone. The equation is then proven against the program on random samples ([`PROOF_SETS`]) and
@@ -43,7 +43,7 @@ pub const PROOF_SETS: usize = 256;
 /// The texture slots of a detail program, by their part in the equation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SlotRoles {
-    /// The program's weights: a set of [`WEIGHT_SETS`], or ramp windows measured from the program ([`ramp_weights`]).
+    /// The program's weights: a set of [`WEIGHT_SETS`], or ramp windows measured from the program (`ramp_weights`).
     pub weights: Vec<WeightForm>,
     pub base_colour: u32,
     pub base_normal: u32,
@@ -241,7 +241,7 @@ const Z_22_260: WeightForm = WeightForm {
 
 /// The weights of the details after the first: the family's forms measured so far, a stated list (switch 13's, switch
 /// 1's, switch 6's), not read from a program. A program's set is the one of its detail count whose lane moves its outputs
-/// ([`identify`]), and the proof holds the program to it, on random sets and on sets where its weights mix. Each set's
+/// (`identify`), and the proof holds the program to it, on random sets and on sets where its weights mix. Each set's
 /// weights read one lane of the base normal; a form a program computes outside the list is refused, not fitted.
 pub const WEIGHT_SETS: [&[WeightForm]; 4] = [
     &[],
@@ -257,7 +257,7 @@ const LANE_NAMES: [&str; 4] = ["x", "y", "z", "alpha"];
 /// switch 6's both ends are smallest (`2^-8` each).
 const MIDDLE: f32 = 0.5;
 
-/// A program's weights: one of [`WEIGHT_SETS`], or ramp windows measured from the program ([`ramp_weights`]).
+/// A program's weights: one of [`WEIGHT_SETS`], or ramp windows measured from the program (`ramp_weights`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Weights<'a>(pub &'a [WeightForm]);
 
@@ -1250,7 +1250,7 @@ fn equation(c: &DetailConstants, gain: f32, s: &Samples) -> DetailSurface {
     detail_lerp(c, gain, texture).evaluate(&s.as_core(), &Weights(&c.weights).values(s.n))
 }
 
-/// How many proof sets are drawn where the weights mix ([`prove`]).
+/// How many proof sets are drawn where the weights mix (`prove`).
 pub const TRANSITION_SETS: usize = 64;
 
 /// One proof set: `program` against the equation of `c` on samples `s` at `uv`, each role's difference kept in
@@ -1454,14 +1454,14 @@ pub struct Equation {
     /// The program's tangent frame (x, y, z of tangent space in world space) under the probe's frozen inputs.
     pub frame: [[f32; 3]; 3],
     /// The scale of the designed base colour the constants were read at: 1, or halved until the material's tints and
-    /// gain leave the designed colours unsaturated ([`solve`]). No word of the material is clamped.
+    /// gain leave the designed colours unsaturated (`solve`). No word of the material is clamped.
     pub design_scale: f32,
-    /// What the probe holds constant that, changed, moves a role the equation computes ([`frozen`]): the equation is
+    /// What the probe holds constant that, changed, moves a role the equation computes (`frozen`): the equation is
     /// the program's at these values.
     pub frozen: Vec<Frozen>,
 }
 
-/// A detail program's equation with the evidence the census audits it by ([`derive`]): each constant beside the word
+/// A detail program's equation with the evidence the census audits it by ([`derive()`]): each constant beside the word
 /// it reads and the tint fold's cost. A consumer needs the equation alone ([`derive_equation`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Derived {
@@ -1870,9 +1870,9 @@ impl From<NonFinite> for NotDerived {
 }
 
 /// The equation of `probe`'s program, as a consumer draws it: its textures' parts read from what moves which output
-/// ([`identify`]), its constants solved, proven on [`PROOF_SETS`] random sample sets and [`TRANSITION_SETS`] where the
-/// weights mix (every role within [`BOUND_UNITS`]), and what it holds constant ([`frozen`]); an error naming what
-/// differs from the equation. The constants are not compared with the material's words here ([`derive`] does, for the
+/// (`identify`), its constants solved, proven on [`PROOF_SETS`] random sample sets and [`TRANSITION_SETS`] where the
+/// weights mix (every role within [`BOUND_UNITS`]), and what it holds constant (`frozen`); an error naming what
+/// differs from the equation. The constants are not compared with the material's words here ([`derive()`] does, for the
 /// census): a consumer takes the equation the proof holds.
 pub fn derive_equation(probe: &mut ProgramProbe, seed: u32) -> Result<Equation, NotDerived> {
     let outputs = outputs(probe)?;

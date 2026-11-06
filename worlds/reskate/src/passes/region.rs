@@ -9,7 +9,7 @@
 //! written from the world says so. A placement that already states its clip, or a soup entry that states
 //! `region_cut = false`, keeps it. Every placement clipped and every triangle cut is counted. It records the region
 //! and the apron around it (`skate.region_clip`): a placement marked outside keeps the triangles of its own that reach
-//! into the apron (its geometry and its collision; [`crate::map::placement_fate`]) and is left out when none reaches
+//! into the apron (its geometry and its collision; `crate::map::placement_fate`) and is left out when none reaches
 //! the region; the writer and the passes that assemble its geometry apply that, reported as this pass's. The writer
 //! decides nothing from the region itself; without this pass nothing is clipped, and a placement marked outside by its
 //! scene is refused.

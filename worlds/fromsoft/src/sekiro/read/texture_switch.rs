@@ -13,7 +13,7 @@
 //! captures; a map piece without the flag has no row established here and no switch).
 //!
 //! The scale: the game fills a table per LOD type from row `100 + lodType` (the level switch's from row `lodType`,
-//! [`super::lod_switch`]) of `LoadBalancerDrawDistScaleParam` at the load balancer's current level, and takes 1.0
+//! `super::lod_switch`) of `LoadBalancerDrawDistScaleParam` at the load balancer's current level, and takes 1.0
 //! where the row is missing. The code can read another param in its place (index 0xc1, past the 193 of the game's own
 //! param table) when a check returns anything but 1; the check returns a value only it writes, set to 1 when it is 0,
 //! which holds 1 in a dumped running image, and no other code or data of the executable refers to it (read from its
@@ -114,7 +114,7 @@ pub struct Report {
     pub rows: RowReport,
 }
 
-/// How the placements' `PartsDrawParam` rows were found ([`Params::row`]), for each switch that reads them.
+/// How the placements' `PartsDrawParam` rows were found (`Params::row`), for each switch that reads them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RowReport {
     /// Assets whose model has no geometry row or names no `PartsDrawParam` row (or one the param lacks).
@@ -125,7 +125,7 @@ pub struct RowReport {
     pub asset_rows_differ: usize,
 }
 
-/// The params the texture switch and the level switch ([`super::lod_switch`]) read.
+/// The params the texture switch and the level switch (`super::lod_switch`) read.
 #[derive(Debug)]
 pub struct Params {
     parts: PartsDrawParam,

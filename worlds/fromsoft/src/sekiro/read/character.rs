@@ -266,7 +266,7 @@ pub fn animation_notices(a: &AnimationReport) -> Vec<Notice> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CharacterOptions {
     /// Read the animation binders of this character (`c1010`: `chr/c1010.anibnd` and the binders its markers name,
-    /// see [`super::animation`]): the Havok skeleton as a skeleton of its own and each animation as `havok.animation`.
+    /// see `super::animation`): the Havok skeleton as a skeleton of its own and each animation as `havok.animation`.
     /// For a character read the animations are members of its asset; for parts (the player is `c0000`'s animations on
     /// parts worn together) they are the members of an asset of their own, `<id> animations`.
     pub animations: Option<String>,
@@ -293,7 +293,7 @@ pub struct CharacterOptions {
     /// attachment is not implemented (it is to come from the engine's own data), and until then the weapon's sockets are
     /// on the weapon's own skeleton, not the character's.
     pub equipped_weapons: EquippedWeapons,
-    /// For parts: the character whose own model's dummy polygons are placed on the parts ([`own_sockets`]); with clip
+    /// For parts: the character whose own model's dummy polygons are placed on the parts (`own_sockets`); with clip
     /// effects or weapons, the animations' character is taken where this is not given (the player's `c0000`: its model
     /// has no mesh, and holds the polygons effects and weapons stand at).
     pub sockets_of: Option<String>,

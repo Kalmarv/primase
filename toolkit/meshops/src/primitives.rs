@@ -193,7 +193,7 @@ pub fn capsule(a: V, b: V, r: f32) -> Result<Mesh> {
     finish(m)
 }
 /// A disc is a cylinder with endpoint offsets +/-half_axis from its centre.
-/// Pass [margin,0,0] for the reference local-X disc; transform endpoints beforehand
+/// Pass \[margin,0,0\] for the reference local-X disc; transform endpoints beforehand
 /// when the enclosing bound has a placement transform.
 pub fn disc(c: V, half_axis: V, r: f32) -> Result<Mesh> {
     finite(&c)?;

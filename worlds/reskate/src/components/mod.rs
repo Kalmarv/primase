@@ -1,5 +1,5 @@
 //! The `skate.*` dialect: the target's components, what the ReSkate writers and scene-interchange v1 carry beyond
-//! the core components, and the lowerings back to core for other writers ([`lower`], [`LowerLayeredPbr`]).
+//! the core components, and the lowerings back to core for other writers (`lower`, `LowerLayeredPbr`).
 //!
 //! How a scene maps onto the world (entities in the manifest's order: textures, materials, prototypes, placements,
 //! collision soups, lights, grind curves, water, markers, then the prototypes' other levels of detail):
@@ -1405,7 +1405,7 @@ pub enum SharedContent {
 /// The content's cull IDs, [`SkateMapSummary::other_cull_ids`], in three kinds, each merged over a map's parts as the
 /// writer writes it: what each part writes alone, summed (`summed`: its tiles, instances and placed props' hulls; the
 /// collision cells' objects as `cells` says); standalone content a part may share with another, by key (`shared`: its
-/// lights, grind prisms and hull soups, each keyed as [`crate::passes::Owned::key`] keys it, the same in every part
+/// lights, grind prisms and hull soups, each keyed as `crate::passes::Owned::key` keys it, the same in every part
 /// that writes it); and the water, one object for the whole map (`water`: whether it has any).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SkateMapSummary {

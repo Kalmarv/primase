@@ -22,7 +22,7 @@
 //!   lists them; the file stores no selected index (its `generatorIndexAtActivate` is runtime state, zero in every object of
 //!   both installs), so the layer starts in state 0 and which state the game picks is its own (the player's hand pose group
 //!   follows its equipment). A clip generator alone is one state. A clip state is the `core.clip` of that animation name bound
-//!   to the rig that drives the rig's skeleton ([`clip_for`]); any other generator, a child that is not a clip, and a clip
+//!   to the rig that drives the rig's skeleton (`clip_for`); any other generator, a child that is not a clip, and a clip
 //!   the world lacks or cannot place is a state with `Motion::Unsupported` naming why. A clip the world lists and has not
 //!   loaded (a reader that decodes clips on demand: an entity with a `core.name` and `core.clip_key` and no `core.clip`) is
 //!   `Motion::Pending` on that entity; the pass runs again after the clip is loaded and states the `Motion::Clip`;
@@ -153,7 +153,7 @@ fn layer_generator<'t, 'a>(
     }
 }
 
-/// The layers of `document`'s layer generator ([`layer_generator`]): `None` unless the file is a behaviour graph that has one.
+/// The layers of `document`'s layer generator (`layer_generator`): `None` unless the file is a behaviour graph that has one.
 pub fn read_layers(document: &Document<'_, '_>) -> havok_formats::Result<Option<BehaviorLayers>> {
     if document.kind() != FileKind::Behavior {
         return Ok(None);

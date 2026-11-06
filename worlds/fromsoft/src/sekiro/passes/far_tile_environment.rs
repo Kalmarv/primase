@@ -23,8 +23,8 @@ const FAR_TILE_TOP: f32 = FAR_TILE_BOTTOM + 84. * 13.25;
 
 /// The box of a far tile's environment layer `layer` (0 the lowest) in the tile's stored frame (centre, half extents in
 /// metres), fitted to the volumes of Elden Ring far tiles ([`FAR_TILE_FIT`]): the volume's texel columns, rows and
-/// slices run along the tile's +X, +Y and +Z; horizontally it spans the tile ([`FAR_TILE_SPAN`] about the origin), and
-/// vertically the lowest layer spans [`FAR_TILE_BOTTOM`] to [`FAR_TILE_TOP`], one height range for every far tile, each
+/// slices run along the tile's +X, +Y and +Z; horizontally it spans the tile (`FAR_TILE_SPAN` about the origin), and
+/// vertically the lowest layer spans `FAR_TILE_BOTTOM` to `FAR_TILE_TOP`, one height range for every far tile, each
 /// further layer the same height directly above the one before.
 pub fn far_tile_box(layer: usize) -> ([f32; 3], [f32; 3]) {
     let half = FAR_TILE_SPAN / 2.;

@@ -4,7 +4,7 @@
 //!
 //! - **Which images.** Those a core material slot (`baseColorTexture`, `metallicRoughnessTexture`, `normalTexture`,
 //!   `occlusionTexture`, `emissiveTexture`) samples through `textures[i].source`; the others are counted
-//!   ([`ReadReport::images_unused`]). An image is read once however many slots sample it.
+//!   ([`ReadReport::images_unused`](crate::read::ReadReport::images_unused)). An image is read once however many slots sample it.
 //! - **Usage.** glTF gives an image no colour space or role of its own: its use does (§3.9.4 and §3.9.1). A slot's
 //!   texture entity is the image read for that use: sRGB `Color` for base colour and emissive, linear `Mask` for the
 //!   metallic-roughness and occlusion slots (one entity when a packed map serves both), linear `Normal` in glTF's
@@ -12,7 +12,7 @@
 //! - **Formats.** Told by the bytes, not the declared MIME type: PNG is decoded (`primase_image::read_png`, 8 and 16
 //!   bits, to RGBA) and so is JPEG (`primase_image::read_jpeg`, 8 bits, to RGBA with alpha 255); KTX2/Basis, WebP, a
 //!   JPEG the decoder refuses (CMYK, 12-bit, arithmetic-coded) and anything else is refused by name, counted in
-//!   [`ReadReport::images_refused`], and its slots stay without a texture entry.
+//!   [`ReadReport::images_refused`](crate::read::ReadReport::images_refused), and its slots stay without a texture entry.
 //! - **Sources.** A GLB's `bufferView` images and, through the caller's resolver, `uri` images (a relative file, a
 //!   `data:` URI: resolving is the caller's, as for buffers).
 
