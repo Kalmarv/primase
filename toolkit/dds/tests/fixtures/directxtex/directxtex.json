@@ -16,7 +16,7 @@
      "R8G8B8A8_UNORM",
      "-m",
      "0",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -87,7 +87,7 @@
      "-m",
      "0",
      "-dx10",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -157,7 +157,7 @@
      "R8G8B8A8_UNORM_SRGB",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -198,7 +198,7 @@
      "-m",
      "1",
      "-dx9",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -238,7 +238,7 @@
      "B8G8R8A8_UNORM",
      "-m",
      "0",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -308,7 +308,7 @@
      "B8G8R8X8_UNORM",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -348,7 +348,7 @@
      "B5G6R5_UNORM",
      "-m",
      "0",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -418,7 +418,7 @@
      "B5G5R5A1_UNORM",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -458,7 +458,7 @@
      "B4G4R4A4_UNORM",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -498,7 +498,7 @@
      "R10G10B10A2_UNORM",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -539,7 +539,7 @@
      "-m",
      "1",
      "-dx9",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -579,7 +579,7 @@
      "R8_UNORM",
      "-m",
      "0",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -649,7 +649,7 @@
      "R8G8_UNORM",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -689,7 +689,7 @@
      "A8_UNORM",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -729,7 +729,7 @@
      "R16_UNORM",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -769,7 +769,7 @@
      "R16G16_UNORM",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -809,7 +809,7 @@
      "R8G8_SNORM",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -849,7 +849,7 @@
      "R8G8B8A8_SNORM",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -889,7 +889,7 @@
      "R16G16_SNORM",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -929,7 +929,7 @@
      "R8_SNORM",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -969,7 +969,7 @@
      "R16G16B16A16_UNORM",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -1009,7 +1009,7 @@
      "R16G16B16A16_FLOAT",
      "-m",
      "0",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -1079,7 +1079,7 @@
      "R32G32B32A32_FLOAT",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -1119,7 +1119,7 @@
      "R32G32_FLOAT",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -1159,7 +1159,7 @@
      "R16G16_FLOAT",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -1199,7 +1199,7 @@
      "R32_FLOAT",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -1239,7 +1239,7 @@
      "R16_FLOAT",
      "-m",
      "1",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -1279,7 +1279,7 @@
      "BC1_UNORM",
      "-m",
      "0",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -1350,7 +1350,7 @@
      "-m",
      "1",
      "-dx9",
-     "odd.png"
+     "odd.tga"
     ]
    ],
    "directxtex": {
@@ -1390,7 +1390,7 @@
      "BC2_UNORM",
      "-m",
      "0",
-     "flat.png"
+     "flat.tga"
     ]
    ],
    "directxtex": {
@@ -1471,7 +1471,7 @@
      "-m",
      "1",
      "-pmalpha",
-     "flat.png"
+     "flat.tga"
     ]
    ],
    "directxtex": {
@@ -1511,7 +1511,7 @@
      "BC3_UNORM",
      "-m",
      "0",
-     "flat.png"
+     "flat.tga"
     ]
    ],
    "directxtex": {
@@ -1592,7 +1592,7 @@
      "-m",
      "1",
      "-pmalpha",
-     "flat.png"
+     "flat.tga"
     ]
    ],
    "directxtex": {
@@ -1632,7 +1632,7 @@
      "BC3_UNORM_SRGB",
      "-m",
      "1",
-     "flat.png"
+     "flat.tga"
     ]
    ],
    "directxtex": {
@@ -1672,7 +1672,7 @@
      "BC4_UNORM",
      "-m",
      "0",
-     "flat.png"
+     "flat.tga"
     ]
    ],
    "directxtex": {
@@ -1753,7 +1753,7 @@
      "-m",
      "1",
      "-dx9",
-     "flat.png"
+     "flat.tga"
     ]
    ],
    "directxtex": {
@@ -1793,7 +1793,7 @@
      "BC4_SNORM",
      "-m",
      "1",
-     "flat.png"
+     "flat.tga"
     ]
    ],
    "directxtex": {
@@ -1833,7 +1833,7 @@
      "BC5_UNORM",
      "-m",
      "1",
-     "flat.png"
+     "flat.tga"
     ]
    ],
    "directxtex": {
@@ -1874,7 +1874,7 @@
      "-m",
      "1",
      "-dx9",
-     "flat.png"
+     "flat.tga"
     ]
    ],
    "directxtex": {
@@ -1914,7 +1914,7 @@
      "BC5_SNORM",
      "-m",
      "1",
-     "flat.png"
+     "flat.tga"
     ]
    ],
    "directxtex": {
@@ -1954,7 +1954,7 @@
      "BC6H_UF16",
      "-m",
      "1",
-     "flat.png"
+     "flat.tga"
     ]
    ],
    "directxtex": {
@@ -1995,7 +1995,7 @@
      "-m",
      "1",
      "-dx10",
-     "flat.png"
+     "flat.tga"
     ]
    ],
    "directxtex": {
@@ -2035,7 +2035,7 @@
      "BC7_UNORM",
      "-m",
      "0",
-     "flat.png"
+     "flat.tga"
     ]
    ],
    "directxtex": {
@@ -2117,7 +2117,7 @@
      "1",
      "-pmalpha",
      "-dx10",
-     "flat.png"
+     "flat.tga"
     ]
    ],
    "directxtex": {
@@ -2157,7 +2157,7 @@
      "BC7_UNORM_SRGB",
      "-m",
      "1",
-     "flat.png"
+     "flat.tga"
     ]
    ],
    "directxtex": {
@@ -2195,9 +2195,9 @@
      "array",
      "-o",
      "array.dds",
-     "layer0.png",
-     "layer1.png",
-     "layer2.png"
+     "layer0.tga",
+     "layer1.tga",
+     "layer2.tga"
     ],
     [
      "texconv",
@@ -2384,9 +2384,9 @@
      "array",
      "-o",
      "array.dds",
-     "layer0.png",
-     "layer1.png",
-     "layer2.png"
+     "layer0.tga",
+     "layer1.tga",
+     "layer2.tga"
     ],
     [
      "texconv",
@@ -2573,12 +2573,12 @@
      "cube",
      "-o",
      "cube.dds",
-     "face0.png",
-     "face1.png",
-     "face2.png",
-     "face3.png",
-     "face4.png",
-     "face5.png"
+     "face0.tga",
+     "face1.tga",
+     "face2.tga",
+     "face3.tga",
+     "face4.tga",
+     "face5.tga"
     ],
     [
      "texconv",
@@ -2855,12 +2855,12 @@
      "cube",
      "-o",
      "cube.dds",
-     "face0.png",
-     "face1.png",
-     "face2.png",
-     "face3.png",
-     "face4.png",
-     "face5.png"
+     "face0.tga",
+     "face1.tga",
+     "face2.tga",
+     "face3.tga",
+     "face4.tga",
+     "face5.tga"
     ],
     [
      "texconv",
@@ -3138,12 +3138,12 @@
      "cube",
      "-o",
      "cube.dds",
-     "face0.png",
-     "face1.png",
-     "face2.png",
-     "face3.png",
-     "face4.png",
-     "face5.png"
+     "face0.tga",
+     "face1.tga",
+     "face2.tga",
+     "face3.tga",
+     "face4.tga",
+     "face5.tga"
     ],
     [
      "texconv",
@@ -3240,12 +3240,12 @@
      "cube",
      "-o",
      "cube.dds",
-     "face0.png",
-     "face1.png",
-     "face2.png",
-     "face3.png",
-     "face4.png",
-     "face5.png"
+     "face0.tga",
+     "face1.tga",
+     "face2.tga",
+     "face3.tga",
+     "face4.tga",
+     "face5.tga"
     ],
     [
      "texconv",
@@ -3522,12 +3522,12 @@
      "cube",
      "-o",
      "cube.dds",
-     "face0.png",
-     "face1.png",
-     "face2.png",
-     "face3.png",
-     "face4.png",
-     "face5.png"
+     "face0.tga",
+     "face1.tga",
+     "face2.tga",
+     "face3.tga",
+     "face4.tga",
+     "face5.tga"
     ],
     [
      "texconv",
@@ -3804,18 +3804,18 @@
      "cubearray",
      "-o",
      "cubearray.dds",
-     "face0.png",
-     "face1.png",
-     "face2.png",
-     "face3.png",
-     "face4.png",
-     "face5.png",
-     "face6.png",
-     "face7.png",
-     "face8.png",
-     "face9.png",
-     "face10.png",
-     "face11.png"
+     "face0.tga",
+     "face1.tga",
+     "face2.tga",
+     "face3.tga",
+     "face4.tga",
+     "face5.tga",
+     "face6.tga",
+     "face7.tga",
+     "face8.tga",
+     "face9.tga",
+     "face10.tga",
+     "face11.tga"
     ],
     [
      "texconv",
@@ -4332,18 +4332,18 @@
      "cubearray",
      "-o",
      "cubearray.dds",
-     "face0.png",
-     "face1.png",
-     "face2.png",
-     "face3.png",
-     "face4.png",
-     "face5.png",
-     "face6.png",
-     "face7.png",
-     "face8.png",
-     "face9.png",
-     "face10.png",
-     "face11.png"
+     "face0.tga",
+     "face1.tga",
+     "face2.tga",
+     "face3.tga",
+     "face4.tga",
+     "face5.tga",
+     "face6.tga",
+     "face7.tga",
+     "face8.tga",
+     "face9.tga",
+     "face10.tga",
+     "face11.tga"
     ],
     [
      "texconv",
@@ -4500,10 +4500,10 @@
      "volume",
      "-o",
      "volume.dds",
-     "slice0.png",
-     "slice1.png",
-     "slice2.png",
-     "slice3.png"
+     "slice0.tga",
+     "slice1.tga",
+     "slice2.tga",
+     "slice3.tga"
     ],
     [
      "texconv",
@@ -4630,10 +4630,10 @@
      "volume",
      "-o",
      "volume.dds",
-     "slice0.png",
-     "slice1.png",
-     "slice2.png",
-     "slice3.png"
+     "slice0.tga",
+     "slice1.tga",
+     "slice2.tga",
+     "slice3.tga"
     ],
     [
      "texconv",
@@ -4761,10 +4761,10 @@
      "volume",
      "-o",
      "volume.dds",
-     "slice0.png",
-     "slice1.png",
-     "slice2.png",
-     "slice3.png"
+     "slice0.tga",
+     "slice1.tga",
+     "slice2.tga",
+     "slice3.tga"
     ],
     [
      "texconv",
@@ -4891,10 +4891,10 @@
      "volume",
      "-o",
      "volume.dds",
-     "slice0.png",
-     "slice1.png",
-     "slice2.png",
-     "slice3.png"
+     "slice0.tga",
+     "slice1.tga",
+     "slice2.tga",
+     "slice3.tga"
     ],
     [
      "texconv",

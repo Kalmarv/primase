@@ -5,9 +5,15 @@
 Writes, beside this script, one `<case>.dds` per case below and `directxtex.json`: per case the commands that made it,
 the header choice texconv used (`auto`, `legacy` for -dx9, `dx10` for -dx10) and what DirectXTex's library read from the
 file (directxtex-dump `read`: its TexMetadata, every image's size and pitch, and the sha256 of every image's bytes in
-DirectXTex's order). Source images are generated here (PNG, every image distinct), so nothing else is needed. The tools
+DirectXTex's order). Source images are generated here (TGA, every image distinct), so nothing else is needed. The tools
 are the DirectXTex may2026 release (texconv, texassemble 2026.5.8.1) and directxtex-dump built against its source
 (primase-oracles dumps/directxtex).
+
+A Windows Python, on Windows or under Wine (primase-oracles' `tools/wine/winpy`, with Wine paths). texconv converts
+some formats and makes mips through WIC, and Wine's own WIC fails or differs there (B5G6R5, B5G5R5A1 and R10G10B10A2
+fail; mips differ), so under Wine Microsoft's `windowscodecs.dll` (modding-archive/tools/windowscodecs-10.0.26100.9711)
+must be in the prefix's system32 and chosen with `WINEDLLOVERRIDES=windowscodecs,windowscodecsext=n`: then every
+fixture is the same, byte for byte, as on Windows. (Microsoft's WIC does not decode PNG under Wine, hence TGA sources.)
 """
 
 import argparse
@@ -17,27 +23,22 @@ import os
 import shutil
 import struct
 import subprocess
-import zlib
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
 
-def png(path, w, h, k, alpha=False):
-    """An RGBA8 PNG whose every pixel depends on its position and on the image number `k`."""
-    rows = b""
+def tga(path, w, h, k, alpha=False):
+    """An uncompressed 32-bit BGRA TGA, top row first, whose every pixel depends on its position and on the image number
+    `k`. DirectXTex reads TGA itself, not through WIC, so the sources read the same wherever the tools run."""
+    pixels = bytearray()
     for y in range(h):
-        row = bytearray([0])
         for x in range(w):
             a = ((x + y + k) * 37) & 255 if alpha else 255
-            row += bytes([x * 255 // max(w - 1, 1), y * 255 // max(h - 1, 1), (k * 53 + x * 7 + y * 13) & 255, a])
-        rows += bytes(row)
-
-    def chunk(tag, data):
-        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
-
-    ihdr = struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)
-    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+            pixels += bytes([(k * 53 + x * 7 + y * 13) & 255, y * 255 // max(h - 1, 1), x * 255 // max(w - 1, 1), a])
+    # no ID, no colour map, type 2 (true colour), origin (0, 0), w x h, 32 bits, 8 alpha bits, top-left origin
+    header = struct.pack("<BBBHHBHHHHBB", 0, 0, 2, 0, 0, 0, 0, 0, w, h, 32, 0x28)
+    path.write_bytes(header + bytes(pixels))
 
 
 def dds_1d(path, width, layers):
@@ -72,17 +73,17 @@ def main():
     src = work / "src"
 
     # Sources: a 2D image with odd sides, three array layers, six cube faces twice over, four volume slices, 1D.
-    png(src / "odd.png", 13, 7, 0, alpha=True)
-    png(src / "flat.png", 16, 8, 0, alpha=True)
-    layers = [src / f"layer{i}.png" for i in range(3)]
-    faces = [src / f"face{i}.png" for i in range(12)]
-    slices = [src / f"slice{i}.png" for i in range(4)]
+    tga(src / "odd.tga", 13, 7, 0, alpha=True)
+    tga(src / "flat.tga", 16, 8, 0, alpha=True)
+    layers = [src / f"layer{i}.tga" for i in range(3)]
+    faces = [src / f"face{i}.tga" for i in range(12)]
+    slices = [src / f"slice{i}.tga" for i in range(4)]
     for i, f in enumerate(layers):
-        png(f, 16, 8, 10 + i)
+        tga(f, 16, 8, 10 + i)
     for i, f in enumerate(faces):
-        png(f, 8, 8, 20 + i, alpha=True)
+        tga(f, 8, 8, 20 + i, alpha=True)
     for i, f in enumerate(slices):
-        png(f, 16, 8, 40 + i)
+        tga(f, 16, 8, 40 + i)
     dds_1d(src / "line.dds", 16, 1)
     dds_1d(src / "lines.dds", 16, 2)
 
@@ -100,51 +101,51 @@ def main():
 
     # (case, input, texconv options, header choice)
     cases = [
-        ("2d-rgba8-legacy", src / "odd.png", ["-f", "R8G8B8A8_UNORM", "-m", "0"], "auto"),
-        ("2d-rgba8-dx10", src / "odd.png", ["-f", "R8G8B8A8_UNORM", "-m", "0", "-dx10"], "dx10"),
-        ("2d-rgba8srgb-dx10", src / "odd.png", ["-f", "R8G8B8A8_UNORM_SRGB", "-m", "1"], "auto"),
-        ("2d-rgba8srgb-dx9", src / "odd.png", ["-f", "R8G8B8A8_UNORM_SRGB", "-m", "1", "-dx9"], "legacy"),
-        ("2d-bgra8", src / "odd.png", ["-f", "B8G8R8A8_UNORM", "-m", "0"], "auto"),
-        ("2d-bgrx8", src / "odd.png", ["-f", "B8G8R8X8_UNORM", "-m", "1"], "auto"),
-        ("2d-b5g6r5", src / "odd.png", ["-f", "B5G6R5_UNORM", "-m", "0"], "auto"),
-        ("2d-b5g5r5a1", src / "odd.png", ["-f", "B5G5R5A1_UNORM", "-m", "1"], "auto"),
-        ("2d-b4g4r4a4", src / "odd.png", ["-f", "B4G4R4A4_UNORM", "-m", "1"], "auto"),
-        ("2d-rgb10a2-dx10", src / "odd.png", ["-f", "R10G10B10A2_UNORM", "-m", "1"], "auto"),
-        ("2d-rgb10a2-dx9", src / "odd.png", ["-f", "R10G10B10A2_UNORM", "-m", "1", "-dx9"], "legacy"),
-        ("2d-r8", src / "odd.png", ["-f", "R8_UNORM", "-m", "0"], "auto"),
-        ("2d-rg8", src / "odd.png", ["-f", "R8G8_UNORM", "-m", "1"], "auto"),
-        ("2d-a8", src / "odd.png", ["-f", "A8_UNORM", "-m", "1"], "auto"),
-        ("2d-r16", src / "odd.png", ["-f", "R16_UNORM", "-m", "1"], "auto"),
-        ("2d-rg16", src / "odd.png", ["-f", "R16G16_UNORM", "-m", "1"], "auto"),
-        ("2d-rg8snorm", src / "odd.png", ["-f", "R8G8_SNORM", "-m", "1"], "auto"),
-        ("2d-rgba8snorm", src / "odd.png", ["-f", "R8G8B8A8_SNORM", "-m", "1"], "auto"),
-        ("2d-rg16snorm", src / "odd.png", ["-f", "R16G16_SNORM", "-m", "1"], "auto"),
-        ("2d-r8snorm", src / "odd.png", ["-f", "R8_SNORM", "-m", "1"], "auto"),
-        ("2d-rgba16", src / "odd.png", ["-f", "R16G16B16A16_UNORM", "-m", "1"], "auto"),
-        ("2d-rgba16f", src / "odd.png", ["-f", "R16G16B16A16_FLOAT", "-m", "0"], "auto"),
-        ("2d-rgba32f", src / "odd.png", ["-f", "R32G32B32A32_FLOAT", "-m", "1"], "auto"),
-        ("2d-rg32f", src / "odd.png", ["-f", "R32G32_FLOAT", "-m", "1"], "auto"),
-        ("2d-rg16f", src / "odd.png", ["-f", "R16G16_FLOAT", "-m", "1"], "auto"),
-        ("2d-r32f", src / "odd.png", ["-f", "R32_FLOAT", "-m", "1"], "auto"),
-        ("2d-r16f", src / "odd.png", ["-f", "R16_FLOAT", "-m", "1"], "auto"),
-        ("2d-bc1", src / "odd.png", ["-f", "BC1_UNORM", "-m", "0"], "auto"),
-        ("2d-bc1srgb-dx9", src / "odd.png", ["-f", "BC1_UNORM_SRGB", "-m", "1", "-dx9"], "legacy"),
-        ("2d-bc2", src / "flat.png", ["-f", "BC2_UNORM", "-m", "0"], "auto"),
-        ("2d-bc2-pm", src / "flat.png", ["-f", "BC2_UNORM", "-m", "1", "-pmalpha"], "auto"),
-        ("2d-bc3", src / "flat.png", ["-f", "BC3_UNORM", "-m", "0"], "auto"),
-        ("2d-bc3-pm", src / "flat.png", ["-f", "BC3_UNORM", "-m", "1", "-pmalpha"], "auto"),
-        ("2d-bc3srgb", src / "flat.png", ["-f", "BC3_UNORM_SRGB", "-m", "1"], "auto"),
-        ("2d-bc4", src / "flat.png", ["-f", "BC4_UNORM", "-m", "0"], "auto"),
-        ("2d-bc4-dx9", src / "flat.png", ["-f", "BC4_UNORM", "-m", "1", "-dx9"], "legacy"),
-        ("2d-bc4snorm", src / "flat.png", ["-f", "BC4_SNORM", "-m", "1"], "auto"),
-        ("2d-bc5", src / "flat.png", ["-f", "BC5_UNORM", "-m", "1"], "auto"),
-        ("2d-bc5-dx9", src / "flat.png", ["-f", "BC5_UNORM", "-m", "1", "-dx9"], "legacy"),
-        ("2d-bc5snorm", src / "flat.png", ["-f", "BC5_SNORM", "-m", "1"], "auto"),
-        ("2d-bc6h", src / "flat.png", ["-f", "BC6H_UF16", "-m", "1"], "auto"),
-        ("2d-bc6hs-dx10", src / "flat.png", ["-f", "BC6H_SF16", "-m", "1", "-dx10"], "dx10"),
-        ("2d-bc7", src / "flat.png", ["-f", "BC7_UNORM", "-m", "0"], "auto"),
-        ("2d-bc7-pm-dx10", src / "flat.png", ["-f", "BC7_UNORM", "-m", "1", "-pmalpha", "-dx10"], "dx10"),
-        ("2d-bc7srgb", src / "flat.png", ["-f", "BC7_UNORM_SRGB", "-m", "1"], "auto"),
+        ("2d-rgba8-legacy", src / "odd.tga", ["-f", "R8G8B8A8_UNORM", "-m", "0"], "auto"),
+        ("2d-rgba8-dx10", src / "odd.tga", ["-f", "R8G8B8A8_UNORM", "-m", "0", "-dx10"], "dx10"),
+        ("2d-rgba8srgb-dx10", src / "odd.tga", ["-f", "R8G8B8A8_UNORM_SRGB", "-m", "1"], "auto"),
+        ("2d-rgba8srgb-dx9", src / "odd.tga", ["-f", "R8G8B8A8_UNORM_SRGB", "-m", "1", "-dx9"], "legacy"),
+        ("2d-bgra8", src / "odd.tga", ["-f", "B8G8R8A8_UNORM", "-m", "0"], "auto"),
+        ("2d-bgrx8", src / "odd.tga", ["-f", "B8G8R8X8_UNORM", "-m", "1"], "auto"),
+        ("2d-b5g6r5", src / "odd.tga", ["-f", "B5G6R5_UNORM", "-m", "0"], "auto"),
+        ("2d-b5g5r5a1", src / "odd.tga", ["-f", "B5G5R5A1_UNORM", "-m", "1"], "auto"),
+        ("2d-b4g4r4a4", src / "odd.tga", ["-f", "B4G4R4A4_UNORM", "-m", "1"], "auto"),
+        ("2d-rgb10a2-dx10", src / "odd.tga", ["-f", "R10G10B10A2_UNORM", "-m", "1"], "auto"),
+        ("2d-rgb10a2-dx9", src / "odd.tga", ["-f", "R10G10B10A2_UNORM", "-m", "1", "-dx9"], "legacy"),
+        ("2d-r8", src / "odd.tga", ["-f", "R8_UNORM", "-m", "0"], "auto"),
+        ("2d-rg8", src / "odd.tga", ["-f", "R8G8_UNORM", "-m", "1"], "auto"),
+        ("2d-a8", src / "odd.tga", ["-f", "A8_UNORM", "-m", "1"], "auto"),
+        ("2d-r16", src / "odd.tga", ["-f", "R16_UNORM", "-m", "1"], "auto"),
+        ("2d-rg16", src / "odd.tga", ["-f", "R16G16_UNORM", "-m", "1"], "auto"),
+        ("2d-rg8snorm", src / "odd.tga", ["-f", "R8G8_SNORM", "-m", "1"], "auto"),
+        ("2d-rgba8snorm", src / "odd.tga", ["-f", "R8G8B8A8_SNORM", "-m", "1"], "auto"),
+        ("2d-rg16snorm", src / "odd.tga", ["-f", "R16G16_SNORM", "-m", "1"], "auto"),
+        ("2d-r8snorm", src / "odd.tga", ["-f", "R8_SNORM", "-m", "1"], "auto"),
+        ("2d-rgba16", src / "odd.tga", ["-f", "R16G16B16A16_UNORM", "-m", "1"], "auto"),
+        ("2d-rgba16f", src / "odd.tga", ["-f", "R16G16B16A16_FLOAT", "-m", "0"], "auto"),
+        ("2d-rgba32f", src / "odd.tga", ["-f", "R32G32B32A32_FLOAT", "-m", "1"], "auto"),
+        ("2d-rg32f", src / "odd.tga", ["-f", "R32G32_FLOAT", "-m", "1"], "auto"),
+        ("2d-rg16f", src / "odd.tga", ["-f", "R16G16_FLOAT", "-m", "1"], "auto"),
+        ("2d-r32f", src / "odd.tga", ["-f", "R32_FLOAT", "-m", "1"], "auto"),
+        ("2d-r16f", src / "odd.tga", ["-f", "R16_FLOAT", "-m", "1"], "auto"),
+        ("2d-bc1", src / "odd.tga", ["-f", "BC1_UNORM", "-m", "0"], "auto"),
+        ("2d-bc1srgb-dx9", src / "odd.tga", ["-f", "BC1_UNORM_SRGB", "-m", "1", "-dx9"], "legacy"),
+        ("2d-bc2", src / "flat.tga", ["-f", "BC2_UNORM", "-m", "0"], "auto"),
+        ("2d-bc2-pm", src / "flat.tga", ["-f", "BC2_UNORM", "-m", "1", "-pmalpha"], "auto"),
+        ("2d-bc3", src / "flat.tga", ["-f", "BC3_UNORM", "-m", "0"], "auto"),
+        ("2d-bc3-pm", src / "flat.tga", ["-f", "BC3_UNORM", "-m", "1", "-pmalpha"], "auto"),
+        ("2d-bc3srgb", src / "flat.tga", ["-f", "BC3_UNORM_SRGB", "-m", "1"], "auto"),
+        ("2d-bc4", src / "flat.tga", ["-f", "BC4_UNORM", "-m", "0"], "auto"),
+        ("2d-bc4-dx9", src / "flat.tga", ["-f", "BC4_UNORM", "-m", "1", "-dx9"], "legacy"),
+        ("2d-bc4snorm", src / "flat.tga", ["-f", "BC4_SNORM", "-m", "1"], "auto"),
+        ("2d-bc5", src / "flat.tga", ["-f", "BC5_UNORM", "-m", "1"], "auto"),
+        ("2d-bc5-dx9", src / "flat.tga", ["-f", "BC5_UNORM", "-m", "1", "-dx9"], "legacy"),
+        ("2d-bc5snorm", src / "flat.tga", ["-f", "BC5_SNORM", "-m", "1"], "auto"),
+        ("2d-bc6h", src / "flat.tga", ["-f", "BC6H_UF16", "-m", "1"], "auto"),
+        ("2d-bc6hs-dx10", src / "flat.tga", ["-f", "BC6H_SF16", "-m", "1", "-dx10"], "dx10"),
+        ("2d-bc7", src / "flat.tga", ["-f", "BC7_UNORM", "-m", "0"], "auto"),
+        ("2d-bc7-pm-dx10", src / "flat.tga", ["-f", "BC7_UNORM", "-m", "1", "-pmalpha", "-dx10"], "dx10"),
+        ("2d-bc7srgb", src / "flat.tga", ["-f", "BC7_UNORM_SRGB", "-m", "1"], "auto"),
         ("array-rgba8", array, ["-f", "R8G8B8A8_UNORM", "-m", "0"], "auto"),
         ("array-bc1", array, ["-f", "BC1_UNORM", "-m", "0"], "auto"),
         ("cube-bc3-legacy", cube, ["-f", "BC3_UNORM", "-m", "0"], "auto"),
@@ -196,7 +197,7 @@ def main():
             at += image["slicePitch"]
         assert at == len(data), case["name"]
         case["directxtex"] = meta
-    (HERE / "directxtex.json").write_text(json.dumps(record, indent=1) + "\n", encoding="utf-8")
+    (HERE / "directxtex.json").write_text(json.dumps(record, indent=1) + "\n", encoding="utf-8", newline="\n")
     total = sum(f.stat().st_size for f in HERE.glob("*.dds"))
     print(f"{len(cases)} fixtures, {total} bytes")
 
