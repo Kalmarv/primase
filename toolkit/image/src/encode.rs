@@ -117,7 +117,7 @@ impl EncodeTextures {
 
 /// Bump whenever the same texels and options can give other levels or another reported error: the filter, the
 /// rounding, the encoder's settings, the error's measure. It is also the memo payload's version.
-const ENCODE_VERSION: u32 = 1;
+const ENCODE_VERSION: u32 = 2;
 
 /// The textures converted at once: enough to keep every thread busy, few enough that the new levels held beside the
 /// old ones stay a small part of the world's textures.
