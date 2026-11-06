@@ -469,6 +469,11 @@ and pull request, and `cargo doc` with warnings as errors (docs.rs builds the pu
 
 A commit that raises no version only runs CI. Never release by hand.
 
+release-plz publishes in the order of the crates' normal dependencies. A dev-dependency on another crate of this
+workspace that is not among its normal dependencies is therefore a path with no version (`primase-dds = { path = "../dds" }`,
+not `workspace = true`): cargo leaves it out of the published package instead of looking for that version on crates.io,
+where it may not be yet (`dev_dependencies_outside_the_publish_order_are_paths` in checks/tests/architecture.rs).
+
 A new crate's first version can't come from trusted publishing: the token holder publishes it by hand, then adds its
 trusted-publishing config (workflow `ci.yml`).
 

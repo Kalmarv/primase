@@ -16,6 +16,11 @@
   `oracles.game-code.stuntboost/levels-build26429886`). The build changes two levels: StairsSlide_1's room-bounds collision
   mesh grows from 68 to 80 triangles (one ledge and two ledge corners more) and BoosterLaunching_0's checkpoints are
   `Custom` where they were `Order`; the gates read both as the game does.
+- Release: dev-dependencies on other crates of the workspace that are not among a crate's normal dependencies are
+  paths with no version (primase-frostbite on primase-texcodec, primase-reskate and primase-unity on primase-gltf,
+  primase-texcodec on primase-dds), so publishing never looks for them on crates.io; `release-plz` publishes in the
+  order of normal dependencies only, and 0.2.0's first run stopped at primase-texcodec for want of primase-dds 0.2.0. An
+  architecture test keeps it so.
 
 ## 0.1.0 (2026-11-06)
 

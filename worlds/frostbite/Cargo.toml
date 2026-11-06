@@ -24,7 +24,7 @@ serde_json.workspace = true
 [dev-dependencies]
 primase-foundations = { workspace = true, features = ["compress", "reference-decoder"] }
 primase-testdata.workspace = true
-primase-texcodec.workspace = true
+primase-texcodec = { path = "../../toolkit/texcodec" }
 
 [lints]
 workspace = true

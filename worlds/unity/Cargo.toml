@@ -28,7 +28,7 @@ serde_json.workspace = true
 [dev-dependencies]
 primase-testdata.workspace = true
 sha2.workspace = true
-primase-gltf.workspace = true
+primase-gltf = { path = "../../formats/gltf" }
 
 [lints]
 workspace = true

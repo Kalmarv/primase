@@ -432,6 +432,72 @@ fn edge_allowed(from: &Member, to: &Member, dev: bool) -> bool {
     normal || (dev && from.layer() != "core" && to_layer == "formats")
 }
 
+/// A published crate's dev-dependency on another member that is not among its normal dependencies (direct or through
+/// them) is a path with no version: cargo leaves such a dev-dependency out of the published package, while one with a
+/// version (`workspace = true` gives it the workspace's) must resolve on crates.io when the crate is packaged. The
+/// release (release-plz, CONTRIBUTING.md's Releasing) publishes in the order of normal dependencies only, so the
+/// member may not be out yet: primase-texcodec 0.2.0 failed so, its dev-dependency primase-dds not yet published.
+#[test]
+fn dev_dependencies_outside_the_publish_order_are_paths() {
+    let members = members();
+    let names: BTreeSet<&str> = members.iter().map(|m| m.name.as_str()).collect();
+    let manifests: BTreeMap<&str, toml::Table> = members
+        .iter()
+        .map(|m| {
+            (
+                m.name.as_str(),
+                manifest(&root().join(&m.path).join("Cargo.toml")),
+            )
+        })
+        .collect();
+    let section = |name: &str, section: &str| -> Vec<(String, toml::Value)> {
+        manifests[name]
+            .get(section)
+            .and_then(|d| d.as_table())
+            .map(|t| t.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default()
+    };
+    // a member's normal dependencies on members, direct or through them
+    let normal = |name: &str| -> BTreeSet<String> {
+        let mut seen = BTreeSet::new();
+        let mut todo = vec![name.to_owned()];
+        while let Some(n) = todo.pop() {
+            for (k, _) in section(&n, "dependencies") {
+                if names.contains(k.as_str()) && seen.insert(k.clone()) {
+                    todo.push(k);
+                }
+            }
+        }
+        seen
+    };
+    let mut problems = Vec::new();
+    for m in &members {
+        let published = manifests[m.name.as_str()]["package"]
+            .get("publish")
+            .and_then(|p| p.as_bool())
+            != Some(false);
+        if !published {
+            continue;
+        }
+        let normal = normal(&m.name);
+        for (dep, spec) in section(&m.name, "dev-dependencies") {
+            if !names.contains(dep.as_str()) || normal.contains(&dep) {
+                continue;
+            }
+            let path_only = spec.get("path").is_some()
+                && spec.get("version").is_none()
+                && spec.get("workspace").is_none();
+            if !path_only {
+                problems.push(format!(
+                    "{}: dev-dependency {dep} is not among its normal dependencies: make it `{dep} = {{ path = \"...\" }}`",
+                    m.path
+                ));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
 /// Whether a dependency's manifest entry turns on the feature `feature`.
 fn enables(spec: &toml::Value, feature: &str) -> bool {
     spec.get("features")
