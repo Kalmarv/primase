@@ -57,7 +57,7 @@ ruzstd = { version = "=0.7.3", default-features = false, features = ["std", "has
 libloading = { version = "=0.9.0", default-features = false, features = ["std"] }
 oozextract = { version = "=0.5.7", default-features = false, features = ["verbose_errors"] }
 primase-core = { version = "0.2.0", path = "core" }
-primase-testdata = "0.1.9"
+primase-testdata = "0.1.15"
 primase-texcodec = { version = "0.2.0", path = "toolkit/texcodec" }
 primase-dds = { version = "0.2.0", path = "toolkit/dds" }
 primase-image = { version = "0.2.0", path = "toolkit/image" }

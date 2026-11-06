@@ -1,5 +1,5 @@
 //! The STUNTBOOST reader against the game's own code (`installs.stuntboost`, the install, and
-//! `oracles.game-code.stuntboost/levels`, the game's parsers' dumps of it: `<L>_<N>.json` and `<L>_<N>.tris.bin`),
+//! `oracles.game-code.stuntboost/levels-build26429886`, the game's parsers' dumps of it: `<L>_<N>.json` and `<L>_<N>.tris.bin`),
 //! every level part the oracle dumped.
 //!
 //! - G1: every node name as the game's `ParsedName` reads it (visible, aggregate, bake shadows, inner name, code).
@@ -46,7 +46,7 @@ fn parts(oracle: &Path) -> Vec<(String, u32, Value)> {
 fn inputs() -> Option<(PathBuf, PathBuf)> {
     Some((
         install(Game::Stuntboost)?,
-        oracle(OracleSet::GameCode, Game::Stuntboost, "levels")?,
+        oracle(OracleSet::GameCode, Game::Stuntboost, "levels-build26429886")?,
     ))
 }
 

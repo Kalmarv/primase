@@ -10,7 +10,7 @@ What this crate's real-data tests read, as tests/inputs/mod.rs declares them: th
 
 | key | gate | about | source |
 | --- | --- | --- | --- |
-| `installs.stuntboost` | yes | STUNTBOOST's install folder (Steam buildid 25832744: `Content/Models/Export`) | the user's own install |
+| `installs.stuntboost` | yes | STUNTBOOST's install folder (Steam build 26429886: `Content/Models/Export`) | the user's own install |
 | `scratch.root` | - | where real-data tests write their outputs (the OS temporary folder when unset) | - |
 
 #### Oracle sets (`<oracles.root>/<set>/<game>/`)
@@ -24,6 +24,6 @@ What this crate's real-data tests read, as tests/inputs/mod.rs declares them: th
 | key | status | gate | about | source |
 | --- | --- | --- | --- | --- |
 | `installs.stuntboost/Content/Effects` | live | - | STUNTBOOST's compiled effects (`D2/*.xnb`, `D3/*.xnb`: MonoGame `EffectReader`, MGFX version 12, OpenGL profile): every one is read to its shaders, parameters and passes; worlds/stuntboost/tests/effects.rs | the user's own install |
-| `oracles.game-code.stuntboost/levels` | live | yes | the game's own parsers run over that install: per level part `<L>_<N>.json` (node names as its `ParsedName` reads them; its collision model as `SE.CollisionModel` loads it: meshes, grippable bits, ramps, ledges) and `<L>_<N>.tris.bin` (every collision triangle); worlds/stuntboost/tests/oracle.rs | independent: the game's own code via reflection, the oracle tool kept with the game's private tools |
+| `oracles.game-code.stuntboost/levels-build26429886` | live | yes | the game's own parsers run over that install: per level part `<L>_<N>.json` (node names as its `ParsedName` reads them; its collision model as `SE.CollisionModel` loads it: meshes, grippable bits, ramps, ledges) and `<L>_<N>.tris.bin` (every collision triangle); worlds/stuntboost/tests/oracle.rs | independent: the game's own code via reflection (STUNTBOOST build 26429886), primase-oracles' stuntboost dump |
 
 <!-- end of real-data inputs -->

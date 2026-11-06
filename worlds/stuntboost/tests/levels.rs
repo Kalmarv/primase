@@ -1,5 +1,5 @@
 //! The level listing against the part files the game's dumps cover (`installs.stuntboost`, the install, and
-//! `oracles.game-code.stuntboost/levels`, the game's parsers' dumps of it: `<L>_<N>.json`, one per `Level_<L>_<N>.xnb`
+//! `oracles.game-code.stuntboost/levels-build26429886`, the game's parsers' dumps of it: `<L>_<N>.json`, one per `Level_<L>_<N>.xnb`
 //! file; the dump tool finds the parts by file name, not through the sidecar).
 //!
 //! - L1: every level the listing names has its parts `0..modelCount` dumped, and every dumped level is listed. The
@@ -21,7 +21,7 @@ use serde_json::Value;
 fn l1_the_listing_is_the_levels_the_game_dumped() {
     let (Some(install), Some(oracle)) = (
         install(Game::Stuntboost),
-        oracle(OracleSet::GameCode, Game::Stuntboost, "levels"),
+        oracle(OracleSet::GameCode, Game::Stuntboost, "levels-build26429886"),
     ) else {
         return;
     };

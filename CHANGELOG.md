@@ -12,6 +12,10 @@
   (`ClipLowering::weighted_channels`, `ClipLowering::worst_weighted_error`, `LevelReport::worst_weighted_curve_error`), and
   a ping-pong clip is unrolled into a loop of twice its length (`ClipLowering::ping_pong_unrolled`). Object-reference (PPtr)
   curves, a material or sprite swap, are left out by reason. Before, those clips were refused.
+- primase-stuntboost's gates run on STUNTBOOST build 26429886 (primase-testdata 0.1.15, the game's own dump of it in
+  `oracles.game-code.stuntboost/levels-build26429886`). The build changes two levels: StairsSlide_1's room-bounds collision
+  mesh grows from 68 to 80 triangles (one ledge and two ledge corners more) and BoosterLaunching_0's checkpoints are
+  `Custom` where they were `Order`; the gates read both as the game does.
 
 ## 0.1.0 (2026-11-06)
 
