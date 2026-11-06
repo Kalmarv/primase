@@ -18,7 +18,7 @@ mod images;
 mod inputs;
 
 use images::{Image, hdr, ldr};
-use inputs::{Game, OracleSet, Query, Tool, expect_found, own_scratch, resolve, tool};
+use inputs::{Game, OracleSet, Program, Query, Tool, expect_found, own_scratch, program, resolve};
 use primase_core::{ColorSpace, TexFormat};
 use primase_dds::{AlphaMode, Dds, Shape, WriteHeader, parse, write};
 use primase_foundations::parallel::Threads;
@@ -75,21 +75,27 @@ fn dds(format: TexFormat, width: u32, height: u32, level: Vec<u8>) -> Vec<u8> {
 }
 
 /// texconv's encode of each file (`name`, DDS bytes) in `format` with `args`: the first level of each.
-fn texconv(exe: &Path, dir: &Path, format: &str, args: &[&str], files: &[(String, Vec<u8>)]) -> Vec<Vec<u8>> {
+fn texconv(
+    exe: &Program,
+    dir: &Path,
+    format: &str,
+    args: &[&str],
+    files: &[(String, Vec<u8>)],
+) -> Vec<Vec<u8>> {
     let input = dir.join("in");
     let output = dir.join(format!("{format}{}", args.concat()));
     std::fs::create_dir_all(&input).unwrap();
     std::fs::create_dir_all(&output).unwrap();
-    let mut command = std::process::Command::new(exe);
+    let mut command = exe.command();
     command
         .args(["-nologo", "-nogpu", "-y", "-m", "1", "-f", format])
         .args(args)
         .arg("-o")
-        .arg(&output);
+        .path_arg(&output);
     for (name, bytes) in files {
         let path = input.join(format!("{name}.dds"));
         std::fs::write(&path, bytes).unwrap();
-        command.arg(path);
+        command.path_arg(path);
     }
     let out = command.output().unwrap();
     assert!(
@@ -108,7 +114,7 @@ fn texconv(exe: &Path, dir: &Path, format: &str, args: &[&str], files: &[(String
 }
 
 /// DirectXTex's decode of each DDS file to RGBA32F, from one batch run.
-fn directxtex_decode(dump: &Path, files: &[Vec<u8>]) -> Vec<Vec<f32>> {
+fn directxtex_decode(dump: &Program, files: &[Vec<u8>]) -> Vec<Vec<f32>> {
     let dir = own_scratch("directxtex-decode");
     let mut list = String::new();
     for (i, bytes) in files.iter().enumerate() {
@@ -124,11 +130,7 @@ fn directxtex_decode(dump: &Path, files: &[Vec<u8>]) -> Vec<Vec<f32>> {
     }
     let tsv = dir.join("list.tsv");
     std::fs::write(&tsv, list).unwrap();
-    let out = std::process::Command::new(dump)
-        .arg("batch")
-        .arg(&tsv)
-        .output()
-        .unwrap();
+    let out = dump.command().arg("batch").path_arg(&tsv).output().unwrap();
     assert!(out.status.success(), "directxtex-dump batch: {}", out.status);
     (0..files.len())
         .map(|i| {
@@ -362,7 +364,7 @@ impl Row {
 }
 
 /// Each source encoded in `format` here and with texconv (each of its [`settings`]), all measured.
-fn compare(exe: &Path, dir: &Path, format: TexFormat, sources: &[Source]) -> Vec<Row> {
+fn compare(exe: &Program, dir: &Path, format: TexFormat, sources: &[Source]) -> Vec<Row> {
     let files: Vec<(String, Vec<u8>)> = sources.iter().map(|s| (s.name.clone(), s.file())).collect();
     let theirs: Vec<Vec<Vec<u8>>> = settings(format)
         .iter()
@@ -387,7 +389,7 @@ fn compare(exe: &Path, dir: &Path, format: TexFormat, sources: &[Source]) -> Vec
 }
 
 /// BC1's one bit of alpha: each source encoded here and by texconv, the texels transparent in each.
-fn cutout(exe: &Path, dir: &Path, sources: &[Source]) {
+fn cutout(exe: &Program, dir: &Path, sources: &[Source]) {
     let files: Vec<(String, Vec<u8>)> = sources.iter().map(|s| (s.name.clone(), s.file())).collect();
     let theirs = texconv(exe, dir, "BC1_UNORM", &["-bc", "u"], &files);
     for (s, theirs) in sources.iter().zip(theirs) {
@@ -418,7 +420,7 @@ fn cutout(exe: &Path, dir: &Path, sources: &[Source]) {
 /// biased to bytes, a tie the float rounding of bcdec's interpolation can tip); in DirectXTex to the same floats for BC6H, the same 8-bit levels for BC7, and
 /// within one level for BC1-BC5, whose palette entries DirectXTex does not round (D3D rounds them, as the decoders here
 /// do). Only the channels a format stores are compared (DirectXTex copies BC4's red into green and blue).
-fn decoded_alike(dump: &Path, rows: &[Row]) -> String {
+fn decoded_alike(dump: &Program, rows: &[Row]) -> String {
     let theirs = directxtex_decode(
         dump,
         &rows
@@ -545,7 +547,7 @@ fn for_format(format: TexFormat, sources: &[Source]) -> Vec<Source> {
 
 #[test]
 fn synthetic_images_encode_as_well_as_texconv() {
-    let (Some(exe), Some(dump)) = (tool(Tool::Texconv), tool(Tool::DirectxtexDump)) else {
+    let (Some(exe), Some(dump)) = (program(Tool::Texconv), program(Tool::DirectxtexDump)) else {
         return;
     };
     let dir = own_scratch("texconv-synthetic");
@@ -616,7 +618,7 @@ fn sample(name: String, bytes: &[u8]) -> Option<(TexFormat, Source)> {
 
 #[test]
 fn sekiro_textures_encode_as_well_as_texconv() {
-    let (Some(exe), Some(dump)) = (tool(Tool::Texconv), tool(Tool::DirectxtexDump)) else {
+    let (Some(exe), Some(dump)) = (program(Tool::Texconv), program(Tool::DirectxtexDump)) else {
         return;
     };
     let query = Query::Oracle(OracleSet::Scripts, Game::Sekiro, "pbr");

@@ -1,9 +1,8 @@
 //! directxtex-dump (`tools.directxtex_dump`, primase-oracles' dumps/directxtex): what DirectXTex's own library reads from
 //! a DDS file, and whether it is what this crate reads.
-use crate::inputs::own_scratch;
+use crate::inputs::{Program, own_scratch};
 use primase_dds::{Dds, Shape, to_dxgi};
 use serde_json::Value;
-use std::path::Path;
 
 /// DirectXTex's `TexMetadata` for what was read: arraySize counts cube faces, depth is 1 but for volumes.
 pub fn metadata(d: &Dds) -> [u64; 9] {
@@ -64,7 +63,7 @@ impl Answer {
 
 /// DirectXTex's answers for `files` (each a command, `read` or `read-permissive`, and a file's bytes), from one batch
 /// run in a scratch folder of this call's own, removed when it returns.
-pub fn directxtex(dump: &Path, files: &[(&str, &[u8])]) -> Vec<Answer> {
+pub fn directxtex(dump: &Program, files: &[(&str, &[u8])]) -> Vec<Answer> {
     let dir = own_scratch("directxtex-dds");
     let mut list = String::new();
     for (i, (command, bytes)) in files.iter().enumerate() {
@@ -78,11 +77,7 @@ pub fn directxtex(dump: &Path, files: &[(&str, &[u8])]) -> Vec<Answer> {
     }
     let tsv = dir.join("list.tsv");
     std::fs::write(&tsv, list).unwrap();
-    let out = std::process::Command::new(dump)
-        .arg("batch")
-        .arg(&tsv)
-        .output()
-        .unwrap();
+    let out = dump.command().arg("batch").path_arg(&tsv).output().unwrap();
     assert!(
         out.status.success(),
         "directxtex-dump batch: {}\n{}",

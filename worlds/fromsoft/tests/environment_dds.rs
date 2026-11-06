@@ -19,7 +19,7 @@ use fromsoft_formats::{
     dcx::Decoder,
     tpf::{Package, TextureKind},
 };
-use inputs::{Game as Data, OracleSet, Tool, oodle, oracle, own_scratch, tool};
+use inputs::{Game as Data, OracleSet, Program, Tool, oodle, oracle, own_scratch, program};
 use primase_core::{ColorSpace, TexFormat};
 use primase_dds::{AlphaMode, Dds, Shape, WriteHeader, parse, to_dxgi, write};
 use primase_testdata::gate::{GateReport, Tolerance};
@@ -65,7 +65,7 @@ fn images(d: &Dds) -> Vec<u8> {
 
 /// directxtex-dump's answers for `files`, each a command and a file's bytes, from one batch run: `meta.json`, and
 /// `images.bin` (`read`) or `floats.bin` (`decode`).
-fn directxtex(dump: &Path, files: &[(&str, &[u8])]) -> Result<Vec<(Value, Vec<u8>)>> {
+fn directxtex(dump: &Program, files: &[(&str, &[u8])]) -> Result<Vec<(Value, Vec<u8>)>> {
     let dir = own_scratch("directxtex-environment");
     let mut list = String::new();
     for (i, (command, bytes)) in files.iter().enumerate() {
@@ -79,7 +79,7 @@ fn directxtex(dump: &Path, files: &[(&str, &[u8])]) -> Result<Vec<(Value, Vec<u8
     }
     let tsv = dir.join("list.tsv");
     std::fs::write(&tsv, list)?;
-    let out = std::process::Command::new(dump).arg("batch").arg(&tsv).output()?;
+    let out = dump.command().arg("batch").path_arg(&tsv).output()?;
     if !out.status.success() {
         return Err(format!(
             "directxtex-dump batch: {}\n{}",
@@ -178,7 +178,7 @@ fn class(t: &Texture) -> String {
 /// refuse it) and the permissive one, every other file with the default load. Each answer is recorded in `gate`, and
 /// the agreements counted by how DirectXTex read the file.
 fn compare(
-    dump: &Path,
+    dump: &Program,
     files: &[(String, Vec<u8>)],
     gate: &mut GateReport,
     loads: &mut BTreeMap<&'static str, usize>,
@@ -295,7 +295,7 @@ fn sekiro_environment(census: &Path) -> Result<Option<Environment>> {
 fn sekiro_cubes_and_volumes_read_as_directxtex_reads_them() -> Result<()> {
     let (Some(census), Some(dump)) = (
         oracle(OracleSet::SoulsFormats, Data::Sekiro, "tpf"),
-        tool(Tool::DirectxtexDump),
+        program(Tool::DirectxtexDump),
     ) else {
         return Ok(());
     };
@@ -342,7 +342,7 @@ fn sekiro_cubes_and_volumes_read_as_directxtex_reads_them() -> Result<()> {
 fn elden_environment_textures_read_as_directxtex_reads_them() -> Result<()> {
     let (Some(census), Some(dump), Some(dll)) = (
         oracle(OracleSet::SoulsFormats, Data::Elden, "census"),
-        tool(Tool::DirectxtexDump),
+        program(Tool::DirectxtexDump),
         oodle(Tool::Oodle6),
     ) else {
         return Ok(());
@@ -486,8 +486,8 @@ fn one_level(format: TexFormat, width: u32, height: u32, level: Vec<u8>) -> Resu
 fn sekiro_bc6h_cubes_encode_again_as_well_as_texconv() -> Result<()> {
     let (Some(census), Some(texconv), Some(dump)) = (
         oracle(OracleSet::SoulsFormats, Data::Sekiro, "tpf"),
-        tool(Tool::Texconv),
-        tool(Tool::DirectxtexDump),
+        program(Tool::Texconv),
+        program(Tool::DirectxtexDump),
     ) else {
         return Ok(());
     };
@@ -520,15 +520,15 @@ fn sekiro_bc6h_cubes_encode_again_as_well_as_texconv() -> Result<()> {
     let (input, output) = (dir.join("in"), dir.join("out"));
     std::fs::create_dir_all(&input)?;
     std::fs::create_dir_all(&output)?;
-    let mut command = std::process::Command::new(&texconv);
+    let mut command = texconv.command();
     command
         .args(["-nologo", "-nogpu", "-y", "-m", "1", "-f", "BC6H_UF16", "-o"])
-        .arg(&output);
+        .path_arg(&output);
     for (i, (_, size, floats)) in faces.iter().enumerate() {
         let bytes = floats.iter().flat_map(|v| v.to_le_bytes()).collect();
         let path = input.join(format!("{i}.dds"));
         std::fs::write(&path, one_level(TexFormat::Rgba32Float, *size, *size, bytes)?)?;
-        command.arg(path);
+        command.path_arg(path);
     }
     let out = command.output()?;
     if !out.status.success() {

@@ -1650,9 +1650,9 @@ dependencies = [
 
 [[package]]
 name = "primase-testdata"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3f698232f53d124187a0263220839f05ecebe3b9c7c46f2fa695f3fc844495a"
+checksum = "927002836a1650277562beb832588925775d34f8b7cd17b54cddffbb72b91a44"
 dependencies = [
  "blake3",
  "serde_json",

@@ -9,7 +9,7 @@ mod harness;
 mod inputs;
 
 use harness::{FIELDS, agrees, directxtex, images, metadata};
-use inputs::{Tool, tool};
+use inputs::{Tool, program};
 use primase_core::{ColorSpace, TexFormat};
 use primase_dds::{AlphaMode, Dds, Shape, WriteHeader, from_dxgi, parse, write};
 use primase_testdata::gate::{GateReport, Tolerance};
@@ -116,7 +116,7 @@ fn resource(shape: Shape, format: TexFormat, color_space: ColorSpace, alpha_mode
 /// reads each file this writer writes as this reader reads it.
 #[test]
 fn directxtex_reads_every_file_written_here_as_it_is_read_here() {
-    let Some(dump) = tool(Tool::DirectxtexDump) else {
+    let Some(dump) = program(Tool::DirectxtexDump) else {
         return;
     };
     let shapes = [
@@ -183,7 +183,7 @@ fn directxtex_reads_every_file_written_here_as_it_is_read_here() {
 /// permissive load, which reads it as this reader does.
 #[test]
 fn face_counted_cubes_read_as_directxtex_reads_them_permissively() {
-    let Some(dump) = tool(Tool::DirectxtexDump) else {
+    let Some(dump) = program(Tool::DirectxtexDump) else {
         return;
     };
     let mut files = Vec::new();

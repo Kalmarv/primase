@@ -9,7 +9,7 @@ mod harness;
 mod inputs;
 
 use harness::{agrees, directxtex};
-use inputs::{Game, OracleSet, Query, Tool, expect_found, resolve, tool};
+use inputs::{Game, OracleSet, Query, Tool, expect_found, program, resolve};
 use primase_dds::{HeaderKind, WriteHeader, parse, read, write, write_dx10};
 use primase_testdata::gate::{GateReport, Tolerance};
 use sha2::{Digest, Sha256};
@@ -53,7 +53,7 @@ fn distinct(root: &Path) -> (Vec<(String, Vec<u8>)>, usize) {
 /// arraySize counts faces with its permissive load, which its default load refuses); a file refused here DirectXTex
 /// refuses too, or reads it changed, which the refusal names. Prints how DirectXTex took the files.
 fn against_directxtex(name: &str, files: &[(String, Vec<u8>)]) {
-    let Some(dump) = tool(Tool::DirectxtexDump) else {
+    let Some(dump) = program(Tool::DirectxtexDump) else {
         return;
     };
     let mut gate = GateReport::new(format!("{name} read by DirectXTex"), Tolerance::Exact);
