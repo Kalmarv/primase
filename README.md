@@ -1,6 +1,6 @@
 # primase
 
-[![crates.io: primase-core](https://img.shields.io/crates/v/primase-core?label=primase-core)](https://crates.io/crates/primase-core) [![crates.io: primase-gltf](https://img.shields.io/crates/v/primase-gltf?label=primase-gltf)](https://crates.io/crates/primase-gltf) [![crates.io: primase-reskate](https://img.shields.io/crates/v/primase-reskate?label=primase-reskate)](https://crates.io/crates/primase-reskate) [![docs.rs](https://img.shields.io/docsrs/primase-core)](https://docs.rs/primase-core) [![CI](https://img.shields.io/github/actions/workflow/status/Kalmarv/primase/ci.yml?branch=main&label=CI)](https://github.com/Kalmarv/primase/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/primase-core)](https://crates.io/crates/primase-core) [![docs.rs](https://img.shields.io/docsrs/primase-core)](https://docs.rs/primase-core) [![CI](https://img.shields.io/github/actions/workflow/status/Kalmarv/primase/ci.yml?branch=main&label=CI)](https://github.com/Kalmarv/primase/actions/workflows/ci.yml)
 
 A Rust library for reading 3D game worlds into a shared in-memory world, transforming them with passes, and writing them out as glTF, Blender scenes or skate. maps. It has no command line: a program composes the readers, passes and writers it needs.
 
@@ -35,7 +35,7 @@ On Windows, archives compressed with Oodle are read with the game's own `oo2core
 
 ### Installation
 
-Every package below is published on crates.io, all at one version:
+Add the crates you need from crates.io:
 
 ```sh
 cargo add primase-core primase-meshops
@@ -71,7 +71,7 @@ cargo add primase-core primase-meshops
 | `primase-reskate` | The skate. destination: preparation passes, the ReSkate Studio map writer, compile and post-compile |
 | `primase-blender` | The Blender destination: writer, `.blend` save and Cycles render |
 
-The game and engine format readers, the iridia shader lifter and `primase-foundations` live in their own repositories and are crates.io dependencies at the versions the root `Cargo.toml` names. A program that uses one of them directly together with primase needs a version semver-compatible with primase's, so that cargo resolves the two to one crate and their types meet.
+The game and engine format readers, the iridia shader lifter and `primase-foundations` live in their own repositories and are crates.io dependencies. A program that uses one of them directly together with primase must depend on a version compatible with the one primase uses, or cargo treats the two as different crates.
 
 ### Usage
 
