@@ -4,7 +4,7 @@ use super::state::{AlphaState, PipelineState, PixelState, SlotTexture, TARGETS, 
 use super::vertex::VertexStage;
 use crate::{invalid, materials::LayeredMaterial};
 use fromsoft_formats::Result;
-use iridia::Interface;
+use iridia_interface::Interface;
 use iridia_exec::ProgramShader;
 use iridia_exec::SampledTexture;
 use iridia_exec::{
@@ -46,7 +46,7 @@ pub struct Programs<'a> {
     pub vertex: Option<(&'a primase_core::shader::Shader, &'a StageBinding)>,
     /// The pixel program as the material's stated words specialise it (`core.shader_specialisations`), where it has
     /// one: what it reads decides which vertex inputs the bake feeds.
-    pub specialised: Option<&'a iridia::Program>,
+    pub specialised: Option<&'a iridia_ir::Program>,
 }
 
 /// Evaluated by the toolkit ([`evaluate_raw_with`], one pixel at a time) on the program executor: the lifted program,
@@ -124,18 +124,17 @@ fn lifting(e: iridia_dxbc::Error) -> fromsoft_formats::Error {
 fn evaluation(e: iridia_exec::Error) -> fromsoft_formats::Error {
     invalid("layer bake", e.at, e.detail)
 }
-/// The program `shader` runs. This crate makes its executors with `ProgramShader::new` alone ([`executor`],
-/// [`program_executor`]), which keeps the program; iridia gives `None` only for a program of the IR
-/// (`ProgramShader::from_ir`), which no pass here runs.
-pub(crate) fn lifted_program(shader: &ProgramShader) -> &iridia::Program {
+/// The program `shader` runs. This crate makes its executors from the IR alone ([`executor`], [`program_executor`]),
+/// which keeps the program.
+pub(crate) fn lifted_program(shader: &ProgramShader) -> &iridia_ir::Program {
     shader
-        .program()
-        .expect("ProgramShader::new keeps the program it runs")
+        .ir()
+        .expect("ProgramShader::from_ir keeps the program it runs")
 }
 
 /// A DXBC pixel program's container lifted and ready to run.
 pub(crate) fn executor(bytecode: &[u8]) -> Result<ProgramShader> {
-    ProgramShader::new(iridia_dxbc::lift(bytecode).map_err(lifting)?).map_err(evaluation)
+    ProgramShader::from_ir(primase_core::shader::lift_dxbc(bytecode).map_err(lifting)?).map_err(evaluation)
 }
 
 /// A program's container of `format` (a game's: [`fromsoft_formats::Game::shader_format`]) lifted and ready to run: DXBC
@@ -144,22 +143,22 @@ pub(crate) fn program_executor(
     format: iridia_interface::ShaderFormat,
     bytecode: &[u8],
 ) -> Result<ProgramShader> {
-    program_executor_bound(format, bytecode, &iridia::BoundSizes::new())
+    program_executor_bound(format, bytecode, &iridia_interface::BoundSizes::new())
 }
 
 /// [`program_executor`] with the constant buffers `bound` names bound at the sizes it states (a stage's
-/// [`iridia::BoundSizes::of`]).
+/// [`iridia_interface::BoundSizes::of`]).
 pub(crate) fn program_executor_bound(
     format: iridia_interface::ShaderFormat,
     bytecode: &[u8],
-    bound: &iridia::BoundSizes,
+    bound: &iridia_interface::BoundSizes,
 ) -> Result<ProgramShader> {
     use iridia_interface::ShaderFormat;
     match format {
         ShaderFormat::Dxbc => {
-            ProgramShader::new(iridia_dxbc::lift_with(bytecode, bound).map_err(lifting)?).map_err(evaluation)
+            ProgramShader::from_ir(primase_core::shader::lift_dxbc_with(bytecode, bound).map_err(lifting)?).map_err(evaluation)
         }
-        other => ProgramShader::new(
+        other => ProgramShader::from_ir(
             crate::passes::program_reads::lift_with(other, bytecode, bound)
                 .map_err(|e| invalid("program lift", 0, e))?,
         )
@@ -285,14 +284,14 @@ pub fn refuses_unstated_hour(error: &fromsoft_formats::Error) -> bool {
 }
 
 /// Whether `program` (lifted from the program `interface` describes) reads any word of the constant `c`: the words its
-/// results are made of ([`iridia::WordsRead`]), found by the D3D bind point of `c`'s buffer, since a program lifted again
+/// results are made of ([`iridia_analysis::WordsRead`]), found by the D3D bind point of `c`'s buffer, since a program lifted again
 /// may number its resources otherwise than the stored interface. Every word is read where the value graph cannot be
 /// built or the buffer's bind point is not stated.
-pub(crate) fn reads_constant(program: &iridia::Program, interface: &Interface, c: &ConstantBinding) -> bool {
+pub(crate) fn reads_constant(program: &iridia_ir::Program, interface: &Interface, c: &ConstantBinding) -> bool {
     let Some(point) = interface.resource(c.resource).and_then(|r| r.provenance.d3d) else {
         return true;
     };
-    program.graph().map_or(true, |graph| {
+    iridia_analysis::ProgramGraph::of_program(program).map_or(true, |graph| {
         graph
             .reads
             .reads_at(point.space, point.register, c.offset, c.size)
@@ -303,7 +302,7 @@ pub(crate) fn reads_constant(program: &iridia::Program, interface: &Interface, c
 /// hour of the day the program declares and never reads (Sekiro's programs declare `FC_TimeOfDay` and do not read it):
 /// only a program that reads the hour needs the scene's ([`NO_HOUR`]).
 pub(crate) fn read_words(
-    program: &iridia::Program,
+    program: &iridia_ir::Program,
     interface: &Interface,
     c: &ConstantBinding,
     frame: &FrozenFrame,
@@ -1706,7 +1705,7 @@ mod tests {
         );
         Prepared {
             bytecode: bytes.as_slice().into(),
-            shader: ProgramShader::new(iridia_dxbc::lift(&bytes).unwrap()).unwrap(),
+            shader: ProgramShader::from_ir(primase_core::shader::lift_dxbc(&bytes).unwrap()).unwrap(),
             constants: Constants::new(&Layout::default()),
             textures: BTreeMap::new(),
             alpha: None,
@@ -1866,7 +1865,7 @@ mod tests {
         assert_eq!(texcoord, [Lane::U, Lane::V, Lane::U, Lane::V]);
         let raw = evaluate_raw_with(
             Threads::ONE,
-            &ProgramShader::new(iridia_dxbc::lift(&state.pixel.bytecode).unwrap()).unwrap(),
+            &ProgramShader::from_ir(primase_core::shader::lift_dxbc(&state.pixel.bytecode).unwrap()).unwrap(),
             &state.pixel.constants,
             &state.pixel.evaluated_textures(),
             &state.pixel.evaluated_inputs(),
@@ -1918,7 +1917,7 @@ mod tests {
         let run = |s: &PipelineState| {
             evaluate_raw_with(
                 Threads::ONE,
-                &ProgramShader::new(iridia_dxbc::lift(&s.pixel.bytecode).unwrap()).unwrap(),
+                &ProgramShader::from_ir(primase_core::shader::lift_dxbc(&s.pixel.bytecode).unwrap()).unwrap(),
                 &s.pixel.constants,
                 &s.pixel.evaluated_textures(),
                 &s.pixel.evaluated_inputs(),

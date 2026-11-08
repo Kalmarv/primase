@@ -1,6 +1,6 @@
 //! Why a finished Colour output is not an Albedo bake. This query diagnoses; it never changes output roles.
-use iridia::Program;
-use iridia::flow::{At, Node, Op, Values};
+use iridia_ir::Program;
+use iridia_analysis::flow::{At, Node, Op, Values};
 use primase_core::shader::{Attribute, ConstantRole, InputRole, OutputRole};
 use primase_core::{shader::StageBinding, shader::TextureSource};
 
@@ -37,7 +37,7 @@ pub(super) fn refusal(program: &Program, stage: &StageBinding) -> &'static str {
     for id in values.reached_from(roots) {
         match values.node(id) {
             Node::Global {
-                resource: Some(resource),
+                resource,
                 at: At::Component(word),
             } => {
                 let offset = u64::from(*word) * 4;
@@ -67,8 +67,8 @@ pub(super) fn refusal(program: &Program, stage: &StageBinding) -> &'static str {
             }
             // An indexed resource cannot be assigned to one constant field by a guessed address.
             Node::Global { .. } => unknown = true,
-            Node::Texel { resource, .. } | Node::Query { resource } => {
-                match resource.and_then(|r| stage.textures.iter().find(|t| t.resource == r)) {
+            Node::Texel { resource, .. } | Node::Query { resource, .. } => {
+                match stage.textures.iter().find(|t| t.resource == *resource) {
                     Some(t) => match t.source {
                         TextureSource::Texture { .. } | TextureSource::Default { .. } => {}
                         TextureSource::Frame(_) => scene = true,
@@ -89,7 +89,7 @@ pub(super) fn refusal(program: &Program, stage: &StageBinding) -> &'static str {
                 }
             }
             Node::Op {
-                op: Op::Derivative(..),
+                op: Op::Unary(iridia_ir::Unary::Derivative(..)),
                 ..
             } => scene = true,
             _ => {}
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn material_colour_is_not_silently_promoted_to_albedo() {
-        let p = iridia_dxbc::lift(include_bytes!("../../../../tests/fixtures/colour_material.dxbc")).unwrap();
+        let p = primase_core::shader::lift_dxbc(include_bytes!("../../../../tests/fixtures/colour_material.dxbc")).unwrap();
         let stage = binding(&p);
         assert_eq!(
             refusal(&p, &stage),
@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn colour_reading_the_frame_light_is_scene_dependent() {
-        let p = iridia_dxbc::lift(include_bytes!("../../../../tests/fixtures/colour_scene.dxbc")).unwrap();
+        let p = primase_core::shader::lift_dxbc(include_bytes!("../../../../tests/fixtures/colour_scene.dxbc")).unwrap();
         assert_eq!(
             refusal(&p, &binding(&p)),
             "no albedo output role: scene-dependent Colour (frame, view, object or raster inputs); portable surface terms not established"

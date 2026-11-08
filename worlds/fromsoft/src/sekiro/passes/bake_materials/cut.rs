@@ -1,5 +1,5 @@
 //! The alpha test a program states, carried by the bake where the lowering could not carry it: the value its discard
-//! compares with the material's reference (`tested < reference`, [`iridia::output_uses::alpha_tests`]), evaluated
+//! compares with the material's reference (`tested < reference`, [`iridia_analysis::output_uses::alpha_tests`]), evaluated
 //! texel by texel from what the program itself sampled, becomes the baked albedo's alpha, and the material a mask at
 //! the reference. The program keeps its test off in the bake ([`crate::layer_bake::ALPHA_TEST_POLICY`]), so every
 //! texel's colour is baked, and the cut is the game's own expression rather than one slot's alpha.
@@ -11,8 +11,8 @@
 //! cut.
 use super::pixels::BoundTexture;
 use crate::layer_bake::resolve;
-use iridia::Interface;
-use iridia::output_uses::{AlphaExpr, alpha_tests};
+use iridia_interface::Interface;
+use iridia_analysis::output_uses::{AlphaExpr, alpha_tests};
 use iridia_exec::evaluate::Constants;
 use iridia_exec::{
     AtomicAdd, Error, Execution, ImageAtomic, ImageLoad, ImageQuery, ImageSample, ImageStore, Load,
@@ -77,7 +77,8 @@ impl Compare {
         }) else {
             return Ok(None);
         };
-        let graph = crate::layer_bake::lifted_program(shader).graph()?;
+        let graph = iridia_analysis::ProgramGraph::of_program(crate::layer_bake::lifted_program(shader))
+            .map_err(|e| e.to_string())?;
         let mut tests = alpha_tests(&graph)
             .into_iter()
             .filter(|t| (t.buffer, t.word) == reference_word)

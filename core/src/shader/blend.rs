@@ -15,7 +15,7 @@
 //! What the program reads besides the texture samples is answered by the binding's own words
 //! ([`StageBinding::known_words`]) and the host's freeze: constant words of runtime roles the host holds still, and what
 //! each pixel input lane is (a lane of a stream of the mesh, or a word every pixel of the draw is given). A value made
-//! of those words alone is evaluated with the program's own operations (`iridia_exec::value`), bit for bit; one the
+//! of those words alone is evaluated with the program's own operations (`iridia_exec_ir::value`), bit for bit; one the
 //! freeze does not answer is refused, naming its node.
 //!
 //! The reading states what core's numeric rules make of it exactly ([`crate::layered`]'s expression rules: each
@@ -23,11 +23,11 @@
 //! filtering: a sample is the texel the consumer's sampler gives.
 use std::collections::{BTreeMap, BTreeSet};
 
-use iridia::Program;
-use iridia::blend::{Over, Scalar, Term as Op};
-use iridia::flow::{At, Node, NodeId, Read, Values};
-use iridia_exec::value::{Evaluated, Evaluator};
+use iridia_analysis::blend::{Over, Scalar, Term as Op};
+use iridia_analysis::flow::{At, Node, NodeId, Read, Values};
+use iridia_exec_ir::value::{Evaluated, Evaluator};
 use iridia_interface::{AddressMode, ResourceId, ResourceKind};
+use iridia_ir::Program;
 use serde::Serialize;
 
 use super::surface::Base;
@@ -127,13 +127,15 @@ fn node_kind(node: &Node) -> String {
         },
         Node::Query { .. } => "query".into(),
         Node::Op { op, .. } => format!("op {}", op_kind(op)),
+        Node::Counter { .. } => "counter".into(),
+        Node::Undef => "undefined value".into(),
         Node::Merge { .. } => "merge".into(),
         Node::Loop { .. } => "loop".into(),
     }
 }
 
 /// An operation's kind without its operands' details.
-fn op_kind(op: &iridia::flow::Op) -> String {
+fn op_kind(op: &iridia_analysis::flow::Op) -> String {
     let full = format!("{op:?}");
     full.split('(').next().unwrap_or(&full).to_owned()
 }
@@ -186,7 +188,7 @@ impl<L: FnMut(NodeId, &Node, &[u32]) -> Option<u32>> Reader<'_, L> {
         }
         match node {
             Node::Texel {
-                resource: Some(resource),
+                resource,
                 lane,
                 read: Read::Sample,
                 coordinate,
@@ -489,19 +491,17 @@ pub fn read_layered_albedo(
                     InputLink::Stream { .. } => None,
                 }
             }
-            Node::Global {
-                resource: Some(resource),
-                at: place,
-            } => {
+            Node::Global { resource, at: place } => {
                 let r = interface.resource(*resource)?;
                 if !matches!(r.kind, ResourceKind::ConstantBuffer { .. }) {
                     return None;
                 }
                 let byte = match place {
                     At::Component(word) => word.checked_mul(4)?,
-                    // a constant buffer's rows of four words, indexed from its start
-                    At::Indexed { lane, .. } => match at {
-                        [row] => row.checked_mul(16)?.checked_add(lane.checked_mul(4)?)?,
+                    // the word at index 0 and the bytes each step of the one index moves (a constant buffer's rows of
+                    // four words are 16 apart)
+                    At::Indexed { word, stride, .. } => match at {
+                        [index] => word.checked_mul(4)?.checked_add(index.checked_mul(*stride)?)?,
                         _ => return None,
                     },
                 };
@@ -515,7 +515,7 @@ pub fn read_layered_albedo(
         stage,
         freeze,
         values: &values,
-        evaluator: Evaluator::new(&values, program.modes.flush_denormals, leaf),
+        evaluator: Evaluator::new(&values, program.float.f32 == iridia_ir::Denormals::Flush, leaf),
     };
 
     // under each lane, the chain; its texture layers and weights, the same in the three lanes

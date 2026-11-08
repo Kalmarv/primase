@@ -140,7 +140,7 @@ fn bits(values: &[f32]) -> ConstantRole {
 
 /// A program's container lifted and ready to run.
 fn executor(bytes: &[u8]) -> ProgramShader {
-    ProgramShader::new(iridia_dxbc::lift(bytes).unwrap()).unwrap()
+    ProgramShader::from_ir(primase_core::shader::lift_dxbc(bytes).unwrap()).unwrap()
 }
 
 /// Every constant of the resolved stage as (buffer, name, byte offset, bytes, role), in buffer and offset order.
@@ -638,7 +638,7 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
             .unwrap()
             .0[0];
         assert_eq!(facts.shader, Some(shader));
-        assert_eq!(facts.hash, Some(iridia::source_hash(PROGRAM)));
+        assert_eq!(facts.hash, Some(iridia_ir::source_hash(PROGRAM)));
         assert_eq!(facts.stage, Stage::Pixel);
         assert!(facts.instruction_count.unwrap().count > 0);
         assert_eq!(
@@ -1379,7 +1379,7 @@ fn an_elden_ring_palette_is_bound_larger_than_declared_and_sekiros_states_none()
     let resolve =
         |shader: Shader| primase_fromsoft::layer_bake::resolve::resolve_vertex(&shader, entity).unwrap();
     let dxil = {
-        let program = iridia_dxil::lift(SKIN_DXIL_PROGRAM).unwrap();
+        let program = primase_core::shader::lift_dxil(SKIN_DXIL_PROGRAM).unwrap();
         Shader {
             format: ShaderFormat::Dxil,
             bytecode: SKIN_DXIL_PROGRAM.to_vec(),
@@ -1792,7 +1792,7 @@ fn alpha_programs(entry: &str) -> Vec<(&'static str, ProgramShader)> {
         ("dxbc", executor(dxbc)),
         (
             "dxil",
-            ProgramShader::new(iridia_dxil::lift(dxil).unwrap()).unwrap(),
+            ProgramShader::from_ir(primase_core::shader::lift_dxil(dxil).unwrap()).unwrap(),
         ),
     ]
 }

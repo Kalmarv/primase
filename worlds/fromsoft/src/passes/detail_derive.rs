@@ -21,7 +21,7 @@
 //! constant is compared with the material word it reads ([`FieldComparison`]).
 use std::collections::BTreeMap;
 
-use iridia::ResourceKind;
+use iridia_interface::ResourceKind;
 use iridia_exec::ImageSample;
 use iridia_exec::probe::{AnsweredReads, affine_uv};
 use primase_core::detail::{
@@ -154,8 +154,8 @@ fn outputs(probe: &ProgramProbe) -> Result<Outputs, String> {
 /// [`outputs`] from the program's output `varyings` and the binding's `bindings` of them: each role the equation reads
 /// on the lanes it reads them, the alpha's lane where it has a role (`Coverage` or `Opacity`, one lane); a lane with no
 /// role (`Unknown`) is left out, any other role refused.
-fn outputs_of(varyings: &[iridia::Varying], bindings: &[OutputBinding]) -> Result<Outputs, String> {
-    let register = |label: &iridia::Label| -> Result<usize, String> {
+fn outputs_of(varyings: &[iridia_interface::Varying], bindings: &[OutputBinding]) -> Result<Outputs, String> {
+    let register = |label: &iridia_interface::Label| -> Result<usize, String> {
         varyings
             .iter()
             .find(|v| v.label == *label)
@@ -1793,7 +1793,7 @@ fn frozen(
 }
 
 /// Whether `resource` is a texture (a texture slot's register is its own, apart from the buffers' and samplers').
-fn texture_slot(resource: &iridia::Resource) -> bool {
+fn texture_slot(resource: &iridia_interface::Resource) -> bool {
     matches!(resource.kind, ResourceKind::Texture { .. })
 }
 
@@ -2462,7 +2462,7 @@ fn roles_of(probe: &mut ProgramProbe, outputs: Outputs) -> Result<SlotRoles, Str
 mod tests {
     use super::*;
     use crate::game::Shading;
-    use iridia::Label;
+    use iridia_interface::Label;
     use iridia_interface::{D3dSignature, ScalarType, SystemValue, Value, Varying, VaryingProvenance};
 
     fn target(n: u32) -> Label {

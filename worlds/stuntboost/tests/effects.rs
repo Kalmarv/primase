@@ -12,6 +12,7 @@ mod inputs;
 use std::path::{Path, PathBuf};
 
 use inputs::{Game, install_file};
+use iridia_naga::{BindingPlan, Pipeline, Profile as WgslProfile, wgsl_for};
 use monogame_formats::mgfx::{Effect, Profile, Stage};
 use monogame_formats::xnb::Xnb;
 
@@ -137,7 +138,7 @@ fn e2_every_shader_lifts() {
                 Err(e) => invalid.push(format!("{name} shader {index}: {e}")),
                 Ok(program) => {
                     programs += 1;
-                    if let Err(problems) = program.validate() {
+                    if let Err(problems) = iridia_ir::validate(&program) {
                         invalid.push(format!(
                             "{name} shader {index}: {}",
                             problems
@@ -146,10 +147,12 @@ fn e2_every_shader_lifts() {
                                 .collect::<Vec<_>>()
                                 .join("; ")
                         ));
-                    } else if let Err(e) = iridia::emit::wgsl(&program) {
+                    } else if let Err(e) = BindingPlan::d3d(&program.interface).and_then(|plan| {
+                        wgsl_for(&program, &WgslProfile::NAGA, &Pipeline { plan, feeds: None }).map_err(|e| e.0)
+                    }) {
                         invalid.push(format!("{name} shader {index}: {e}"));
                     }
-                    if program.stage == iridia::Stage::Vertex {
+                    if program.stage == iridia_interface::Stage::Vertex {
                         assert!(
                             program.notes.iter().any(|n| n.contains("posFixup")),
                             "{name} shader {index}: the clip-space fix is not noted"
@@ -195,7 +198,7 @@ fn e3_every_shader_compiles_on_the_executor() {
         for index in 0..effect.shaders.len() {
             let program = primase_monogame::programs::program(&effect, index).unwrap();
             programs += 1;
-            if let Err(e) = iridia_exec::Executable::new(&program) {
+            if let Err(e) = iridia_exec::Executable::from_ir(&program) {
                 refused
                     .entry(e.detail.clone())
                     .or_default()

@@ -12,7 +12,7 @@ use primase_stuntboost::passes::{Baked, LowerStuntboostMaterials, ResolveStuntbo
 use primase_stuntboost::{levels, read_level};
 // The GLSL source has no D3D signature. The executor's register API needs explicit
 // test input/output rows, assigned in interface order on both copies, without changing IR.
-fn execution(mut program: iridia::Program) -> ProgramShader {
+fn execution(mut program: iridia_ir::Program) -> ProgramShader {
     for (output, varyings) in [
         (false, &mut program.interface.inputs),
         (true, &mut program.interface.outputs),
@@ -26,7 +26,7 @@ fn execution(mut program: iridia::Program) -> ProgramShader {
             });
         }
     }
-    ProgramShader::new(program).unwrap()
+    ProgramShader::from_ir(program).unwrap()
 }
 #[test]
 fn every_resolved_level_material_matches_original_execution_on_sampled_inputs() {
@@ -53,12 +53,12 @@ fn every_resolved_level_material_matches_original_execution_on_sampled_inputs() 
             .run(&mut world, &mut PassLog::default())
             .unwrap();
         for (_, lift) in world.iter::<LiftedShader>() {
-            before_all.insert(format!("{:?}", lift.0.module));
+            before_all.insert(iridia_ir::text::print(&lift.0.entry));
         }
         for (_, set) in world.iter::<primase_core::shader::ShaderSpecialisations>() {
             for stage in &set.0 {
                 if let Some(program) = &stage.program {
-                    after_all.insert(format!("{:?}", program.module));
+                    after_all.insert(iridia_ir::text::print(&program.entry));
                 }
             }
         }
@@ -85,8 +85,8 @@ fn every_resolved_level_material_matches_original_execution_on_sampled_inputs() 
             let stage = binding.stage(Stage::Pixel).unwrap();
             let source = &world.get::<LiftedShader>(stage.shader).unwrap().0;
             let known = stage.known_words();
-            before.insert(format!("{:?}", source.module));
-            let result = match iridia::specialise::specialise(source, &known) {
+            before.insert(iridia_ir::text::print(&source.entry));
+            let result = match iridia_passes::specialise(source, &known).map_err(|e| e.to_string()) {
                 Ok(r) => r,
                 Err(why) => {
                     *refused.entry(why.clone()).or_default() += 1;
@@ -98,7 +98,7 @@ fn every_resolved_level_material_matches_original_execution_on_sampled_inputs() 
                     continue;
                 }
             };
-            after.insert(format!("{:?}", result.program.module));
+            after.insert(iridia_ir::text::print(&result.program.entry));
             let dropped = result
                 .unread
                 .iter()

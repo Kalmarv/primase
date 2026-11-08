@@ -26,7 +26,7 @@ pub struct Shader {
 /// to [`super::ShaderSpecialisations`] or a consumer's explicit derivation mechanism.
 /// Consumers may use this instead of re-lifting.
 #[derive(Clone, Debug)]
-pub struct LiftedShader(pub std::sync::Arc<iridia::Program>);
+pub struct LiftedShader(pub std::sync::Arc<iridia_ir::Program>);
 
 impl Component for LiftedShader {
     const NAME: &'static str = "core.lifted_shader";
@@ -36,7 +36,7 @@ impl Component for LiftedShader {
         if self.0.interface != shader.interface || self.0.stage != shader.interface.stage {
             return Err("lifted shader differs from the original shader interface".into());
         }
-        self.0.validate().map(|_| ()).map_err(|e| format!("{e:?}"))
+        iridia_ir::validate(&self.0).map_err(|e| format!("{e:?}"))
     }
     fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
         crate::world::Linearity::Invariant
@@ -193,29 +193,39 @@ mod lifted_tests {
     use super::*;
     #[test]
     fn an_exact_lift_requires_its_original_interface() {
-        let program = iridia::Program {
-            module: naga::front::wgsl::parse_str("@fragment fn main() {}").unwrap(),
-            stage: iridia::Stage::Pixel,
-            entry: "main".into(),
+        let program = iridia_ir::Program {
+            stage: iridia_ir::interface::Stage::Pixel,
+            entry: iridia_ir::Function {
+                name: "main".into(),
+                values: vec![],
+                vars: vec![],
+                queries: vec![],
+                body: iridia_ir::Body::Regions(iridia_ir::Region {
+                    nodes: vec![],
+                    end: Some(iridia_ir::End::Return),
+                }),
+            },
+            patch: None,
+            workgroup: None,
             interface: Interface {
-                stage: iridia::Stage::Pixel,
+                stage: iridia_interface::Stage::Pixel,
                 inputs: vec![],
                 outputs: vec![],
                 resources: vec![],
                 facts: iridia_interface::StageFacts::None,
             },
-            bindings: vec![],
-            conventions: iridia::Conventions::D3D,
-            modes: Default::default(),
-            notes: vec![],
-            provenance: iridia::Provenance {
+            conventions: iridia_ir::Conventions::D3D,
+            float: iridia_ir::FloatEnv::default(),
+            provenance: iridia_ir::Provenance {
                 format: ShaderFormat::Glsl,
                 target: "fixture".into(),
                 lifter: "fixture".into(),
                 lifter_version: 1,
                 source_hash: None,
                 instruction_count: None,
+                policies: vec![],
             },
+            notes: vec![],
         };
         let mut world = crate::World::new();
         let e = world.spawn();
@@ -230,7 +240,7 @@ mod lifted_tests {
             },
         );
         assert!(lifted.verify(e, &world).is_ok());
-        world.get_mut::<Shader>(e).unwrap().interface.stage = iridia::Stage::Vertex;
+        world.get_mut::<Shader>(e).unwrap().interface.stage = iridia_interface::Stage::Vertex;
         assert!(lifted.verify(e, &world).is_err());
     }
 }

@@ -40,8 +40,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iridia::WordsRead;
-use iridia::flow::{At, Node, Values};
+use iridia_analysis::WordsRead;
+use iridia_analysis::flow::{At, Node, Values};
 use iridia_exec::probe::{BufferReads, ProbeRun, VertexProbe};
 use iridia_interface::{
     BufferKind, Interface, ResourceId, ResourceKind, ScalarType, ShaderFormat, Stage, SystemValue,
@@ -274,10 +274,9 @@ pub fn probe_tables_with(
         return Err("the program is not DXIL".into());
     }
     let program =
-        iridia_dxil::lift(&shader.bytecode).map_err(|e| format!("the program does not lift: {e}"))?;
-    let probe = VertexProbe::new(program)?;
-    // `VertexProbe::new` makes its executor with `ProgramShader::new`, which keeps the program it runs
-    let program = probe.program().ok_or("the probe keeps no program")?;
+        primase_core::shader::lift_dxil(&shader.bytecode).map_err(|e| format!("the program does not lift: {e}"))?;
+    let probe = VertexProbe::from_ir(program)?;
+    let program = probe.ir().ok_or("the probe keeps no program")?;
     let iface = &program.interface;
     let pass = pass_buffer(iface).ok_or("the lifted program has no constant buffer at register 4")?;
     // one run: the instance, what the records say, the instance base word, what the matrix table answers with, and the
@@ -583,7 +582,7 @@ fn index_constants(values: &Values, iface: &Interface, table: ResourceId) -> BTr
         .into_iter()
         .filter_map(|id| match values.node(id) {
             Node::Global {
-                resource: Some(resource),
+                resource,
                 at: At::Indexed { index, .. },
             } if *resource == table => Some(index.clone()),
             _ => None,

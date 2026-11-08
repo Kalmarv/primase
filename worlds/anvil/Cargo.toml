@@ -18,7 +18,8 @@ primase-core.workspace = true
 primase-foundations = { workspace = true, features = ["compress"] }
 primase-image.workspace = true
 iridia-dxbc.workspace = true
-iridia.workspace = true
+iridia-analysis.workspace = true
+iridia-ir.workspace = true
 iridia-exec.workspace = true
 primase-meshops.workspace = true
 serde_json.workspace = true
@@ -27,7 +28,7 @@ serde_json.workspace = true
 dxcontainer.workspace = true
 primase-testdata.workspace = true
 primase-texcodec.workspace = true
-iridia.workspace = true
+iridia-naga.workspace = true
 sha2.workspace = true
 
 [lints]

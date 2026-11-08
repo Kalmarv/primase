@@ -9,6 +9,7 @@ mod derivation;
 pub mod encoding;
 mod facts;
 mod input_fallback;
+mod lift;
 mod lights;
 mod program;
 mod program_frame;
@@ -32,6 +33,7 @@ pub use lights::{
     LightField, LightIndices, LightListPart, LightLookup, LightTable, LightTableKind, LightValue, ListBits,
     ListConstant, ListUnknown, LocalShadow, LocalShadows, PackedLightLists, PackedLights, pack_light_lists,
 };
+pub use lift::{lift_dxbc, lift_dxbc_with, lift_dxil, lift_dxil_with};
 pub use program::{LiftedShader, Shader};
 pub use program_frame::{ProgramFrame, SpatialKind};
 pub use roles::{

@@ -25,7 +25,7 @@
 //!   `primase-oracles/unity/global-textures`, a float and a float4 on 6000.6.4f1), and one whose value the stored
 //!   scripts do not decide is `Unknown` with why; anything else `Unknown` with the
 //!   reason, struct (instancing) fields included. Only the bytes the program reads are bound
-//!   ([`iridia::WordsRead`] of the lifted program: the words its outputs, discards and writes are made of; a
+//!   ([`iridia_analysis::WordsRead`] of the lifted program: the words its outputs, discards and writes are made of; a
 //!   program whose value graph cannot be followed has every byte bound, counted): a field or part it does not read is
 //!   left out, counted,
 //!   and the bytes between the fields it reads are `Unknown` ("the player stores no field for them"). A buffer the player
@@ -61,8 +61,8 @@
 //!   winding, `ZClip`, alpha-to-coverage and the conservative flag.
 use std::collections::BTreeMap;
 
-use iridia::matrix::lines_at;
-use iridia::{ProgramGraph, WordsRead};
+use iridia_analysis::matrix::lines_at;
+use iridia_analysis::{GraphError, ProgramGraph, WordsRead};
 use iridia_interface::{
     Blend, BlendEquation, BlendFactor, BlendOp, Compare, Cull, D3dClass, DepthBias, DepthState, Interface,
     RenderState, SamplerState, ShaderFormat, Stage, Stencil, StencilFace, StencilOp, SystemValue,
@@ -937,7 +937,10 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
         );
         let mut shaders: BTreeMap<std::sync::Arc<[u8]>, Result<Entity, String>> = BTreeMap::new();
         // each program's value graph and the constants it reads, taken when it is lifted, or why the graph could not be
-        let mut graph_of: BTreeMap<Entity, Result<ProgramGraph, String>> = BTreeMap::new();
+        let mut graph_of: BTreeMap<Entity, Result<ProgramGraph, GraphError>> = BTreeMap::new();
+        let not_lifted = GraphError::Walk {
+            reason: "the program was not lifted".into(),
+        };
         // The source describes bare vertex UV copies for a consumer that cannot execute that stage.
         let mut vertex_programs = BTreeMap::new();
         let scene = self.scene.then(|| SceneKeywords::read(world));
@@ -1003,11 +1006,11 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
                     continue;
                 };
                 if !shaders.contains_key(&variant.code) {
-                    let made = match iridia_dxbc::lift(&variant.code) {
+                    let made = match primase_core::shader::lift_dxbc(&variant.code) {
                         Err(e) => Err(format!("a program the lifter refuses: {}", e.group())),
                         Ok(program) => {
                             let e = world.spawn();
-                            let graph = program.graph();
+                            let graph = ProgramGraph::of_program(&program);
                             if let Err(why) = &graph {
                                 *counts
                                     .entry(format!(
@@ -1051,8 +1054,8 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
                             &interface,
                             match graph_of.get(&shader) {
                                 Some(Ok(graph)) => Ok(graph),
-                                Some(Err(why)) => Err(why.as_str()),
-                                None => Err("the program was not lifted"),
+                                Some(Err(why)) => Err(why),
+                                None => Err(&not_lifted),
                             },
                             chosen.vertex.is_some(),
                             &globals,
@@ -1125,7 +1128,7 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
 fn replacement_inputs(
     stages: &mut [StageBinding],
     pixel_interface: &Interface,
-    vertex_programs: &BTreeMap<Entity, iridia::Program>,
+    vertex_programs: &BTreeMap<Entity, iridia_ir::Program>,
     counts: &mut BTreeMap<String, u64>,
 ) {
     let vertex = stages.iter().find(|s| s.stage == Stage::Vertex).cloned();
@@ -1164,7 +1167,7 @@ impl ResolveUnityShaders {
         stage: Stage,
         shader: Entity,
         interface: &Interface,
-        graph: Result<&ProgramGraph, &str>,
+        graph: Result<&ProgramGraph, &GraphError>,
         vertex_bound: bool,
         globals: &UnityShaderGlobals,
         counts: &mut BTreeMap<String, u64>,
@@ -1797,8 +1800,8 @@ mod tests {
     /// reads every lane of rows 0 and 1 and the x and y lanes of row 2.
     #[test]
     fn only_the_bytes_the_program_reads_are_bound() {
-        let program = iridia_dxbc::lift(include_bytes!("../../tests/fixtures/modes.dxbc")).unwrap();
-        let reads = program.constant_reads().unwrap();
+        let program = primase_core::shader::lift_dxbc(include_bytes!("../../tests/fixtures/modes.dxbc")).unwrap();
+        let reads = WordsRead::of_program(&program).unwrap();
         let parameters = Parameters {
             constant_buffers: vec![ConstantBuffer {
                 name: "UnityPerCamera".into(),
@@ -2479,7 +2482,7 @@ mod tests {
     /// the others Unknown with why; a depth output is none.
     #[test]
     fn a_lifted_pixel_programs_targets_have_roles() {
-        let program = iridia_dxbc::lift(LIFTED).unwrap();
+        let program = primase_core::shader::lift_dxbc(LIFTED).unwrap();
         let roles: Vec<OutputRole> = output_bindings(&program.interface)
             .into_iter()
             .map(|o| o.role)

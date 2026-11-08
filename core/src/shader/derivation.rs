@@ -29,7 +29,7 @@ pub struct DerivedStage {
     pub stage: StageBinding,
     /// The render state it is drawn with.
     pub state: RenderState,
-    pub program: Arc<iridia::Program>,
+    pub program: Arc<iridia_ir::Program>,
     /// What the derivation cut from the source program or leaves unresolved, and which source it was derived from.
     pub notes: Vec<String>,
     /// A per-vertex program supplying one of `program`'s inputs, when the derivation needs one.
@@ -44,7 +44,7 @@ pub struct DerivedInput {
     pub target: Label,
     /// The derivation's name and version, its producer's.
     pub name: String,
-    pub program: Arc<iridia::Program>,
+    pub program: Arc<iridia_ir::Program>,
     /// What the derivation cut from the source program or leaves unresolved, and which source it was derived from.
     pub notes: Vec<String>,
     /// Its inputs by role.
@@ -94,7 +94,7 @@ impl Component for ShaderDerivation {
         if derived.program.stage != derived.stage.stage {
             return Err("derived program is not a program of its stage's kind".into());
         }
-        derived.program.validate().map_err(|e| format!("{e:?}"))?;
+        iridia_ir::validate(&derived.program).map_err(|e| format!("{e:?}"))?;
         if let Some(input) = &derived.vertex_input {
             if input.name.is_empty() {
                 return Err("derived input names no derivation".into());
@@ -108,7 +108,7 @@ impl Component for ShaderDerivation {
             {
                 return Err("derived input supplies no input of the derived program".into());
             }
-            input.program.validate().map_err(|e| format!("{e:?}"))?;
+            iridia_ir::validate(&input.program).map_err(|e| format!("{e:?}"))?;
         }
         Ok(())
     }

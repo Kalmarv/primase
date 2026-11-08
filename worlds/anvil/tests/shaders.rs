@@ -61,7 +61,7 @@ fn every_container_of_the_shader_pack() {
         if stage != "pixel" {
             continue;
         }
-        let lifted = match iridia_dxbc::lift(c) {
+        let lifted = match primase_core::shader::lift_dxbc(c) {
             Ok(_) => "lifted".to_owned(),
             Err(e) => kind(&e.detail),
         };

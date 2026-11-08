@@ -9,7 +9,7 @@ use crate::materials::{Definition, Material, engine_alpha_reference};
 use crate::passes::program_reads::{self, Reads, SlotRead};
 use crate::sekiro::source::{MaterialShader, ShaderBundle, ShaderStage};
 use fromsoft_formats::metaparam::texture_number;
-use iridia::output_uses::{AlphaExpr, AlphaTest, Known, alpha_tests};
+use iridia_analysis::output_uses::{AlphaExpr, AlphaTest, Known, alpha_tests};
 use iridia_interface::{ResourceId, ResourceKind, Stage};
 use primase_core::shader::{Attribute, InputRole, ShaderBinding, StageBinding};
 use primase_core::{Entity, World};
@@ -268,7 +268,7 @@ fn programs(bundle: &ShaderBundle, name: String) -> Result<Programs, Unread> {
     let vertex = program_reads::lift(vertex.format, &vertex.code).map_err(unread)?;
     let reads = program_reads::read(&pixel, &vertex, meta).map_err(unread)?;
     // the program's own discards, where its graph can be followed
-    let (tests, interface) = match pixel.graph() {
+    let (tests, interface) = match iridia_analysis::ProgramGraph::of_program(&pixel) {
         Ok(graph) => (alpha_tests(&graph), graph.interface),
         Err(_) => (Vec::new(), pixel.interface.clone()),
     };

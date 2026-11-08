@@ -110,8 +110,8 @@ dependencies = [
 
 [[package]]
 name = "anvil-formats"
-version = "0.5.1"
-source = "git+https://github.com/Kalmarv/anvil-formats?rev=ffdff2260826af7963e6fec57daed51833e07a2b#ffdff2260826af7963e6fec57daed51833e07a2b"
+version = "0.2.1"
+source = "git+https://github.com/Kalmarv/anvil-formats?rev=02dd926c7e388cad2de4414dcd7c32c416faa536#02dd926c7e388cad2de4414dcd7c32c416faa536"
 dependencies = [
  "dxcontainer",
  "primase-foundations",
@@ -840,7 +840,7 @@ dependencies = [
 [[package]]
 name = "iridia"
 version = "0.6.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=fd7fd5a21fc47c9e71f14827d32aa09cb773639f#fd7fd5a21fc47c9e71f14827d32aa09cb773639f"
+source = "git+https://github.com/Kalmarv/iridia?rev=da3ebb4e894de346c45cf71f89bddbe904bd453a#da3ebb4e894de346c45cf71f89bddbe904bd453a"
 dependencies = [
  "iridia-interface",
  "iridia-ir",
@@ -853,7 +853,7 @@ dependencies = [
 [[package]]
 name = "iridia-analysis"
 version = "0.6.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=fd7fd5a21fc47c9e71f14827d32aa09cb773639f#fd7fd5a21fc47c9e71f14827d32aa09cb773639f"
+source = "git+https://github.com/Kalmarv/iridia?rev=da3ebb4e894de346c45cf71f89bddbe904bd453a#da3ebb4e894de346c45cf71f89bddbe904bd453a"
 dependencies = [
  "half",
  "iridia-ir",
@@ -863,7 +863,7 @@ dependencies = [
 [[package]]
 name = "iridia-d3d9"
 version = "0.6.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=fd7fd5a21fc47c9e71f14827d32aa09cb773639f#fd7fd5a21fc47c9e71f14827d32aa09cb773639f"
+source = "git+https://github.com/Kalmarv/iridia?rev=da3ebb4e894de346c45cf71f89bddbe904bd453a#da3ebb4e894de346c45cf71f89bddbe904bd453a"
 dependencies = [
  "d3d9-reader",
  "iridia",
@@ -874,7 +874,7 @@ dependencies = [
 [[package]]
 name = "iridia-dxbc"
 version = "0.6.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=fd7fd5a21fc47c9e71f14827d32aa09cb773639f#fd7fd5a21fc47c9e71f14827d32aa09cb773639f"
+source = "git+https://github.com/Kalmarv/iridia?rev=da3ebb4e894de346c45cf71f89bddbe904bd453a#da3ebb4e894de346c45cf71f89bddbe904bd453a"
 dependencies = [
  "dxbc-reader",
  "dxcontainer",
@@ -886,7 +886,7 @@ dependencies = [
 [[package]]
 name = "iridia-dxil"
 version = "0.6.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=fd7fd5a21fc47c9e71f14827d32aa09cb773639f#fd7fd5a21fc47c9e71f14827d32aa09cb773639f"
+source = "git+https://github.com/Kalmarv/iridia?rev=da3ebb4e894de346c45cf71f89bddbe904bd453a#da3ebb4e894de346c45cf71f89bddbe904bd453a"
 dependencies = [
  "dxcontainer",
  "dxil-reader",
@@ -899,7 +899,7 @@ dependencies = [
 [[package]]
 name = "iridia-exec"
 version = "0.6.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=fd7fd5a21fc47c9e71f14827d32aa09cb773639f#fd7fd5a21fc47c9e71f14827d32aa09cb773639f"
+source = "git+https://github.com/Kalmarv/iridia?rev=da3ebb4e894de346c45cf71f89bddbe904bd453a#da3ebb4e894de346c45cf71f89bddbe904bd453a"
 dependencies = [
  "half",
  "iridia",
@@ -914,7 +914,7 @@ dependencies = [
 [[package]]
 name = "iridia-exec-ir"
 version = "0.6.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=fd7fd5a21fc47c9e71f14827d32aa09cb773639f#fd7fd5a21fc47c9e71f14827d32aa09cb773639f"
+source = "git+https://github.com/Kalmarv/iridia?rev=da3ebb4e894de346c45cf71f89bddbe904bd453a#da3ebb4e894de346c45cf71f89bddbe904bd453a"
 dependencies = [
  "iridia-analysis",
  "iridia-ir",
@@ -923,7 +923,7 @@ dependencies = [
 [[package]]
 name = "iridia-interface"
 version = "0.6.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=fd7fd5a21fc47c9e71f14827d32aa09cb773639f#fd7fd5a21fc47c9e71f14827d32aa09cb773639f"
+source = "git+https://github.com/Kalmarv/iridia?rev=da3ebb4e894de346c45cf71f89bddbe904bd453a#da3ebb4e894de346c45cf71f89bddbe904bd453a"
 dependencies = [
  "iridia-ir",
  "serde",
@@ -932,7 +932,7 @@ dependencies = [
 [[package]]
 name = "iridia-ir"
 version = "0.6.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=fd7fd5a21fc47c9e71f14827d32aa09cb773639f#fd7fd5a21fc47c9e71f14827d32aa09cb773639f"
+source = "git+https://github.com/Kalmarv/iridia?rev=da3ebb4e894de346c45cf71f89bddbe904bd453a#da3ebb4e894de346c45cf71f89bddbe904bd453a"
 dependencies = [
  "libm",
  "serde",
@@ -943,7 +943,7 @@ dependencies = [
 [[package]]
 name = "iridia-mojo"
 version = "0.6.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=fd7fd5a21fc47c9e71f14827d32aa09cb773639f#fd7fd5a21fc47c9e71f14827d32aa09cb773639f"
+source = "git+https://github.com/Kalmarv/iridia?rev=da3ebb4e894de346c45cf71f89bddbe904bd453a#da3ebb4e894de346c45cf71f89bddbe904bd453a"
 dependencies = [
  "iridia",
  "iridia-ir",
@@ -952,9 +952,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "iridia-naga"
+version = "0.6.0"
+source = "git+https://github.com/Kalmarv/iridia?rev=da3ebb4e894de346c45cf71f89bddbe904bd453a#da3ebb4e894de346c45cf71f89bddbe904bd453a"
+dependencies = [
+ "iridia-ir",
+ "naga",
+]
+
+[[package]]
 name = "iridia-passes"
 version = "0.6.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=fd7fd5a21fc47c9e71f14827d32aa09cb773639f#fd7fd5a21fc47c9e71f14827d32aa09cb773639f"
+source = "git+https://github.com/Kalmarv/iridia?rev=da3ebb4e894de346c45cf71f89bddbe904bd453a#da3ebb4e894de346c45cf71f89bddbe904bd453a"
 dependencies = [
  "iridia-ir",
 ]
@@ -1122,6 +1131,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
+name = "naga"
+version = "30.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a616d2fb8c89516ac2723a581f69d6c18576046bed761bd6b305e5618e6ae130"
+dependencies = [
+ "arrayvec",
+ "bit-set",
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "codespan-reporting",
+ "half",
+ "hashbrown",
+ "indexmap",
+ "libm",
+ "log",
+ "naga-types",
+ "num-traits",
+ "once_cell",
+ "rustc-hash",
+ "thiserror",
+]
+
+[[package]]
 name = "naga-types"
 version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1254,10 +1287,12 @@ version = "0.2.0"
 dependencies = [
  "anvil-formats",
  "dxcontainer",
- "iridia",
+ "iridia-analysis",
  "iridia-dxbc",
  "iridia-exec",
  "iridia-interface",
+ "iridia-ir",
+ "iridia-naga",
  "primase-core",
  "primase-foundations",
  "primase-image",
@@ -1329,11 +1364,15 @@ name = "primase-core"
 version = "0.2.0"
 dependencies = [
  "half",
- "iridia",
+ "iridia-analysis",
  "iridia-dxbc",
+ "iridia-dxil",
  "iridia-exec",
+ "iridia-exec-ir",
  "iridia-interface",
+ "iridia-ir",
  "iridia-mojo",
+ "iridia-passes",
  "primase-foundations",
  "primase-naga",
  "serde",
@@ -1423,11 +1462,13 @@ dependencies = [
  "fromsoft-formats",
  "half",
  "havok-formats",
- "iridia",
+ "iridia-analysis",
  "iridia-dxbc",
  "iridia-dxil",
  "iridia-exec",
  "iridia-interface",
+ "iridia-ir",
+ "iridia-passes",
  "num-bigint",
  "primase-animation",
  "primase-cache",
@@ -1451,10 +1492,12 @@ version = "0.2.0"
 dependencies = [
  "frostbite-formats",
  "half",
- "iridia",
+ "iridia-analysis",
  "iridia-dxil",
  "iridia-exec",
  "iridia-interface",
+ "iridia-ir",
+ "iridia-naga",
  "primase-core",
  "primase-foundations",
  "primase-testdata",
@@ -1576,8 +1619,9 @@ dependencies = [
 name = "primase-monogame"
 version = "0.2.0"
 dependencies = [
- "iridia",
+ "iridia-ir",
  "iridia-mojo",
+ "iridia-passes",
  "monogame-formats",
  "thiserror",
 ]
@@ -1707,9 +1751,11 @@ dependencies = [
 name = "primase-stuntboost"
 version = "0.2.0"
 dependencies = [
- "iridia",
  "iridia-exec",
  "iridia-interface",
+ "iridia-ir",
+ "iridia-naga",
+ "iridia-passes",
  "monogame-formats",
  "primase-core",
  "primase-glb",
@@ -1767,10 +1813,11 @@ dependencies = [
 name = "primase-unity"
 version = "0.2.0"
 dependencies = [
- "iridia",
+ "iridia-analysis",
  "iridia-dxbc",
  "iridia-exec",
  "iridia-interface",
+ "iridia-ir",
  "primase-animation",
  "primase-core",
  "primase-foundations",
@@ -1870,8 +1917,8 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rme-formats"
-version = "0.6.0"
-source = "git+https://github.com/Kalmarv/rme-formats?rev=5b68baf6d2ca8e157c59bfff6d365f05dcfbf56f#5b68baf6d2ca8e157c59bfff6d365f05dcfbf56f"
+version = "0.5.0"
+source = "git+https://github.com/Kalmarv/rme-formats?rev=8d71806b3da0bf6fd78267fceddb1dda5a98eb60#8d71806b3da0bf6fd78267fceddb1dda5a98eb60"
 dependencies = [
  "half",
  "lua51-bytecode",

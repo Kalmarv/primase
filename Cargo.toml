@@ -73,19 +73,25 @@ havok-cloth = { version = "0.3.0" }
 havok-formats = { version = "0.9.0" }
 primase-havok = { version = "0.2.0", path = "toolkit/havok" }
 morpheme-formats = { version = "0.1.1" }
-rme-formats = { version = "0.6.0", git = "https://github.com/Kalmarv/rme-formats", rev = "5b68baf6d2ca8e157c59bfff6d365f05dcfbf56f" }
+rme-formats = { version = "0.5.0", git = "https://github.com/Kalmarv/rme-formats", rev = "8d71806b3da0bf6fd78267fceddb1dda5a98eb60" }
 unity-formats = { version = "0.5.0" }
 gbx-formats = { version = "0.1.0" }
 monogame-formats = { version = "0.1.1" }
 lua51-bytecode = { version = "0.2.0" }
 dxbc-reader = { version = "0.12.0" }
-iridia-dxbc = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "fd7fd5a21fc47c9e71f14827d32aa09cb773639f" }
-iridia-d3d9 = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "fd7fd5a21fc47c9e71f14827d32aa09cb773639f" }
-iridia-interface = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "fd7fd5a21fc47c9e71f14827d32aa09cb773639f" }
-iridia = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "fd7fd5a21fc47c9e71f14827d32aa09cb773639f" }
-iridia-exec = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "fd7fd5a21fc47c9e71f14827d32aa09cb773639f" }
-iridia-dxil = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "fd7fd5a21fc47c9e71f14827d32aa09cb773639f" }
-iridia-mojo = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "fd7fd5a21fc47c9e71f14827d32aa09cb773639f" }
+iridia-dxbc = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "da3ebb4e894de346c45cf71f89bddbe904bd453a" }
+iridia-d3d9 = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "da3ebb4e894de346c45cf71f89bddbe904bd453a" }
+iridia-interface = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "da3ebb4e894de346c45cf71f89bddbe904bd453a" }
+iridia = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "da3ebb4e894de346c45cf71f89bddbe904bd453a" }
+iridia-exec = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "da3ebb4e894de346c45cf71f89bddbe904bd453a" }
+iridia-dxil = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "da3ebb4e894de346c45cf71f89bddbe904bd453a" }
+iridia-mojo = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "da3ebb4e894de346c45cf71f89bddbe904bd453a" }
+iridia-ir = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "da3ebb4e894de346c45cf71f89bddbe904bd453a" }
+iridia-passes = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "da3ebb4e894de346c45cf71f89bddbe904bd453a" }
+iridia-analysis = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "da3ebb4e894de346c45cf71f89bddbe904bd453a" }
+iridia-naga = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "da3ebb4e894de346c45cf71f89bddbe904bd453a" }
+iridia-d3d9-ir = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "da3ebb4e894de346c45cf71f89bddbe904bd453a" }
+iridia-exec-ir = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "da3ebb4e894de346c45cf71f89bddbe904bd453a" }
 primase-frostbite = { version = "0.2.0", path = "worlds/frostbite" }
 primase-gltf = { version = "0.2.0", path = "formats/gltf" }
 primase-reskate = { version = "0.2.0", path = "worlds/reskate" }
@@ -101,7 +107,7 @@ primase-shaunwhite = { version = "0.2.0", path = "worlds/shaunwhite" }
 primase-shred = { version = "0.2.0", path = "worlds/shred" }
 primase-trackmania = { version = "0.2.0", path = "worlds/trackmania" }
 primase-forzatech = { version = "0.2.0", path = "worlds/forzatech" }
-anvil-formats = { version = "0.5.1", git = "https://github.com/Kalmarv/anvil-formats", rev = "ffdff2260826af7963e6fec57daed51833e07a2b" }
+anvil-formats = { version = "0.2.1", git = "https://github.com/Kalmarv/anvil-formats", rev = "02dd926c7e388cad2de4414dcd7c32c416faa536" }
 dxil-reader = { version = "0.12.0" }
 frostbite-formats = { version = "0.3.0" }
 forzatech-formats = { version = "0.1.0" }

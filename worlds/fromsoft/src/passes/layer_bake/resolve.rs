@@ -8,8 +8,8 @@ use crate::invalid;
 use crate::materials::{Binding, LayeredMaterial, MaterialView, ParameterValue};
 use fromsoft_formats::Result;
 use fromsoft_formats::metaparam::Metaparam;
-use iridia::matrix::{Unshown, lines_at};
-use iridia::{D3dClass, Interface, Program, Resource, ScalarType, SystemValue};
+use iridia_analysis::matrix::{Unshown, lines_at};
+use iridia_interface::{D3dClass, Interface, Resource, ScalarType, SystemValue};
 use iridia_exec::ProgramShader;
 use iridia_exec::{Layout, PixelShader};
 use iridia_interface::{
@@ -423,7 +423,7 @@ pub fn resolve(
     let mut policies = BTreeMap::new();
     let mut constants = Vec::new();
     // the program's value graph, read once: what states a matrix's lines and an alpha test's reference
-    let graph = super::lifted_program(shader).graph();
+    let graph = iridia_analysis::ProgramGraph::of_program(super::lifted_program(shader));
     // The producer establishes the dither role; the generic query sees only graph resource ids and words.
     let discard_compares = |name: &str| {
         let field = layout.fields.get(name)?;
@@ -438,9 +438,9 @@ pub fn resolve(
             }
             let point = r.provenance.d3d?;
             let texture = graph.interface.resources.iter().find(|g| g.provenance.d3d == Some(point))?.id;
-            Some(iridia::output_uses::AlphaDither { texture, scale_word: field.offset + 1 })
+            Some(iridia_analysis::output_uses::AlphaDither { texture, scale_word: field.offset + 1 })
         });
-        iridia::output_uses::discard_compares(graph, buffer, field.offset, dither)
+        iridia_analysis::output_uses::discard_compares(graph, buffer, field.offset, dither)
     };
     let mut constant = |name: &str, word: usize, size: u32, role: ConstantRole| -> Result<()> {
         bind_field(interface, &layout, &mut constants, name, word, size, role);
@@ -755,9 +755,8 @@ pub fn resolve(
         })
         .collect();
     // a matrix's lines as the program applies it, or why it does not show them
-    let graph_or_why = graph.as_ref().map_err(String::as_str);
     state_lines(&mut constants, |c| {
-        lines_at(graph_or_why, interface, c.resource, c.offset, c.size)
+        lines_at(graph.as_ref(), interface, c.resource, c.offset, c.size)
     });
     Ok(Resolution {
         stage: StageBinding {
@@ -1376,7 +1375,7 @@ fn light_buffers(interface: &Interface, game: fromsoft_formats::Game) -> Vec<Buf
                 return None;
             };
             let source = match kind {
-                iridia::BufferKind::Structured { stride } => {
+                iridia_interface::BufferKind::Structured { stride } => {
                     crate::light_records::source(game, &r.provenance.name, *stride)
                 }
                 _ => None,
@@ -2027,10 +2026,14 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
         }
     }
     // a matrix's lines as the program applies it, or why it does not show them
-    let graph = program.as_ref().map_err(Clone::clone).and_then(Program::graph);
-    let graph_or_why = graph.as_ref().map_err(String::as_str);
+    let graph = match &program {
+        Ok(program) => iridia_analysis::ProgramGraph::of_program(program),
+        Err(reason) => Err(iridia_analysis::GraphError::Walk {
+            reason: reason.clone(),
+        }),
+    };
     state_lines(&mut constants, |c| {
-        lines_at(graph_or_why, interface, c.resource, c.offset, c.size)
+        lines_at(graph.as_ref(), interface, c.resource, c.offset, c.size)
     });
     let palette_rows = palette_rows_by_rule(&mut constants);
     // the buffers of the joints' palettes are bound larger than the program declares

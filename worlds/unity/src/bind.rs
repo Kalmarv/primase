@@ -1,5 +1,5 @@
 //! A variant of a material's compiled programs ([`UnityProgramVariant`], from `unity.programs`) bound for evaluation
-//! on the CPU ([`iridia`]): what Unity itself sets when it draws, as far as the material says it.
+//! on the CPU ([`iridia_exec`]): what Unity itself sets when it draws, as far as the material says it.
 //!
 //! - [`bind`]: the program (its DXBC, whose reflection Unity strips) with the constant layout its parameters record
 //!   (field name, buffer slot, byte offset), and its texture slots by property name.
@@ -51,9 +51,9 @@ fn words(shape: Shape, array_size: u32) -> u32 {
 /// Bind variant `p` of shader `name`: its program read without reflection, the layout of every field of a buffer the
 /// program reads, and its texture slots. A field named twice is an error.
 pub fn bind(name: &str, p: &UnityProgramVariant) -> Result<Bound> {
-    let program = iridia_dxbc::lift(&p.code).map_err(|e| invalid(format!("program of {name}: {e}")))?;
+    let program = primase_core::shader::lift_dxbc(&p.code).map_err(|e| invalid(format!("program of {name}: {e}")))?;
     let shader =
-        iridia_exec::ProgramShader::new(program).map_err(|e| invalid(format!("program of {name}: {e}")))?;
+        iridia_exec::ProgramShader::from_ir(program).map_err(|e| invalid(format!("program of {name}: {e}")))?;
     let read = iridia_exec::PixelShader::constant_buffers(&shader).to_vec();
     let mut layout = Layout {
         buffers: read.iter().map(|&(slot, rows)| (slot, rows * 4)).collect(),

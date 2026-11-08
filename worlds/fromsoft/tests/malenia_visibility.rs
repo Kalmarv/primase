@@ -132,10 +132,10 @@ fn malenia_pixelkill_hash_and_alpha_permutation_discard() -> Result<()> {
                 // The binder member is already the program container. ER's container carries DXIL,
                 // not the SHEX/SHDR code chunks the DXBC lifter requires (Game::shader_format).
                 let lifted = match Game::EldenRing.shader_format() {
-                    iridia_interface::ShaderFormat::Dxbc => iridia_dxbc::lift(&member.bytes)?,
-                    _ => iridia_dxil::lift(&member.bytes)?,
+                    iridia_interface::ShaderFormat::Dxbc => primase_core::shader::lift_dxbc(&member.bytes)?,
+                    _ => primase_core::shader::lift_dxil(&member.bytes)?,
                 };
-                let shader = iridia_exec::ProgramShader::new(lifted)?;
+                let shader = iridia_exec::ProgramShader::from_ir(lifted)?;
                 let mut buffers: Vec<_> = shader
                     .constant_buffers()
                     .iter()

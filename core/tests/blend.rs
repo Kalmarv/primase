@@ -11,12 +11,12 @@
 //! program does not read reaches only as `0 * lane`).
 use std::collections::BTreeMap;
 
-use iridia::Program;
 use iridia_exec::{
     Input, Invocation, Layout, PixelShader, ProgramShader, View, Views, evaluate::Constants, evaluate::Grid,
     evaluate_raw,
 };
 use iridia_interface::{AddressMode, D3dClass, Label, ResourceId, SamplerState, Stage};
+use iridia_ir::Program;
 use primase_core::layered::{Channel, ColorLane, Expression, Source, lerp, mask_value, saturate};
 use primase_core::pbr::UvTransform;
 use primase_core::shader::{
@@ -26,12 +26,12 @@ use primase_core::shader::{
 use primase_core::{Entity, Semantic, World};
 
 fn program() -> Program {
-    iridia_dxbc::lift(include_bytes!("fixtures/blend.dxbc")).unwrap()
+    primase_core::shader::lift_dxbc(include_bytes!("fixtures/blend.dxbc")).unwrap()
 }
 
 /// `fixtures/single.hlsl`: one texture, laid over nothing.
 fn single() -> Program {
-    iridia_dxbc::lift(include_bytes!("fixtures/single.dxbc")).unwrap()
+    primase_core::shader::lift_dxbc(include_bytes!("fixtures/single.dxbc")).unwrap()
 }
 
 /// The resource of `class` register `register`, where the program declares it.
@@ -389,7 +389,7 @@ fn what_core_computes_from_the_reading_is_the_programs_albedo_bit_for_bit() {
         [1.5, 3., 0.2, 1.],
     ];
     let weights = [-1., 0., 0.25, 0.5, 0.75, 1., 2., f32::NAN, f32::INFINITY];
-    let shader = ProgramShader::new(p.clone()).unwrap();
+    let shader = ProgramShader::from_ir(p.clone()).unwrap();
     let mut cases = 0;
     // the controls: the comparison sees a reading that leaves out the saturation, or whose tint is one ulp off in red
     let (mut unsaturated_differs, mut nudged_differs) = (0, 0);
@@ -514,7 +514,7 @@ fn a_single_texture_reads_as_one_layer_bit_for_bit() {
         [1.5, 3., 0.2, 1.],
         [-0.5, 0.7, 2., 1.],
     ];
-    let shader = ProgramShader::new(p.clone()).unwrap();
+    let shader = ProgramShader::from_ir(p.clone()).unwrap();
     let (mut cases, mut unsaturated_differs, mut nudged_differs) = (0, 0, 0);
     for m in &materials {
         let stage = binding(&p, m, &t);

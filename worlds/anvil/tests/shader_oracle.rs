@@ -40,8 +40,8 @@ impl Random {
 
 /// The program lifted and ready to run.
 fn executor(container: &[u8]) -> ProgramShader {
-    let program = iridia_dxbc::lift(container).unwrap_or_else(|e| panic!("the shader lifts: {e}"));
-    ProgramShader::new(program).unwrap_or_else(|e| panic!("the shader runs: {e}"))
+    let program = primase_core::shader::lift_dxbc(container).unwrap_or_else(|e| panic!("the shader lifts: {e}"));
+    ProgramShader::from_ir(program).unwrap_or_else(|e| panic!("the shader runs: {e}"))
 }
 
 /// The pixel shader at body offset `offset` of the MaterialTemplate at entry `entry` of the forge file `forge`.

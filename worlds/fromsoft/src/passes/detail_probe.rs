@@ -12,7 +12,7 @@
 use crate::game::Shading;
 use std::collections::BTreeMap;
 
-use iridia::output_uses::output_uses;
+use iridia_analysis::output_uses::output_uses;
 use iridia_exec::evaluate::Constants;
 use iridia_exec::{Layout, PixelShader, ProgramShader, Sampler};
 use iridia_interface::RenderState;
@@ -201,7 +201,7 @@ impl ProgramProbe {
         // the outputs as the resolve pass binds them: a lane left Unknown is Coverage where the program's discard tests it,
         // Opacity where the material's blend weighs by it
         let mut outputs = resolution.stage.outputs.clone();
-        let graph = layer_bake::lifted_program(&shader).graph().ok();
+        let graph = iridia_analysis::ProgramGraph::of_program(layer_bake::lifted_program(&shader)).ok();
         bind_output_uses(&mut outputs, &output_uses(&interface, graph.as_ref(), state));
         let constants = layer_bake::program_constants(
             &shader,
@@ -372,7 +372,7 @@ impl ProgramProbe {
     }
 
     /// The program's interface.
-    pub fn interface(&self) -> &iridia::Interface {
+    pub fn interface(&self) -> &iridia_interface::Interface {
         PixelShader::interface(&self.shader)
     }
 

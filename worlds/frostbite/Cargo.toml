@@ -16,12 +16,14 @@ iridia-interface.workspace = true
 primase-core.workspace = true
 half.workspace = true
 iridia-dxil.workspace = true
-iridia.workspace = true
+iridia-analysis.workspace = true
+iridia-ir.workspace = true
 iridia-exec.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+iridia-naga.workspace = true
 primase-foundations = { workspace = true, features = ["compress", "reference-decoder"] }
 primase-testdata.workspace = true
 primase-texcodec = { path = "../../toolkit/texcodec" }

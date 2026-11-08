@@ -13,7 +13,7 @@ pub struct ShaderSpecialisations(pub Vec<StageSpecialisation>);
 #[derive(Clone, Debug)]
 pub struct StageSpecialisation {
     pub shader: Entity,
-    pub program: Option<Arc<iridia::Program>>,
+    pub program: Option<Arc<iridia_ir::Program>>,
     pub words: BTreeMap<(ResourceId, u32), u32>,
     pub removed: Vec<ResourceId>,
     pub folded: usize,
@@ -26,7 +26,7 @@ impl ShaderSpecialisations {
         Self::shared(world, binding, &mut SpecialisationCache::default())
     }
     /// The specialised program of the stage that draws with `shader`, where its specialisation was not refused.
-    pub fn program(&self, shader: Entity) -> Option<&Arc<iridia::Program>> {
+    pub fn program(&self, shader: Entity) -> Option<&Arc<iridia_ir::Program>> {
         self.0
             .iter()
             .find(|s| s.shader == shader)
@@ -59,7 +59,9 @@ impl ShaderSpecialisations {
         // which words decide a branch or select depends on which are known, not on their values
         let keys: BTreeSet<_> = known.keys().copied().collect();
         let selected = match cache.selected.entry((stage.shader, keys)).or_insert_with(|| {
-            iridia::specialise::feature_words(&source.0, &known).map(|w| w.into_keys().collect())
+            iridia_passes::feature_words(&source.0, &known)
+                .map(|w| w.into_keys().collect())
+                .map_err(|e| e.to_string())
         }) {
             Ok(selected) => selected,
             Err(why) => return refused(why),
@@ -72,12 +74,14 @@ impl ShaderSpecialisations {
             .programs
             .entry((stage.shader, words))
             .or_insert_with_key(|(_, words)| {
-                iridia::specialise::specialise(&source.0, words).map(|result| Specialised {
-                    program: Arc::new(result.program),
-                    words: result.words,
-                    removed: result.unread,
-                    folded: result.folded,
-                })
+                iridia_passes::specialise(&source.0, words)
+                    .map(|result| Specialised {
+                        program: Arc::new(result.program),
+                        words: result.words,
+                        removed: result.unread,
+                        folded: result.folded,
+                    })
+                    .map_err(|e| e.to_string())
             }) {
             Ok(shared) => StageSpecialisation {
                 shader: stage.shader,
@@ -99,7 +103,7 @@ type Words = BTreeMap<Word, u32>;
 /// One specialised program and its audit, shared by every stage specialised on the same words.
 #[derive(Debug)]
 struct Specialised {
-    program: Arc<iridia::Program>,
+    program: Arc<iridia_ir::Program>,
     words: Words,
     removed: Vec<ResourceId>,
     folded: usize,
@@ -150,7 +154,7 @@ impl Component for ShaderSpecialisations {
                 return Err("specialisation freezes a word the binding does not state".into());
             }
             if let Some(program) = &stage.program {
-                program.validate().map_err(|e| format!("{e:?}"))?;
+                iridia_ir::validate(program).map_err(|e| format!("{e:?}"))?;
             }
         }
         Ok(())
@@ -164,12 +168,12 @@ impl Component for ShaderSpecialisations {
 mod tests {
     use super::*;
     use crate::shader::{ConstantBinding, ConstantRole};
-    use iridia::{ResourceKind, Stage};
+    use iridia_interface::{ResourceKind, Stage};
 
     /// A pixel program whose first constant word switches between a texture sample scaled by the second word and a
     /// coordinate.
-    fn program() -> iridia::Program {
-        iridia_mojo::lift(
+    fn program() -> iridia_ir::Program {
+        iridia_mojo::ir::lift(
             "uniform vec4 ps_uniforms_vec4[1];\nuniform sampler2D ps_s0;\nvarying vec4 vTexCoord0;\nvec4 ps_r0;\nvoid main() {\nps_r0 = texture2D(ps_s0,vTexCoord0.xy);\nif (ps_uniforms_vec4[0].x != 0.0) {\nps_r0 = ps_r0 * ps_uniforms_vec4[0].yyyy;\n} else {\nps_r0 = vTexCoord0;\n}\ngl_FragColor = ps_r0;\n}",
             Stage::Pixel,
             &iridia_mojo::Hints {
@@ -241,7 +245,7 @@ mod tests {
         assert!(Arc::ptr_eq(&on, &on_again));
         assert!(!Arc::ptr_eq(&on, &off));
         // the switch off leaves the sample unread: the two programs differ
-        let textures = |p: &iridia::Program| {
+        let textures = |p: &iridia_ir::Program| {
             p.interface
                 .resources
                 .iter()

@@ -23,7 +23,8 @@
 
 use std::collections::BTreeSet;
 
-use iridia::flow::{At, BinaryOperator, Node, NodeId, Op, Values};
+use iridia_analysis::flow::{At, Node, NodeId, Op, Values};
+use iridia_ir::Binary;
 use iridia_interface::{
     D3dClass, Interface, MatrixLines, ResourceId, ResourceKind, ShaderFormat, Stage, SystemValue,
 };
@@ -50,7 +51,7 @@ impl ClipRows {
 /// The terms of a tree of additions.
 fn terms(values: &Values, id: NodeId, out: &mut Vec<NodeId>) {
     if let Node::Op {
-        op: Op::Binary(BinaryOperator::Add),
+        op: Op::Binary(Binary::FAdd),
         operands,
     } = values.node(id)
     {
@@ -63,12 +64,12 @@ fn terms(values: &Values, id: NodeId, out: &mut Vec<NodeId>) {
 }
 
 /// The two operands of a binary operation.
-fn pair(values: &Values, id: NodeId, wanted: BinaryOperator) -> Option<(NodeId, NodeId)> {
+fn pair(values: &Values, id: NodeId, wanted: impl Fn(&Binary) -> bool) -> Option<(NodeId, NodeId)> {
     match values.node(id) {
         Node::Op {
             op: Op::Binary(op),
             operands,
-        } if *op == wanted && operands.len() == 2 => Some((operands[0], operands[1])),
+        } if wanted(op) && operands.len() == 2 => Some((operands[0], operands[1])),
         _ => None,
     }
 }
@@ -77,7 +78,7 @@ fn pair(values: &Values, id: NodeId, wanted: BinaryOperator) -> Option<(NodeId, 
 fn word(values: &Values, id: NodeId, buffer: ResourceId) -> Option<u32> {
     match values.node(id) {
         Node::Global {
-            resource: Some(r),
+            resource: r,
             at: At::Component(c),
         } if *r == buffer => Some(*c),
         _ => None,
@@ -130,7 +131,7 @@ pub fn clip_rows(values: &Values, interface: &Interface, buffer: ResourceId) -> 
                 }
                 continue;
             }
-            let (x, y) = pair(values, term, BinaryOperator::Multiply)
+            let (x, y) = pair(values, term, |op| matches!(op, Binary::FMul(_)))
                 .ok_or_else(|| format!("clip lane {k} has a term that is no product and no word"))?;
             let (coefficient, other) = if word(values, x, buffer).is_some() {
                 (x, y)
@@ -145,7 +146,7 @@ pub fn clip_rows(values: &Values, interface: &Interface, buffer: ResourceId) -> 
                 }
                 continue;
             }
-            let (coordinate, camera) = pair(values, other, BinaryOperator::Subtract)
+            let (coordinate, camera) = pair(values, other, |op| matches!(op, Binary::FSub))
                 .and_then(|(w, c)| Some((w, word(values, c, buffer)?)))
                 .ok_or_else(|| {
                     format!("clip lane {k} has a product that is not a word times (world - camera word)")
@@ -238,7 +239,7 @@ pub fn shader_clip_rows(shader: &Shader) -> Result<(ResourceId, ClipRows), Strin
     }
     let bound = pass_buffer(&shader.interface).ok_or("the program has no constant buffer at register 4")?;
     let program =
-        iridia_dxil::lift(&shader.bytecode).map_err(|e| format!("the program does not lift: {e}"))?;
+        primase_core::shader::lift_dxil(&shader.bytecode).map_err(|e| format!("the program does not lift: {e}"))?;
     // the lifted program's own resource for the same binding
     let buffer =
         pass_buffer(&program.interface).ok_or("the lifted program has no constant buffer at register 4")?;

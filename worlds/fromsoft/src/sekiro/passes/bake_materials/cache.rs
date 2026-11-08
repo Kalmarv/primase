@@ -120,9 +120,9 @@ impl Prepared<'_> {
             .bytes("source", &source())
             .u32("bake-version", BAKE_VERSION)
             .f32("sample-time", *sample_time)
-            .u32("dxbc-lifter", iridia_dxbc::LIFTER_VERSION)
-            .u32("dxil-lifter", iridia_dxil::LIFTER_VERSION)
-            .u32("program-version", iridia::PROGRAM_VERSION);
+            .u32("dxbc-ir-lifter", iridia_dxbc::ir::LIFTER_VERSION)
+            .u32("dxil-ir-lifter", iridia_dxil::ir::LIFTER_VERSION)
+            .u32("ir-version", iridia_ir::VERSION);
         for program in [pixel, vertex] {
             k = json(k, "program-format", &program.format)?.bytes("bytecode", &program.bytecode);
         }
@@ -463,7 +463,7 @@ mod tests {
                     Stage::Vertex,
                 ),
             ] {
-                let program = iridia_dxbc::lift(bytes).unwrap();
+                let program = primase_core::shader::lift_dxbc(bytes).unwrap();
                 let entity = world.spawn();
                 let mut binding = StageBinding::new(stage, entity);
                 for r in &program.interface.resources {

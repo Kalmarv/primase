@@ -76,7 +76,7 @@ fn prepare(shader: &str, name: &str, code: &[u8]) -> Result<Prepared> {
         }],
         parameters: None,
     })?;
-    let program = iridia_dxil::lift(code).map_err(|e| e.reason().to_string())?;
+    let program = primase_core::shader::lift_dxil(code).map_err(|e| e.reason().to_string())?;
     // The renderer obtains its wind-off byte through the resolver, unlike the independent
     // execution below which places it directly at the program's observed row 3, lane y.
     let mut world = primase_core::World::default();
@@ -112,7 +112,7 @@ fn prepare(shader: &str, name: &str, code: &[u8]) -> Result<Prepared> {
         .find(|constant| constant.name == "VC_SpeedTreeWind")
         .ok_or("wind structure missing")?;
     assert_eq!((wind[0].offset, wind[0].size), (root.offset + 52, 4), "{name}");
-    let exe = Executable::new(&program)?;
+    let exe = Executable::from_ir(&program)?;
     let mut resources = Resources::default();
     for r in &program.interface.resources {
         match &r.kind {

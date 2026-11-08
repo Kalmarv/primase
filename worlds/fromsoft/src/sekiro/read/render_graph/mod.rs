@@ -30,8 +30,8 @@ use crate::passes::sampler_pairs::{self, SamplerPairs};
 use crate::sekiro::source::draw_of;
 use fromsoft_formats::names::fold;
 use fromsoft_formats::{Archive, Binder, Game, Result, dcx::Decoder};
-use iridia::ProgramGraph;
-use iridia::matrix::lines_at;
+use iridia_analysis::{GraphError, ProgramGraph};
+use iridia_analysis::matrix::lines_at;
 use iridia_interface as iri;
 use iridia_interface::{D3dClass, Interface, ResourceKind, Stage, SystemValue};
 use primase_core::render_graph::{
@@ -224,7 +224,7 @@ impl Report {
 struct Program {
     entity: primase_core::Entity,
     interface: Interface,
-    graph: std::result::Result<ProgramGraph, String>,
+    graph: std::result::Result<ProgramGraph, GraphError>,
     pairs: SamplerPairs,
 }
 
@@ -273,7 +273,7 @@ pub(crate) fn read(
             let full = format!("{folder}/{f}");
             let lifted = crate::passes::program_reads::lift(game.shader_format(), &file.bytes)
                 .map_err(|e| invalid(FORMAT, 0, format!("{full}: {e}")))?;
-            let graph = lifted.graph();
+            let graph = ProgramGraph::of_program(&lifted);
             let interface = lifted.interface.clone();
             let pairs = sampler_pairs::pairs(game.shader_format(), &file.bytes).map_err(|e| {
                 invalid(
@@ -1376,7 +1376,7 @@ impl Lower<'_> {
                 });
             }
         }
-        let graph = p.graph.as_ref().map_err(String::as_str);
+        let graph = p.graph.as_ref();
         primase_core::shader::state_lines(&mut out, |c| {
             lines_at(graph, &p.interface, c.resource, c.offset, c.size)
         });

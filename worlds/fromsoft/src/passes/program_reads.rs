@@ -3,7 +3,7 @@
 //! UV set, which pair of it). A preview chooses its textures from this, not from slot numbers or shader names.
 //!
 //! The programs are read lifted ([`lift`]: DXIL and DXBC alike), as the value graph of their entry point
-//! ([`iridia::flow::Values`]): each texel names a texture resource, which is a material slot of the shader's
+//! ([`iridia_analysis::flow::Values`]): each texel names a texture resource, which is a material slot of the shader's
 //! metaparam where the metaparam names it ([`slot_of`]); its coordinates are made of an interpolant (`TEXCOORD4.xy`)
 //! scaled and offset by the material's constants; each discard is guarded by the conditions that decide it; render
 //! target 2 is the albedo (the layout of the G-buffer the programs write: target 0 the normal, which reads the normal
@@ -31,9 +31,9 @@
 //! What it does not read is named in [`Reads::left_out`]: a discard against an engine texture (the screen-door dither of
 //! a fade) is not a material slot's coverage.
 use fromsoft_formats::metaparam::{Metaparam, Texture, texture_number};
-use iridia::flow::{BinaryOperator, Node, NodeId, Op, Read, UnaryOperator, Values};
-use iridia::{BoundSizes, Program};
-use iridia_interface::{Resource, ResourceId, ResourceKind, ShaderFormat};
+use iridia_analysis::flow::{Node, NodeId, Op, Read, Values};
+use iridia_interface::{BoundSizes, Resource, ResourceId, ResourceKind, ShaderFormat};
+use iridia_ir::{Binary, Program, Unary};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// The render target the programs write the albedo to.
@@ -88,8 +88,8 @@ pub fn lift(format: ShaderFormat, bytes: &[u8]) -> Result<Program, String> {
 /// [`lift`] with the constant buffers `bound` names bound at the sizes it states (a stage's [`BoundSizes::of`]).
 pub fn lift_with(format: ShaderFormat, bytes: &[u8], bound: &BoundSizes) -> Result<Program, String> {
     match format {
-        ShaderFormat::Dxbc => iridia_dxbc::lift_with(bytes, bound).map_err(|e| e.to_string()),
-        ShaderFormat::Dxil => iridia_dxil::lift_with(bytes, bound).map_err(|e| e.to_string()),
+        ShaderFormat::Dxbc => primase_core::shader::lift_dxbc_with(bytes, bound).map_err(|e| e.to_string()),
+        ShaderFormat::Dxil => primase_core::shader::lift_dxil_with(bytes, bound).map_err(|e| e.to_string()),
         other => Err(format!("a FromSoftware program of format {other:?}")),
     }
 }
@@ -248,7 +248,7 @@ impl<'a> Analysis<'a> {
                 lane,
                 read: Read::Sample,
                 ..
-            } => Step::Texture((resource.and_then(|r| self.slots.get(&r).copied()), *lane)),
+            } => Step::Texture((self.slots.get(resource).copied(), *lane)),
             Node::Texel {
                 coordinate, controls, ..
             } => Step::Of(coordinate.iter().chain(controls).copied().collect()),
@@ -256,7 +256,12 @@ impl<'a> Analysis<'a> {
                 Some(v) => Step::Input((v.label.name.clone(), v.label.index, *lane)),
                 None => Step::Of(Vec::new()),
             },
-            Node::Global { .. } | Node::Supplied { .. } | Node::Query { .. } | Node::Literal(_) => {
+            Node::Global { .. }
+            | Node::Supplied { .. }
+            | Node::Query { .. }
+            | Node::Counter { .. }
+            | Node::Undef
+            | Node::Literal(_) => {
                 Step::Of(Vec::new())
             }
             Node::Op { operands, .. } => Step::Of(operands.clone()),
@@ -323,11 +328,15 @@ impl<'a> Analysis<'a> {
         }
     }
 
-    fn binary(&self, id: NodeId, which: BinaryOperator) -> Option<(NodeId, NodeId)> {
+    fn binary(&self, id: NodeId, which: impl Fn(Binary) -> bool) -> Option<(NodeId, NodeId)> {
         match self.op(id)? {
-            (Op::Binary(op), [l, r]) if op == which => Some((*l, *r)),
+            (Op::Binary(op), [l, r]) if which(op) => Some((*l, *r)),
             _ => None,
         }
+    }
+
+    fn product(&self, id: NodeId) -> Option<(NodeId, NodeId)> {
+        self.binary(id, |op| matches!(op, Binary::FMul(_)))
     }
 
     /// The slot a value of the albedo is made of with the other material slots blended over it (`slots`: the shader's
@@ -356,7 +365,7 @@ impl<'a> Analysis<'a> {
 
     /// The factors of a product: its operands, and theirs where they are products.
     fn factors(&self, id: NodeId, out: &mut Vec<NodeId>) {
-        match self.binary(id, BinaryOperator::Multiply) {
+        match self.product(id) {
             Some((l, r)) => {
                 self.factors(l, out);
                 self.factors(r, out);
@@ -369,7 +378,7 @@ impl<'a> Analysis<'a> {
     /// factor reads. Where several are (a detail map multiplied over the material's own albedo: `C[DetailBlend]_0`'s
     /// `Texture2D_1 * 4.55 * lerp(Texture2D_7, luma, p)`), the one in the shader's main texture set ([`main_set`]).
     fn product_base(&self, id: NodeId, slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
-        self.binary(id, BinaryOperator::Multiply)?;
+        self.product(id)?;
         let mut factors = Vec::new();
         self.factors(id, &mut factors);
         let made_of: Vec<BTreeSet<u32>> = factors
@@ -404,13 +413,13 @@ impl<'a> Analysis<'a> {
     /// subtractions and the operand of a negation, and theirs where they are sums. A value that is no sum is its one
     /// term.
     fn terms(&self, id: NodeId, positive: bool, out: &mut Vec<(NodeId, bool)>) {
-        if let Some((l, r)) = self.binary(id, BinaryOperator::Add) {
+        if let Some((l, r)) = self.binary(id, |op| op == Binary::FAdd) {
             self.terms(l, positive, out);
             self.terms(r, positive, out);
-        } else if let Some((l, r)) = self.binary(id, BinaryOperator::Subtract) {
+        } else if let Some((l, r)) = self.binary(id, |op| op == Binary::FSub) {
             self.terms(l, positive, out);
             self.terms(r, !positive, out);
-        } else if let Some((Op::Unary(UnaryOperator::Negate), [x])) = self.op(id) {
+        } else if let Some((Op::Unary(Unary::FNeg), [x])) = self.op(id) {
             self.terms(*x, !positive, out);
         } else {
             out.push((id, positive));
@@ -423,7 +432,7 @@ impl<'a> Analysis<'a> {
     /// (`D + a`). Returns `a`'s terms, `b`'s and the weight `t`.
     fn lerp(&self, terms: &[(NodeId, bool)]) -> Option<Layers> {
         for (i, &(product, positive)) in terms.iter().enumerate() {
-            let Some((lhs, rhs)) = self.binary(product, BinaryOperator::Multiply) else {
+            let Some((lhs, rhs)) = self.product(product) else {
                 continue;
             };
             let under: Vec<(NodeId, bool)> = terms
@@ -617,7 +626,7 @@ impl<'a> Analysis<'a> {
             .into_iter()
             .filter_map(|id| match self.values.node(id) {
                 Node::Texel {
-                    resource: Some(r),
+                    resource: r,
                     read: Read::Sample,
                     coordinate,
                     ..

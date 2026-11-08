@@ -1,7 +1,7 @@
 //! Source-stated replacement inputs when a pixel program has no executable previous stage. Standard surface
 //! semantics are shared machinery; a source binding pass explicitly opts in and owns any further label policy.
 
-use iridia::flow::{Node, Values};
+use iridia_analysis::flow::{Node, Values};
 use iridia_interface::{Interface, ScalarType, Stage};
 use serde::Serialize;
 
@@ -144,7 +144,7 @@ pub fn bind_surface_input_fallbacks(stage: &mut StageBinding, interface: &Interf
 /// Arithmetic, non-float outputs and unresolved programs produce no guessed copies. Returns inputs augmented.
 pub fn bind_fallback_uv_copies(
     pixel: &mut StageBinding,
-    program: &iridia::Program,
+    program: &iridia_ir::Program,
     vertex: &StageBinding,
     coordinates: FallbackCoordinates,
 ) -> usize {
@@ -322,28 +322,42 @@ mod tests {
         let mut position = varying("position", 0, ScalarType::Float, 4);
         position.system = Some(iridia_interface::SystemValue::ClipPosition);
         interface.outputs.push(position);
-        let program = iridia::Program {
-            module: naga::front::wgsl::parse_str("struct Out { @location(0) @interpolate(perspective) uv: vec4<f32>, @builtin(position) position: vec4<f32> } @vertex fn main(@location(0) uv: vec2<f32>) -> Out { var out: Out; out.uv = vec4<f32>(uv.x, uv.y, uv.x + 1.0, 0.0); out.position = vec4<f32>(0.0, 0.0, 0.0, 1.0); return out; }").expect("owned fallback fixture"),
-            stage: Stage::Vertex, entry: "main".into(), interface,
-            bindings: vec![], conventions: iridia::Conventions::D3D,
-            modes: Default::default(), notes: vec![], provenance: iridia::Provenance {
-                format: iridia_interface::ShaderFormat::Glsl, target: "owned fixture".into(), lifter: "fixture".into(), lifter_version: 1, source_hash: None, instruction_count: None,
+        // uv = (in.x, in.y, in.x + 1, 0) and a constant position: only the first two lanes are bare copies of the input
+        let mut b = iridia_ir::Builder::new("main");
+        let x = b.value(iridia_ir::Type::F32, iridia_ir::Op::LoadInput(0, 0b1));
+        let y = b.value(iridia_ir::Type::F32, iridia_ir::Op::LoadInput(0, 0b10));
+        let one = b.f32(1.0);
+        let zero = b.f32(0.0);
+        let shifted = b
+            .op(iridia_ir::Op::Binary(iridia_ir::Binary::FAdd, x, one))
+            .expect("owned fallback fixture");
+        for (lane, value) in [x, y, shifted, zero].into_iter().enumerate() {
+            b.store_output(0, 1 << lane, value);
+        }
+        for (lane, value) in [zero, zero, zero, one].into_iter().enumerate() {
+            b.store_output(1, 1 << lane, value);
+        }
+        let entry = b.finish(iridia_ir::End::Return).expect("owned fallback fixture");
+        let program = iridia_ir::Program {
+            stage: Stage::Vertex,
+            entry,
+            patch: None,
+            workgroup: None,
+            interface,
+            conventions: iridia_ir::Conventions::D3D,
+            float: iridia_ir::FloatEnv::default(),
+            provenance: iridia_ir::Provenance {
+                format: iridia_interface::ShaderFormat::Glsl,
+                target: "owned fixture".into(),
+                lifter: "fixture".into(),
+                lifter_version: 1,
+                source_hash: None,
+                instruction_count: None,
+                policies: vec![],
             },
+            notes: vec![],
         };
-        let io = iridia::entry_io(&program.interface).expect("owned fixture interface");
-        let result = program.module.entry_points[0]
-            .function
-            .result
-            .as_ref()
-            .expect("fixture output");
-        let naga::TypeInner::Struct { members, .. } = &program.module.types[result.ty].inner else {
-            panic!("fixture output struct")
-        };
-        assert_eq!(
-            members[0].binding.as_ref(),
-            Some(&io.results[0].binding),
-            "fixture's WGSL interpolation must agree with the IR interface"
-        );
+        iridia_ir::validate(&program).expect("owned fallback fixture");
         let entity = crate::World::new().spawn();
         let mut vertex = StageBinding::new(Stage::Vertex, entity);
         vertex.inputs.push(InputBinding {

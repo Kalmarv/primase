@@ -12,7 +12,7 @@ use super::binding::{FrozenFrame, Inputs, TEXTURE_SCROLL_POLICY, read_words};
 use super::resolve::{layer_channels, register};
 use crate::invalid;
 use fromsoft_formats::Result;
-use iridia::{Interface, Varying};
+use iridia_interface::{Interface, Varying};
 use iridia_exec::ProgramShader;
 use iridia_exec::{Input, Lane, PixelShader, Sampler};
 use primase_core::shader::{ConstantRole, InputRole, LaneStream};
@@ -117,16 +117,16 @@ impl VertexStage {
     pub fn new(
         vertex: &CoreShader,
         stage: &StageBinding,
-        pixel: &iridia::Program,
+        pixel: &iridia_ir::Program,
         ground: bool,
         frame: &FrozenFrame,
     ) -> Result<Self> {
         let lifted = super::binding::program_executor_bound(
             vertex.format,
             &vertex.bytecode,
-            &iridia::BoundSizes::of(&stage.constant_buffers),
+            &iridia_interface::BoundSizes::of(&stage.constant_buffers),
         )?;
-        let demand = iridia::flow::VertexDemand::of_programs(super::lifted_program(&lifted), pixel)
+        let demand = iridia_analysis::flow::VertexDemand::of_programs(super::lifted_program(&lifted), pixel)
             .map_err(|e| invalid("vertex demand", 0, e))?;
         let pixel_lanes = demand
             .pixel
@@ -532,7 +532,7 @@ mod tests {
         VertexStage::new(
             &shader,
             &binding,
-            &iridia_dxbc::lift(pixel).unwrap(),
+            &primase_core::shader::lift_dxbc(pixel).unwrap(),
             false,
             &FrozenFrame::static_bake(0.),
         )
@@ -601,7 +601,7 @@ mod tests {
             interface: iridia_dxbc::reflection(COLOUR1_VS).unwrap(),
         };
         let binding = resolve_vertex(&shader, World::default().spawn()).unwrap().stage;
-        let pixel = iridia_dxbc::lift(COLOUR1_PS).unwrap();
+        let pixel = primase_core::shader::lift_dxbc(COLOUR1_PS).unwrap();
         let frame = FrozenFrame::static_bake(0.);
         let refused =
             VertexStage::new(&shader, &binding, &pixel, false, &frame).expect_err("the source reads w");
@@ -610,12 +610,12 @@ mod tests {
             .interface
             .resources
             .iter()
-            .find(|r| matches!(r.kind, iridia::ResourceKind::ConstantBuffer { .. }))
+            .find(|r| matches!(r.kind, iridia_interface::ResourceKind::ConstantBuffer { .. }))
             .unwrap()
             .id;
         let stated = |weighted: u32| {
-            let words = iridia::specialise::Words::from([((buffer, 0), weighted)]);
-            let specialised = iridia::specialise::specialise(&pixel, &words)
+            let words = iridia_passes::Words::from([((buffer, 0), weighted)]);
+            let specialised = iridia_passes::specialise(&pixel, &words)
                 .unwrap_or_else(|why| panic!("weighted={weighted}: specialisation refused: {why}"));
             assert_eq!(
                 specialised.words, words,
@@ -645,7 +645,7 @@ mod tests {
         VertexStage::new(
             &shader,
             &binding,
-            &iridia_dxbc::lift(PIXEL).unwrap(),
+            &primase_core::shader::lift_dxbc(PIXEL).unwrap(),
             false,
             frame,
         )
@@ -668,7 +668,7 @@ mod tests {
         let mut binding = resolve_vertex(&shader, entity).unwrap().stage;
         let frame = FrozenFrame::static_bake(0.);
         // Unlike PIXEL, this program consumes TANGENT0.w and TEXCOORD7.w: both the sign and COLOR1.x are live.
-        let pixel = iridia_dxbc::lift(SIGN_PIXEL).unwrap();
+        let pixel = primase_core::shader::lift_dxbc(SIGN_PIXEL).unwrap();
         let planned = VertexStage::new(&shader, &binding, &pixel, false, &frame).unwrap();
         let sign: Vec<_> = planned
             .attributes
@@ -725,7 +725,7 @@ mod tests {
         let planned = VertexStage::new(
             &shader,
             &binding,
-            &iridia_dxbc::lift(include_bytes!("../../../tests/fixtures/fixed_function.dxbc")).unwrap(),
+            &primase_core::shader::lift_dxbc(include_bytes!("../../../tests/fixtures/fixed_function.dxbc")).unwrap(),
             false,
             &FrozenFrame::static_bake(0.),
         )
@@ -769,7 +769,7 @@ mod tests {
             .position(|i| i.label.name.eq_ignore_ascii_case("COLOR") && i.label.index == 1)
             .unwrap();
         binding.inputs[at].role = InputRole::Stream(primase_core::shader::Attribute::Color(0));
-        let pixel = iridia_dxbc::lift(SIGN_PIXEL).unwrap();
+        let pixel = primase_core::shader::lift_dxbc(SIGN_PIXEL).unwrap();
         let planned =
             VertexStage::new(&shader, &binding, &pixel, false, &FrozenFrame::static_bake(0.)).unwrap();
         assert!(planned.policies.contains_key(COLOUR0_POLICY));
@@ -842,7 +842,7 @@ mod tests {
         let skinned = VertexStage::new(
             &shader,
             &binding,
-            &iridia_dxbc::lift(PIXEL).unwrap(),
+            &primase_core::shader::lift_dxbc(PIXEL).unwrap(),
             false,
             &FrozenFrame::static_bake(0.),
         )

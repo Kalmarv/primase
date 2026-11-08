@@ -2774,7 +2774,7 @@ mod tests {
             let Some(program) = fixture::program(template) else {
                 return;
             };
-            let program = iridia_dxbc::lift(&program).unwrap();
+            let program = primase_core::shader::lift_dxbc(&program).unwrap();
             let roles = output_bindings(&program.interface, shading_class(template), true);
             let surface = Surface::read(roles.iter().map(|r| (r.lanes, &r.role)));
             assert!(
@@ -2848,7 +2848,7 @@ mod tests {
         let Some(program) = fixture::program("MAD_Fake") else {
             return;
         };
-        let shader = iridia_exec::ProgramShader::new(iridia_dxbc::lift(&program).unwrap()).unwrap();
+        let shader = iridia_exec::ProgramShader::from_ir(primase_core::shader::lift_dxbc(&program).unwrap()).unwrap();
         let mut w = World::new();
         let rgba = [[92, 128, 187, 211], [128, 128, 193, 170]];
         let mut textures = Vec::new();
@@ -2966,7 +2966,7 @@ mod tests {
         let Some(program) = fixture::program("MAD_Tex1") else {
             return;
         };
-        let shader = iridia_exec::ProgramShader::new(iridia_dxbc::lift(&program).unwrap()).unwrap();
+        let shader = iridia_exec::ProgramShader::from_ir(primase_core::shader::lift_dxbc(&program).unwrap()).unwrap();
         let mut w = World::new();
         let image = white_texture(&mut w);
         let floats = vec![1.0, 1.0, 0.1, -0.2, 0.0, 0.0, 0.3, 0.0];

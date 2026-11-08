@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use inputs::{Game, install};
 use iridia_interface::Stage;
+use iridia_naga::{BindingPlan, Pipeline, Profile, wgsl_for};
 use primase_anvil::passes::RESOLVE_ANVIL_SHADERS;
 use primase_anvil::read::convert::{
     AnvilOptions, AnvilReader, CellSelection, Edition, ForgeFile, GridSelection, Levels,
@@ -79,11 +80,11 @@ fn how_the_programs_read_the_engine_buffers() {
         let Some(shader) = world.get::<Shader>(e) else {
             continue;
         };
-        let Ok(lifted) = iridia_dxbc::lift(&shader.bytecode) else {
+        let Ok(lifted) = primase_core::shader::lift_dxbc(&shader.bytecode) else {
             continue;
         };
         programs += 1;
-        let Ok(reads) = lifted.constant_reads() else {
+        let Ok(reads) = iridia_analysis::WordsRead::of_program(&lifted) else {
             continue;
         };
         for register in 0..3 {
@@ -115,8 +116,12 @@ fn how_the_programs_read_the_engine_buffers() {
         let dump = inputs::scratch().join("anvil-engine-use");
         std::fs::create_dir_all(&dump).unwrap();
         for (stage, (_, bytes)) in smallest {
-            let lifted = iridia_dxbc::lift(&bytes).unwrap();
-            let text = iridia::emit::wgsl(&lifted).unwrap();
+            let lifted = primase_core::shader::lift_dxbc(&bytes).unwrap();
+            let pipeline = Pipeline {
+                plan: BindingPlan::d3d(&lifted.interface).unwrap(),
+                feeds: None,
+            };
+            let text = wgsl_for(&lifted, &Profile::NAGA, &pipeline).unwrap().text;
             let name = if stage == Stage::Vertex { "vertex" } else { "pixel" };
             std::fs::write(dump.join(format!("{name}.wgsl")), text).unwrap();
         }

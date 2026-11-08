@@ -15,8 +15,8 @@
 //! [`palette_indexed_by_vertex`] reads in the value graph whether a constant buffer is indexed by a vertex stream, as a
 //! joint palette is, or only by the instance, as the object matrices of an unskinned draw are.
 
-use iridia::Program;
-use iridia::flow::{At, Node, NodeId, Values};
+use iridia_ir::Program;
+use iridia_analysis::flow::{At, Node, NodeId, Values};
 use iridia_exec::probe::{ProbeRun, VertexProbe, Zeros};
 use iridia_interface::{BufferLayout, ConstantType, ResourceId, ResourceKind, ScalarType};
 use std::collections::{BTreeMap, BTreeSet};
@@ -103,7 +103,7 @@ fn identity(ty: &ConstantType) -> Result<Vec<u32>, String> {
 /// Whether the clip position of the vertex program `program` is of a world with the camera at its origin, by running it
 /// with the matrix, the palettes and the camera at the values of the module documentation ([`VertexProbe`]).
 pub fn camera_form(program: &Program) -> Result<CameraForm, String> {
-    let probe = VertexProbe::new(program.clone())?;
+    let probe = VertexProbe::from_ir(program.clone())?;
     let iface = &program.interface;
     let inputs: Vec<[u32; 4]> = iface
         .inputs
@@ -193,7 +193,7 @@ pub fn palette_indexed_by_vertex(program: &Program, buffer: ResourceId) -> Resul
     Ok(values.reached_from(values.roots()).into_iter().any(|id| {
         matches!(
             values.node(id),
-            Node::Global { resource: Some(resource), at: At::Indexed { index, .. } }
+            Node::Global { resource, at: At::Indexed { index, .. } }
                 if *resource == buffer && by_vertex(index)
         )
     }))

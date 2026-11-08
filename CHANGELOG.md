@@ -3,11 +3,16 @@
 ## Unreleased
 
 - **Breaking:** iridia 0.6.0 by git revision of its main until its next release (was 0.5.0) and the dx readers 0.12.0 (`dxbc-reader`,
-  `dxil-reader`, `dxcontainer`, `rsx-reader`; were 0.5.0), with `anvil-formats` and `rme-formats` on the same dx by git revision of their
-  `dx-0.12` branches, so the build links one version of each dx reader. Public fields and functions that carry iridia's types
+  `dxil-reader`, `dxcontainer`, `rsx-reader`; were 0.5.0), with `anvil-formats` 0.2.1 and `rme-formats` 0.5.0 (the versions primase already used) rebuilt on the same dx by git revision of
+  their `dx-0.12-on-0.2.1` and `dx-0.12-on-0.5.0` branches, only the dx dependency changed, so the build links one version of each dx reader. Public fields and functions that carry iridia's types
   (`LiftedShader`, the derivation and specialisation programs, `iridia_interface` render states and address modes, `iridia_exec::ProgramShader`
-  in the Sekiro bake) now carry iridia 0.6's. iridia 0.6's `ProgramShader::program` is an `Option` (`None` only for a program of the IR);
-  primase-fromsoft makes every executor from a lifted program and reads it back through one function that says so.
+  in the Sekiro bake) now carry iridia 0.6's.
+- **Breaking:** the shader programs primase holds, derives and specialises are iridia's IR (`iridia_ir::Program`), not the naga-module `iridia::Program`:
+  `LiftedShader`, `Derivation`, `Specialised`, the blend and input-fallback analyses of primase-core, and the shader passes of
+  primase-unity, -monogame, -frostbite, -stuntboost, -anvil and -fromsoft lift with `primase_core::shader::{lift_dxbc, lift_dxil}` (and their
+  `_with` forms), which lift and prepare the program (`iridia_passes::prepare`; a test keeps every source on them; monogame prepares its `iridia_mojo::ir::lift` the same way), take value graphs and constant reads from `iridia_analysis`, specialise with `iridia_passes` and run on
+  `iridia_exec`'s `from_ir` executors. The Sekiro material bake's cache key carries the IR lifters' versions (cached bakes rebuild once). The
+  census tests write WGSL with `iridia_naga` (its writer's refusals are counted by reason). primase-gta and primase-shaunwhite are not on the IR yet.
 
 ## 0.2.0 (2026-11-06)
 

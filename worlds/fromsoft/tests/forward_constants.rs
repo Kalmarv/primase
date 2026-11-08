@@ -24,8 +24,9 @@
 mod inputs;
 
 use fromsoft_formats::{Game, Keys, dcx::Decoder};
-use iridia::flow::{At, BinaryOperator, Literal, MathFunction, Node, NodeId, Op, Values};
+use iridia_analysis::flow::{At, Literal, Node, NodeId, Op, Values};
 use iridia_interface::{BufferLayout, ConstantType, Interface, ResourceId, ResourceKind, Stage};
+use iridia_ir::{Binary, Unary};
 use primase_core::shader::{ConstantRole, Shader, ShaderBinding, StageBinding};
 use primase_core::{Entity, Name, World};
 use primase_fromsoft::game::ParamKey;
@@ -75,7 +76,7 @@ fn lines_of(values: &Values, id: NodeId, lines: u32) -> Option<BTreeSet<u32>> {
             operands,
         } if operands.len() == 1 => lines_of(values, operands[0], lines),
         Node::Op {
-            op: Op::Binary(BinaryOperator::Add),
+            op: Op::Binary(Binary::IAdd | Binary::FAdd),
             operands,
         } if operands.len() == 2 => {
             match (
@@ -90,7 +91,7 @@ fn lines_of(values: &Values, id: NodeId, lines: u32) -> Option<BTreeSet<u32>> {
             }
         }
         Node::Op {
-            op: Op::Binary(BinaryOperator::Multiply),
+            op: Op::Binary(Binary::IMul | Binary::FMul(_)),
             operands,
         } if operands.len() == 2 => {
             let (a, b) = (operands[0], operands[1]);
@@ -113,10 +114,7 @@ fn lines_of(values: &Values, id: NodeId, lines: u32) -> Option<BTreeSet<u32>> {
 
 /// The constant words `id` reads, if it is a constant buffer's component: of `interface`'s buffer (the graph's id).
 fn read_words(values: &Values, interface: &Interface, id: NodeId) -> Vec<(ResourceId, u32)> {
-    let Node::Global {
-        resource: Some(buffer),
-        at,
-    } = values.node(id)
+    let Node::Global { resource: buffer, at } = values.node(id)
     else {
         return Vec::new();
     };
@@ -126,15 +124,16 @@ fn read_words(values: &Values, interface: &Interface, id: NodeId) -> Vec<(Resour
     let words = layout.size.div_ceil(4);
     match at {
         At::Component(word) => vec![(*buffer, *word)],
-        At::Indexed { lane, index } => {
+        At::Indexed { word, stride, index } => {
+            // a step of the index is `stride` bytes: a constant buffer's line (16) is four words
             let lines = index
                 .first()
-                .filter(|_| index.len() == 1)
+                .filter(|_| index.len() == 1 && *stride % 4 == 0)
                 .and_then(|&i| lines_of(values, i, words.div_ceil(4)));
             match lines {
                 Some(lines) => lines
                     .into_iter()
-                    .map(|l| (*buffer, l * 4 + lane))
+                    .map(|l| (*buffer, word + l * (stride / 4)))
                     .filter(|(_, w)| *w < words)
                     .collect(),
                 None => (0..words).map(|w| (*buffer, w)).collect(),
@@ -166,6 +165,8 @@ fn made_of(values: &Values, root: NodeId) -> BTreeSet<NodeId> {
             | Node::Input { .. }
             | Node::Supplied { .. }
             | Node::Query { .. }
+            | Node::Counter { .. }
+            | Node::Undef
             | Node::Literal(_) => {}
         }
     }
@@ -179,11 +180,11 @@ fn divisors(values: &Values) -> Vec<NodeId> {
         .into_iter()
         .filter_map(|id| match values.node(id) {
             Node::Op {
-                op: Op::Binary(BinaryOperator::Divide),
+                op: Op::Binary(Binary::FDiv),
                 operands,
             } => operands.get(1).copied(),
             Node::Op {
-                op: Op::Math(MathFunction::InverseSqrt),
+                op: Op::Unary(Unary::FInverseSqrt),
                 operands,
             } => operands.first().copied(),
             _ => None,
@@ -260,10 +261,10 @@ struct Reads {
 /// The words `shader`'s program reads ([`Reads`]).
 fn reads(shader: &Shader, program: &str) -> Result<Reads> {
     let lifted = match shader.format {
-        iridia_interface::ShaderFormat::Dxbc => iridia_dxbc::lift(&shader.bytecode)?,
-        _ => iridia_dxil::lift(&shader.bytecode)?,
+        iridia_interface::ShaderFormat::Dxbc => primase_core::shader::lift_dxbc(&shader.bytecode)?,
+        _ => primase_core::shader::lift_dxil(&shader.bytecode)?,
     };
-    let graph = lifted.graph().map_err(|e| format!("{program}: {e}"))?;
+    let graph = iridia_analysis::ProgramGraph::of_program(&lifted).map_err(|e| format!("{program}: {e}"))?;
     // the graph's buffers by their bind point, as the stored interface numbers them
     let stored = |id: ResourceId| -> Result<ResourceId> {
         let point = graph.interface.resource(id).and_then(|r| r.provenance.d3d);

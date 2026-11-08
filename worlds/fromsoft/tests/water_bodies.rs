@@ -264,7 +264,7 @@ fn fixture(world: &mut World) -> Result<Fixture> {
             },
         )]),
     };
-    let executor = iridia_exec::ProgramShader::new(iridia_dxbc::lift(PROGRAM)?)?;
+    let executor = iridia_exec::ProgramShader::from_ir(primase_core::shader::lift_dxbc(PROGRAM)?)?;
     let program = world.spawn();
     let wave = world.spawn();
     let resolution = resolve(

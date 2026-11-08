@@ -1,9 +1,9 @@
 //! skate.'s compiled shader programs (the CompiledBytecode resources of every superbundle TOC of its `Data`): each read
-//! to its containers and its interface, each program of a stage the lift handles lifted, validated and written as
+//! to its containers and its interface, each program of a stage the lift handles lifted onto the IR, validated and written as
 //! WGSL, and the census printed (resources, containers, tags, stages, refusals by reason). A resource the bytecode
-//! reader cannot read to its end fails the test; a lift refusal is counted, not a failure, but a program that lifts
-//! must validate and either write WGSL or, when WGSL cannot express it (a texture atomic's old value), keep a text form
-//! that states why: those are counted by reason, and any other failure is invalid. Needs the skate. install (`Data`) and the game's Oodle 9 library: unset skips.
+//! reader cannot read to its end fails the test; a lift refusal is counted, not a failure, and so is a program WGSL
+//! cannot express (a texture atomic's old value: the writer's refusal is counted by reason), but a program that lifts
+//! must validate. Needs the skate. install (`Data`) and the game's Oodle 9 library: unset skips.
 
 #![allow(clippy::unwrap_used)]
 
@@ -16,6 +16,7 @@ use frostbite_formats::bytecode::{self as stored, RTYPE};
 use frostbite_formats::folder::{Folder, Source};
 use inputs::{Game, Tool, install_file, tool};
 use iridia_interface::Stage;
+use iridia_naga::{BindingPlan, Pipeline, Profile, wgsl_for};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::bytecode;
 
@@ -76,37 +77,20 @@ fn every_compiled_program_of_the_install() {
                     ) {
                         continue;
                     }
-                    match iridia_dxil::lift(&shader.bytecode) {
+                    match primase_core::shader::lift_dxil(&shader.bytecode) {
                         Err(err) => *refused.entry(err.group()).or_default() += 1,
                         Ok(program) => {
                             lifted += 1;
-                            match program.validate() {
+                            match iridia_ir::validate(&program) {
                                 Err(p) => invalid.push(format!("{}: {p:?}", e.name)),
                                 Ok(_) => {
-                                    match iridia::emit::wgsl(&program) {
-                                        Ok(_) => {}
-                                        // WGSL cannot write it: the program keeps a text form that says why
-                                        Err(iridia::ProgramError::Unsupported { detail, .. }) => {
-                                            match program.text() {
-                                                Ok(text)
-                                                    if text.lines().any(|l| {
-                                                        l.starts_with(
-                                                        "// the module below is naga's IR (Debug), not WGSL",
-                                                    ) && l.contains(&detail)
-                                                    }) =>
-                                                {
-                                                    *text_form.entry(reason(&detail)).or_default() += 1;
-                                                }
-                                                Ok(_) => invalid.push(format!(
-                                                    "{}: no stated reason for: {detail}",
-                                                    e.name
-                                                )),
-                                                Err(err) => {
-                                                    invalid.push(format!("{}: text form: {err}", e.name))
-                                                }
-                                            }
-                                        }
-                                        Err(err) => invalid.push(format!("{}: {err}", e.name)),
+                                    // WGSL cannot write every program (a texture atomic's old value): the writer says why
+                                    let written = BindingPlan::d3d(&program.interface).and_then(|plan| {
+                                        let pipeline = Pipeline { plan, feeds: None };
+                                        wgsl_for(&program, &Profile::NAGA, &pipeline).map_err(|e| e.0)
+                                    });
+                                    if let Err(why) = written {
+                                        *text_form.entry(reason(&why)).or_default() += 1;
                                     }
                                 }
                             }
@@ -118,7 +102,7 @@ fn every_compiled_program_of_the_install() {
     }
     println!(
         "{resources} CompiledBytecode resources, {containers} containers, tags {tags:?}, per stage {per_stage:?}; \
-         {lifted} vertex, pixel and compute programs lifted ({} keep a text form, WGSL cannot write them), {} refused, \
+         {lifted} vertex, pixel and compute programs lifted ({} WGSL cannot write), {} refused, \
          {} resources whose interface is not read",
         text_form.values().sum::<usize>(),
         refused.values().sum::<usize>(),
@@ -131,7 +115,7 @@ fn every_compiled_program_of_the_install() {
         println!("  lift refused {n:5}  {why}");
     }
     for (why, n) in &text_form {
-        println!("  text form only {n:5}  {why}");
+        println!("  WGSL refused {n:5}  {why}");
     }
     for line in invalid.iter().take(20) {
         println!("  INVALID {line}");
@@ -139,7 +123,7 @@ fn every_compiled_program_of_the_install() {
     assert!(resources > 15_000, "{resources} resources");
     assert!(
         invalid.is_empty(),
-        "{} lifted programs failed validation, writing or keeping a text form",
+        "{} lifted programs failed validation",
         invalid.len()
     );
 }

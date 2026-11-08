@@ -907,10 +907,10 @@ fn sun_outputs_are_finite(graph: &RenderGraph, world: &World, game: FsGame) {
         .unwrap();
     let stored = world.get::<Shader>(stage.shader).unwrap();
     let lifted = match stored.format {
-        iridia_interface::ShaderFormat::Dxbc => iridia_dxbc::lift(&stored.bytecode),
-        _ => iridia_dxil::lift(&stored.bytecode),
+        iridia_interface::ShaderFormat::Dxbc => primase_core::shader::lift_dxbc(&stored.bytecode),
+        _ => primase_core::shader::lift_dxil(&stored.bytecode),
     };
-    let shader = ProgramShader::new(lifted.unwrap()).unwrap();
+    let shader = ProgramShader::from_ir(lifted.unwrap()).unwrap();
     let layout = Layout::of(&shader).unwrap();
     for active in [false, true] {
         let mut constants = iridia_exec::evaluate::Constants::new(&layout);

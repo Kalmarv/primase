@@ -9,8 +9,8 @@ use crate::sekiro::source::{
     MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads, draw_of,
 };
 use fromsoft_formats::metaparam::Metaparam;
-use iridia::ProgramGraph;
-use iridia::output_uses::output_uses;
+use iridia_analysis::{GraphError, ProgramGraph};
+use iridia_analysis::output_uses::output_uses;
 use iridia_exec::PixelShader;
 use iridia_exec::{Layout, ProgramShader};
 use iridia_interface::{ShaderFormat, Stage};
@@ -48,7 +48,7 @@ const VERTEX_STORES_DIFFER: &str =
 struct VertexProgram {
     entity: Entity,
     shader: Shader,
-    program: Result<iridia::Program, String>,
+    program: Result<iridia_ir::Program, String>,
     layout: Result<Layout, String>,
 }
 
@@ -97,7 +97,7 @@ fn bind_extra_fallbacks(stage: &mut StageBinding, interface: &iridia_interface::
 /// the engine's per-view, per-frame and per-object values as roles (never values), the sampler state the source
 /// states (none), each texture slot and the G-buffer's outputs by their role (a lane the layout leaves Unknown is
 /// Coverage where the program's discard tests what it writes there, Opacity where the target's blend weighs by its alpha:
-/// [`iridia::output_uses`], counted by program family). A material whose program the reader does not hold is
+/// [`iridia_analysis::output_uses`], counted by program family). A material whose program the reader does not hold is
 /// counted and left unbound.
 ///
 /// The option is required: it says what a texture slot with no texture, or whose file the reader does not hold,
@@ -321,7 +321,7 @@ fn run(
         })
         .collect();
     // the programs read once, each its own entity, with its value graph (or why there is none)
-    let mut shaders: BTreeMap<String, (Entity, ProgramShader, Result<ProgramGraph, String>)> =
+    let mut shaders: BTreeMap<String, (Entity, ProgramShader, Result<ProgramGraph, GraphError>)> =
         BTreeMap::new();
     // the textures spawned, by stem and colour space
     let mut textures: BTreeMap<(String, bool), Entity> = BTreeMap::new();
@@ -443,7 +443,7 @@ fn run(
                         MaterialPrograms(vec![ProgramFacts::unavailable(
                             &name,
                             Stage::Pixel,
-                            Some(iridia::source_hash(&bytes)),
+                            Some(iridia_ir::source_hash(&bytes)),
                             error.to_string(),
                         )]),
                     );
@@ -457,7 +457,7 @@ fn run(
                 lifted.provenance.instruction_count,
                 &lifted.interface,
             );
-            let parsed = match ProgramShader::new(lifted) {
+            let parsed = match ProgramShader::from_ir(lifted) {
                 Ok(parsed) => parsed,
                 Err(error) => {
                     // This is an executor refusal, not a failed lift: retain the successful source facts.
@@ -481,7 +481,7 @@ fn run(
                 entity,
                 LiftedShader(Arc::new(crate::layer_bake::lifted_program(&parsed).clone())),
             );
-            let graph = crate::layer_bake::lifted_program(&parsed).graph();
+            let graph = ProgramGraph::of_program(crate::layer_bake::lifted_program(&parsed));
             shaders.insert(name.clone(), (entity, parsed, graph));
         }
         let (shader_entity, parsed, graph) = &shaders[&name];
@@ -548,7 +548,7 @@ fn run(
                             iridia_dxbc::reflection(&code).map_err(|e| format!("{vertex_name}: {e}"))?
                         }
                         _ => {
-                            iridia_dxil::lift(&code)
+                            primase_core::shader::lift_dxil(&code)
                                 .map_err(|e| format!("{vertex_name}: {e}"))?
                                 .interface
                         }
@@ -562,8 +562,8 @@ fn run(
                     };
                     world.insert(entity, shader.clone());
                     let program = match format {
-                        ShaderFormat::Dxbc => iridia_dxbc::lift(&code).map_err(|e| e.to_string()),
-                        _ => iridia_dxil::lift(&code).map_err(|e| e.to_string()),
+                        ShaderFormat::Dxbc => primase_core::shader::lift_dxbc(&code).map_err(|e| e.to_string()),
+                        _ => primase_core::shader::lift_dxil(&code).map_err(|e| e.to_string()),
                     };
                     // the exact lift, where its interface is the one the shader states (a DXBC program's is its
                     // reflection's)
@@ -574,7 +574,7 @@ fn run(
                     }
                     let layout = program
                         .clone()
-                        .and_then(|lifted| ProgramShader::new(lifted).map_err(|e| e.to_string()))
+                        .and_then(|lifted| ProgramShader::from_ir(lifted).map_err(|e| e.to_string()))
                         .and_then(|program| Layout::of(&program).map_err(|e| e.to_string()));
                     vertex_shaders.insert(
                         vertex_name.clone(),
@@ -967,7 +967,7 @@ mod program_facts_tests {
                 &lifted.interface,
             );
             assert_eq!(facts.stage, Stage::Pixel);
-            assert_eq!(facts.hash, Some(iridia::source_hash(bytes)));
+            assert_eq!(facts.hash, Some(iridia_ir::source_hash(bytes)));
             assert_eq!(facts.instruction_count.unwrap().unit, unit);
             assert!(facts.instruction_count.unwrap().count > 0);
             assert_eq!(

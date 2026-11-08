@@ -184,7 +184,7 @@ impl BoundTexture {
 #[derive(Clone, Copy)]
 pub(super) struct Stages<'a> {
     pub pixel: &'a StageBinding,
-    pub specialised: Option<&'a iridia::Program>,
+    pub specialised: Option<&'a iridia_ir::Program>,
     pub vertex: Option<&'a StageBinding>,
 }
 

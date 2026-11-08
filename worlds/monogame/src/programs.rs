@@ -7,7 +7,8 @@
     clippy::cast_possible_truncation
 )]
 
-use iridia::{Program, Stage};
+use iridia_ir::Program;
+use iridia_ir::interface::Stage;
 use iridia_mojo::{Attribute, Constant, Hints, Sampler};
 
 use monogame_formats::mgfx::{Effect, Profile, Shader, Stage as ShaderStage};
@@ -146,7 +147,10 @@ pub fn program(effect: &Effect<'_>, index: usize) -> Result<Program, Error> {
         ShaderStage::Vertex => Stage::Vertex,
         ShaderStage::Pixel => Stage::Pixel,
     };
-    Ok(iridia_mojo::lift(source, stage, &hints(effect, shader)?)?)
+    let mut program = iridia_mojo::ir::lift(source, stage, &hints(effect, shader)?)?;
+    iridia_passes::prepare(&mut program)
+        .map_err(|why| iridia_ir::Refusal::new("MojoShader GLSL", iridia_ir::Unit::Line, 0, why))?;
+    Ok(program)
 }
 
 #[cfg(test)]

@@ -13,7 +13,8 @@ publish.workspace = true
 [dependencies]
 monogame-formats.workspace = true
 iridia-mojo.workspace = true
-iridia.workspace = true
+iridia-ir.workspace = true
+iridia-passes.workspace = true
 thiserror.workspace = true
 
 [lints]

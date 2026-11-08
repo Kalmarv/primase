@@ -163,7 +163,7 @@ fn the_game_program_composes_layers_as_core_does() -> Result<()> {
         .iter()
         .find(|m| m.name.as_deref().is_some_and(|n| n.ends_with(PROGRAM)))
         .ok_or_else(|| format!("{BINDER}: no {PROGRAM}"))?;
-    let shader = ProgramShader::new(iridia_dxil::lift(&member.bytes)?)?;
+    let shader = ProgramShader::from_ir(primase_core::shader::lift_dxil(&member.bytes)?)?;
     let interface = shader.interface().clone();
 
     let slots = [

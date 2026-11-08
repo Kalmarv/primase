@@ -24,7 +24,7 @@
 //!   `S R uv + translation` rows as the material lowering (material-spec §12.2).
 //!   The rows of `cb3` no binding covers are `Unknown`. The other constant buffers (`cb0` per frame, `cb1` per view,
 //!   `cb2` per draw) are the engine's: the program is lifted and only the lanes it reads are bound
-//!   ([`iridia::WordsRead`]: the words its outputs, discards and writes are made of; a program reads a
+//!   ([`iridia_analysis::WordsRead`]: the words its outputs, discards and writes are made of; a program reads a
 //!   few rows of buffers of some hundred; the rest are counted as left out, a buffer indexed by a computed value is one
 //!   `Unknown` constant). The rows the notes establish have roles where the vocabulary has one: `cb1[37]`
 //!   (`1/W, 1/H, W, H`) the `InverseViewportSize` in its lanes x, y and the `ViewportSize` in z, w, `cb1[39].x` the `PreExposure` (the multiplier the lighting passes scale their output by), `cb2[8..12]` and `cb2[12..16]` the object's `WorldViewProjection` and its `PreviousFrame` one,
@@ -70,8 +70,8 @@
 //! the vertex stage's are mesh streams by their semantic name.
 use std::collections::{BTreeMap, BTreeSet};
 
-use iridia::matrix::lines_at;
-use iridia::{ProgramGraph, WordsRead};
+use iridia_analysis::matrix::lines_at;
+use iridia_analysis::{GraphError, ProgramGraph, WordsRead};
 use iridia_interface::{
     AlphaTest, Compare, Cull, DepthState, Interface, RenderState, ResourceId, ResourceKind, SamplerState,
     ShaderFormat, Stage, SystemValue, TextureDim, Varying,
@@ -467,7 +467,7 @@ fn engine_constants(
     register: u32,
     resource: ResourceId,
     size: u32,
-    reads: Result<&WordsRead, &str>,
+    reads: Result<&WordsRead, &GraphError>,
     m: &AnvilMaterial,
     counts: &mut BTreeMap<String, u64>,
 ) -> Vec<ConstantBinding> {
@@ -719,7 +719,7 @@ impl Pass for ResolveAnvilShaders {
             .collect();
         let mut programs: BTreeMap<(Entity, bool, u32), Result<Entity, String>> = BTreeMap::new();
         // each program's value graph and constant reads, or why they could not be taken (the lift's or the graph's error)
-        let mut graphs: BTreeMap<Entity, Result<ProgramGraph, String>> = BTreeMap::new();
+        let mut graphs: BTreeMap<Entity, Result<ProgramGraph, GraphError>> = BTreeMap::new();
         // the vertex layout number (`anvil.layout.kind`) of every mesh drawn with each Material
         let mut layouts_of: BTreeMap<Entity, std::collections::BTreeSet<u8>> = BTreeMap::new();
         for (_, mesh) in world.iter::<AnvilMesh>() {
@@ -822,7 +822,7 @@ impl Pass for ResolveAnvilShaders {
                     let hash = world
                         .get::<AnvilShaders>(tables)
                         .and_then(|tables| tables.pixel(pixel_key))
-                        .map(iridia::source_hash);
+                        .map(iridia_ir::source_hash);
                     world.insert(
                         material,
                         MaterialPrograms(vec![ProgramFacts::unavailable(
@@ -884,7 +884,7 @@ impl Pass for ResolveAnvilShaders {
                         let hash = world
                             .get::<AnvilShaders>(tables)
                             .and_then(|tables| tables.vertex(key))
-                            .map(iridia::source_hash);
+                            .map(iridia_ir::source_hash);
                         facts.push(ProgramFacts::unavailable(
                             format!("{template}-{key:06x}.vs"),
                             Stage::Vertex,
@@ -921,7 +921,7 @@ impl Pass for ResolveAnvilShaders {
                     shader,
                     &interface,
                     vertex_bound,
-                    graph.as_ref().map_err(String::as_str),
+                    graph.as_ref(),
                     &mut counts,
                 );
                 facts.push(
@@ -981,7 +981,7 @@ pub const MESH_LAYOUT_FIELD: &str = "anvil.layout.kind";
 fn program(
     world: &mut World,
     programs: &mut BTreeMap<(Entity, bool, u32), Result<Entity, String>>,
-    graphs: &mut BTreeMap<Entity, Result<ProgramGraph, String>>,
+    graphs: &mut BTreeMap<Entity, Result<ProgramGraph, GraphError>>,
     template: &str,
     tables: Entity,
     is_vertex: bool,
@@ -998,7 +998,7 @@ fn program(
         None => Err(format!(
             "the template has no {stage} permutation for the G-buffer key"
         )),
-        Some(bytes) => match iridia_dxbc::lift(&bytes) {
+        Some(bytes) => match primase_core::shader::lift_dxbc(&bytes) {
             Err(e) => Err(format!("a {stage} program the lifter refuses: {e}")),
             Ok(program) => {
                 let e = world.spawn();
@@ -1015,7 +1015,7 @@ fn program(
                 );
                 graphs.insert(
                     e,
-                    program.graph().map_err(|why| format!("the value graph: {why}")),
+                    ProgramGraph::of_program(&program),
                 );
                 world.insert(e, Name(name));
                 world.insert(
@@ -1071,7 +1071,7 @@ impl ResolveAnvilShaders {
         shader: Entity,
         interface: &Interface,
         vertex_bound: bool,
-        graph: Result<&ProgramGraph, &str>,
+        graph: Result<&ProgramGraph, &GraphError>,
         counts: &mut BTreeMap<String, u64>,
     ) -> StageBinding {
         let reads = graph.map(|graph| &graph.reads);
@@ -1794,7 +1794,7 @@ mod key_tests {
             .unwrap()
             .clone()
             .bound(entity, &outputs);
-        assert_eq!(facts.hash, Some(iridia::source_hash(LIFTED)));
+        assert_eq!(facts.hash, Some(iridia_ir::source_hash(LIFTED)));
         assert_eq!(facts.stage, Stage::Pixel);
         assert!(facts.instruction_count.unwrap().count > 0);
         assert_eq!(
@@ -1829,7 +1829,7 @@ mod key_tests {
     /// pass reads for the class, the rest Unknown with why.
     #[test]
     fn a_lifted_pixel_programs_targets_have_the_gbuffer_roles() {
-        let program = iridia_dxbc::lift(LIFTED).unwrap();
+        let program = primase_core::shader::lift_dxbc(LIFTED).unwrap();
         assert!(
             program
                 .interface
@@ -1897,7 +1897,7 @@ mod key_tests {
     /// template with no class in the notes' table has them all Unknown.
     #[test]
     fn the_lanes_of_targets_2_and_3_follow_the_shading_class() {
-        let program = iridia_dxbc::lift(LIFTED).unwrap();
+        let program = primase_core::shader::lift_dxbc(LIFTED).unwrap();
         let of = |class: Option<u8>, target: u32| -> Vec<(u8, OutputRole)> {
             output_bindings(&program.interface, class, true)
                 .into_iter()
@@ -1932,7 +1932,7 @@ mod key_tests {
             surface::Base, surface::Emission, surface::Place, surface::Roughness, surface::Surface,
             surface::Term,
         };
-        let program = iridia_dxbc::lift(LIFTED).unwrap();
+        let program = primase_core::shader::lift_dxbc(LIFTED).unwrap();
         let read = |class: Option<u8>, opaque: bool| -> (Surface, Vec<u32>) {
             let outputs = output_bindings(&program.interface, class, opaque);
             let targets = outputs
@@ -2010,8 +2010,8 @@ mod key_tests {
     /// takes, on the lifter's D3D fixture.
     #[test]
     fn the_engine_buffers_bind_the_lanes_the_program_reads() {
-        let program = iridia_dxbc::lift(LIFTED).unwrap();
-        let reads = program.constant_reads().unwrap();
+        let program = primase_core::shader::lift_dxbc(LIFTED).unwrap();
+        let reads = WordsRead::of_program(&program).unwrap();
         let m = material(Vec::new(), Vec::new(), Vec::new());
         let mut found_buffer = false;
         for r in &program.interface.resources {
@@ -2071,7 +2071,7 @@ mod key_tests {
         m.flags.booleans[MaterialFlags::ALPHA_TEST_ENABLED] = 1;
         let mut counts = BTreeMap::new();
         // a program that reads cb2[18].y gets the Material's reference, the 128 / 255 of a Material with the test on
-        let reads = iridia_dxbc::lift(LIFTED).unwrap().constant_reads().unwrap();
+        let reads = WordsRead::of_program(&primase_core::shader::lift_dxbc(LIFTED).unwrap()).unwrap();
         let _ = engine_constants(2, ResourceId(0), 18 * 16 + 16, Ok(&reads), &m, &mut counts);
         let tile = |reference: f32| engine_tile(2, 18, reference).remove(0);
         assert_eq!(

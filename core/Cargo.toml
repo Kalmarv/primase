@@ -12,9 +12,13 @@ publish.workspace = true
 
 [dependencies]
 half.workspace = true
-iridia.workspace = true
-iridia-exec.workspace = true
+iridia-analysis.workspace = true
+iridia-dxbc.workspace = true
+iridia-dxil.workspace = true
+iridia-exec-ir.workspace = true
 iridia-interface.workspace = true
+iridia-ir.workspace = true
+iridia-passes.workspace = true
 primase-foundations.workspace = true
 thiserror.workspace = true
 serde.workspace = true
@@ -25,8 +29,8 @@ serde_json.workspace = true
 naga = { workspace = true, features = ["wgsl-in"] }
 # a GLSL fixture lifted to a program, for the shader specialisation tests
 iridia-mojo.workspace = true
-# a fixture compiled by fxc lifted to a program, for the reading of a blend (tests/blend.rs)
-iridia-dxbc.workspace = true
+# the executor, to run a lifted fixture beside what is read of it (tests/blend.rs)
+iridia-exec.workspace = true
 
 [lints]
 workspace = true

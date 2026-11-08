@@ -11,7 +11,6 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-iridia.workspace = true
 iridia-interface.workspace = true
 primase-core.workspace = true
 primase-monogame.workspace = true
@@ -23,8 +22,10 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-iridia.workspace = true
 iridia-exec.workspace = true
+iridia-ir.workspace = true
+iridia-naga.workspace = true
+iridia-passes.workspace = true
 primase-testdata.workspace = true
 
 [lints]
