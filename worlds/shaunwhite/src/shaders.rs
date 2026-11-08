@@ -7,12 +7,6 @@ pub mod albedo;
 /// Named base-UV graph derivation from the matching stored generic VS.
 pub mod base_uv;
 
-/// [`albedo`] over the IR (`iridia_ir::Program`, `iridia-d3d9-ir`, `iridia-analysis`): the same cut, matched on the IR's value graph.
-pub mod albedo_ir;
-
-/// [`base_uv`] over the IR.
-pub mod base_uv_ir;
-
 mod material;
 pub use material::bind_material;
 

@@ -365,8 +365,9 @@ fn binding(
                             .get(slot)
                             .ok_or_else(|| format!("{slot} texture not read"))?
                             .texture;
-                        let sampler = iridia_d3d9::sampler_states(s.states.iter().map(|s| (s.kind, s.value)))
-                            .map_err(|e| e.to_string())?;
+                        let sampler =
+                            iridia_d3d9_ir::sampler_states(s.states.iter().map(|s| (s.kind, s.value)))
+                                .map_err(|e| e.to_string())?;
                         Ok(TextureSource::Texture { texture, sampler })
                     })
                     .unwrap_or_else(|why| {
@@ -550,11 +551,11 @@ impl Pass for ResolveShaunwhiteShaders {
                 let loaded = cache
                     .entry((effect.pixel_key, bytes.clone()))
                     .or_insert_with(|| {
-                        let p = iridia_d3d9::lift(bytes).map_err(|e| e.to_string())?;
+                        let p = iridia_d3d9_ir::lift(bytes).map_err(|e| e.to_string())?;
                         let shader = w.spawn();
                         let fact = ProgramFacts {
                             name: format!("SM3 pixel {:016x}", effect.pixel_key),
-                            hash: Some(iridia::source_hash(bytes)),
+                            hash: Some(iridia_ir::source_hash(bytes)),
                             stage: Stage::Pixel,
                             shader: Some(shader),
                             instruction_count: None,
@@ -611,7 +612,7 @@ impl Pass for ResolveShaunwhiteShaders {
                         facts.push(ProgramFacts::unavailable(
                             name,
                             Stage::Pixel,
-                            Some(iridia::source_hash(bytes)),
+                            Some(iridia_ir::source_hash(bytes)),
                             why,
                         ));
                     }

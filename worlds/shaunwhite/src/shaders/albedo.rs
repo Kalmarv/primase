@@ -5,9 +5,9 @@
 //! Lighting, fog, influence colour control and tone mapping stay in the original tail. This bounded derivation
 //! refuses other families, extra value inputs and ambiguous frontiers; it never substitutes another permutation.
 use anvil_formats::shaunwhite::shaders::{Database, Key, Payload};
-use iridia::flow::{At, BinaryOperator, Node, NodeId, Op, UnaryOperator, Values};
-use iridia::{Program, source_hash};
-use iridia_d3d9::{Projection, Register};
+use iridia_analysis::flow::{At, Binary, Node, NodeId, Op, Unary, Values};
+use iridia_d3d9_ir::{Projection, Register};
+use iridia_ir::{Program, source_hash};
 use primase_core::shader::StageBinding;
 use primase_core::shader::{OutputBinding, OutputRole};
 use std::collections::{BTreeMap, BTreeSet};
@@ -48,6 +48,13 @@ pub struct DerivedAlbedo {
     /// The original program with only the cut RGB replaced by DERIVED_RGB0 (v31.xyz).
     /// Used to prove the cut through the program's own light/fog/tone/peak-normalization tail.
     pub reencode: Program,
+}
+
+/// A lift or projection taken through the passes every output and executor expects ([`iridia_passes::prepare`]).
+fn prepared(program: iridia_d3d9_ir::Result<Program>) -> Result<Program, String> {
+    let mut program = program.map_err(|e| e.to_string())?;
+    iridia_passes::prepare(&mut program)?;
+    Ok(program)
 }
 
 fn fingerprints(v: &Values) -> BTreeMap<NodeId, String> {
@@ -97,7 +104,7 @@ pub fn derive(
     if r.key.kind != 4 || r.key.permutation & 63 != 3 || (r.key.permutation >> 20) & 7 != 2 {
         return Err("albedo: not a generic forward Colour record".into());
     }
-    if binding.stage != iridia::Stage::Pixel {
+    if binding.stage != iridia_interface::Stage::Pixel {
         return Err("albedo: requires a pixel-stage binding".into());
     }
     if binding
@@ -125,11 +132,11 @@ pub fn derive(
         .pixel
         .as_deref()
         .ok_or("albedo: missing stored pixel program")?;
-    let source = iridia_d3d9::read(bytes).map_err(|e| e.to_string())?;
+    let source = iridia_d3d9_ir::read(bytes).map_err(|e| e.to_string())?;
     if source.instructions.len() > 512 {
         return Err("albedo: more than 512 instructions outside the bounded derivation".into());
     }
-    let full = iridia_d3d9::lift(bytes).map_err(|e| e.to_string())?;
+    let full = prepared(iridia_d3d9_ir::lift(bytes))?;
     let values = Values::of_program(&full)?;
     let hashes = fingerprints(&values);
     let output = full
@@ -203,7 +210,7 @@ pub fn derive(
                 temporary,
                 lanes,
             };
-            let p = iridia_d3d9::project(bytes, cut).map_err(|e| e.to_string())?;
+            let p = prepared(iridia_d3d9_ir::project(bytes, cut))?;
             let g = Values::of_program(&p)?;
             let h = fingerprints(&g);
             let roots = (0..3).filter_map(|l| g.output(0, l)).collect::<Vec<_>>();
@@ -230,7 +237,7 @@ pub fn derive(
                             ..
                         } if allowed.contains(word) => {}
                         Node::Texel {
-                            resource: Some(id),
+                            resource: id,
                             lane: tl,
                             ..
                         } => {
@@ -251,10 +258,7 @@ pub fn derive(
                         }
                         Node::Op {
                             op:
-                                Op::Binary(
-                                    BinaryOperator::Add | BinaryOperator::Subtract | BinaryOperator::Multiply,
-                                )
-                                | Op::Unary(UnaryOperator::Negate),
+                                Op::Binary(Binary::FAdd | Binary::FSub | Binary::FMul(_)) | Op::Unary(Unary::FNeg),
                             operands,
                         } => pending.extend(operands),
                         _ => valid = false,
@@ -326,9 +330,7 @@ pub fn derive(
                     label.name, label.index
                 ));
             }
-            Node::Texel {
-                resource: Some(id), ..
-            } => {
+            Node::Texel { resource: id, .. } => {
                 cut_inputs.insert(format!(
                     "{}: unresolved forward texture",
                     full.interface.resources[id.0 as usize].provenance.name
@@ -337,7 +339,7 @@ pub fn derive(
             _ => {}
         }
     }
-    let reencode = iridia_d3d9::reencode(bytes, cut).map_err(|e| e.to_string())?;
+    let reencode = prepared(iridia_d3d9_ir::reencode(bytes, cut))?;
     Ok(DerivedAlbedo {
         program,
         binding: b,

@@ -49,7 +49,7 @@ fn frame(bytes: &[u8], at: usize, expected: Stage) -> Result<()> {
         Stage::Vertex => iridia_interface::Stage::Vertex,
         Stage::Pixel => iridia_interface::Stage::Pixel,
     };
-    let (stage, program) = iridia_d3d9::frame(bytes).map_err(|e| Error::Stage {
+    let (stage, program) = iridia_d3d9_ir::frame(bytes).map_err(|e| Error::Stage {
         at,
         why: e.to_string(),
     })?;

@@ -5,6 +5,21 @@ use anvil_formats::shaunwhite::shaders::{Database, Payload};
 use iridia_interface::Stage;
 use primase_core::shader::{KeyPart, VariantKey};
 use primase_core::{World, shader::StageBinding};
+/// An SM3 program lifted and taken through the passes every analysis and executor of the IR expects.
+#[allow(dead_code, reason = "each test crate uses the fixtures it needs")]
+pub fn lifted(bytes: &[u8]) -> iridia_ir::Program {
+    let mut program = iridia_d3d9_ir::lift(bytes).unwrap();
+    iridia_passes::prepare(&mut program).unwrap();
+    program
+}
+/// The number of an input register (`vN` or `tN`), the index its value takes in a run's inputs.
+#[allow(dead_code, reason = "each test crate uses the fixtures it needs")]
+pub fn register_number(register: iridia_d3d9_ir::Register) -> usize {
+    match register {
+        iridia_d3d9_ir::Register::Input(n) | iridia_d3d9_ir::Register::Texture(n) => n as usize,
+        other => panic!("{other:?} is not an input register"),
+    }
+}
 pub fn binding(db: &Database, record: u32) -> StageBinding {
     let shader = World::new().spawn();
     StageBinding {

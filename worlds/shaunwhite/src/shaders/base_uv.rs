@@ -3,11 +3,9 @@
 //! use only raw TEXCOORD0.xy and the six established base-matrix words. Frame and other outputs are cut.
 use crate::components::MaterialRef;
 use anvil_formats::shaunwhite::shaders::{Database, Key, Payload};
-use iridia::{
-    Program,
-    flow::{At, Node, Values},
-};
+use iridia_analysis::flow::{At, Node, Values};
 use iridia_interface::{ResourceId, ResourceKind, Stage};
+use iridia_ir::Program;
 use primase_core::shader::StageBinding;
 use primase_core::shader::{Attribute, ConstantBinding, ConstantRole, InputBinding, InputRole, LaneStream};
 use std::collections::BTreeSet;
@@ -39,6 +37,13 @@ pub struct DerivedBaseUv {
     pub inputs: Vec<InputBinding>,
     pub constants: Vec<ConstantBinding>,
     pub derivation: Derivation,
+}
+
+/// A lift or projection taken through the passes every output and executor expects ([`iridia_passes::prepare`]).
+fn prepared(program: iridia_d3d9_ir::Result<Program>) -> Result<Program, String> {
+    let mut program = program.map_err(|e| e.to_string())?;
+    iridia_passes::prepare(&mut program)?;
+    Ok(program)
 }
 
 fn describe(program: &Program, node: &Node) -> Option<String> {
@@ -107,7 +112,7 @@ pub fn derive(
         .vertex
         .as_deref()
         .ok_or("base UV: stored vertex program missing")?;
-    let source = iridia_d3d9::read(bytes).map_err(|e| e.to_string())?;
+    let source = iridia_d3d9_ir::read(bytes).map_err(|e| e.to_string())?;
     if source.stage != Stage::Vertex || source.instructions.len() > 512 {
         return Err("base UV: not a bounded SM3 vertex program".into());
     }
@@ -116,7 +121,10 @@ pub fn derive(
         .iter()
         .find(|o| o.usage == 5 && o.index == 7 && o.mask & 3 == 3)
         .ok_or("base UV: TEXCOORD7.xy not declared")?;
-    let full = iridia_d3d9::lift(bytes).map_err(|e| e.to_string())?;
+    let iridia_d3d9_ir::Register::Output(register) = output.register else {
+        return Err("base UV: TEXCOORD7 is not an oN output".into());
+    };
+    let full = prepared(iridia_d3d9_ir::lift(bytes))?;
     let graph = Values::of_program(&full)?;
     let oi = full
         .interface
@@ -160,7 +168,7 @@ pub fn derive(
                 input_lanes.insert((*input, *lane));
             }
             Node::Global {
-                resource: Some(id),
+                resource: id,
                 at: At::Component(word),
             } if allowed.contains(&(*id, *word)) => {
                 seen.insert((*id, *word));
@@ -175,7 +183,7 @@ pub fn derive(
     {
         return Err("base UV: graph is not the complete UV0/base-matrix composition".into());
     }
-    let program = iridia_d3d9::project_vertex_output(bytes, output.register, 3).map_err(|e| e.to_string())?;
+    let program = prepared(iridia_d3d9_ir::project_vertex_output(bytes, register, 3))?;
     let constants = super::material::bind_constants(&program.interface, &[], material)?;
     for &(id, word) in &seen {
         let at = word * 4;
@@ -220,9 +228,9 @@ pub fn derive(
             record,
             key: r.key,
             vertex_key: effect.vertex_key,
-            source_hash: iridia::source_hash(bytes),
+            source_hash: iridia_ir::source_hash(bytes),
             material: material.id,
-            output_register: output.register,
+            output_register: register,
             words: seen.into_iter().collect(),
             cuts: vec![
                 "clip position, lighting, fog, influence and other VS outputs: excluded, unresolved".into(),

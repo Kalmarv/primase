@@ -77,8 +77,8 @@ fn hand_worked_frontier_is_a_derivation_and_refuses_a_disconnected_colour() {
     assert_eq!(d.derivation.projection.after_word, 7);
     assert_eq!(d.derivation.influence, Influence::Unrestored);
     assert!(d.derivation.cut_inputs.iter().any(|s| s.starts_with("c0 lane")));
-    let first_text = iridia::emit::wgsl(&d.program).unwrap();
-    let p = ProgramShader::new(d.program).unwrap();
+    let first_text = iridia_naga::wgsl(&d.program, &iridia_naga::Profile::NAGA).unwrap();
+    let p = ProgramShader::from_ir(d.program.clone()).unwrap();
     let result = p
         .execute(
             &[[0; 4]],
@@ -104,7 +104,10 @@ fn hand_worked_frontier_is_a_derivation_and_refuses_a_disconnected_colour() {
             .contains("cache key")
     );
     let same = derive(&db, 0, &b, Influence::Unrestored).unwrap();
-    assert_eq!(iridia::emit::wgsl(&same.program).unwrap(), first_text);
+    assert_eq!(
+        iridia_naga::wgsl(&same.program, &iridia_naga::Profile::NAGA).unwrap(),
+        first_text
+    );
     let mut bad = b.clone();
     bad.variant.as_mut().unwrap().value = 1;
     assert!(
@@ -239,7 +242,7 @@ fn check_material_bindings(
 ) {
     use primase_core::shader::ConstantRole;
     let bound = primase_shaunwhite::shaders::bind_material(derived, &source_material(case)).unwrap();
-    let reads = derived.program.constant_reads().unwrap();
+    let reads = iridia_analysis::WordsRead::of_program(&derived.program).unwrap();
     let mut checked = 0;
     for c in &bound.constants {
         if let ConstantRole::Material(words) = &c.role {
@@ -275,7 +278,7 @@ fn check_material_bindings(
     );
 }
 fn state(effect: &Effect, case: Case, influence: f32) -> State {
-    let source = iridia_d3d9::read(effect.pixel.as_ref().unwrap()).unwrap();
+    let source = iridia_d3d9_ir::read(effect.pixel.as_ref().unwrap()).unwrap();
     let mut s = State {
         c: [[0.; 4]; 224],
         v: [[0.; 4]; 11],
@@ -350,7 +353,7 @@ fn execute_sample(
     cut: Option<[f32; 4]>,
     sample: &mut dyn iridia_exec::Sampler,
 ) -> [f32; 4] {
-    let source = iridia_d3d9::read(effect.pixel.as_ref().unwrap()).unwrap();
+    let source = iridia_d3d9_ir::read(effect.pixel.as_ref().unwrap()).unwrap();
     let mut v = vec![[0; 4]; 32];
     for i in &source.inputs {
         let host = match (i.usage, i.index) {
@@ -359,7 +362,7 @@ fn execute_sample(
             (5, n) => 2 + usize::from(n),
             _ => unreachable!(),
         };
-        v[i.register as usize] = s.v[host].map(f32::to_bits);
+        v[support::register_number(i.register)] = s.v[host].map(f32::to_bits);
     }
     if let Some(rgb) = cut {
         v[31] = rgb.map(f32::to_bits);
@@ -482,10 +485,10 @@ fn original_programs_prove_the_material_frontier_against_microsoft_ref() {
             derived.derivation.cuts
         );
         assert!(derived.derivation.cuts.iter().any(|s| s.contains("tone mapping")));
-        iridia::emit::wgsl(&derived.program).unwrap();
-        let cut = ProgramShader::new(derived.program.clone()).unwrap();
-        let tail = ProgramShader::new(derived.reencode.clone()).unwrap();
-        let full = ProgramShader::new(iridia_d3d9::lift(effect.pixel.as_ref().unwrap()).unwrap()).unwrap();
+        iridia_naga::wgsl(&derived.program, &iridia_naga::Profile::NAGA).unwrap();
+        let cut = ProgramShader::from_ir(derived.program.clone()).unwrap();
+        let tail = ProgramShader::from_ir(derived.reencode.clone()).unwrap();
+        let full = ProgramShader::from_ir(support::lifted(effect.pixel.as_ref().unwrap())).unwrap();
         let cases = cases();
         let mut states = Vec::new();
         for &case in &cases {
@@ -629,8 +632,8 @@ fn stored_rotated_mask_matches_native_setter_and_full_ps_on_ref() {
     )
     .unwrap();
     let helper = primase_shaunwhite::shaders::bind_material(&derived, &material).unwrap();
-    let full = ProgramShader::new(iridia_d3d9::lift(effect.pixel.as_ref().unwrap()).unwrap()).unwrap();
-    let parsed = iridia_d3d9::read(effect.pixel.as_ref().unwrap()).unwrap();
+    let full = ProgramShader::from_ir(support::lifted(effect.pixel.as_ref().unwrap())).unwrap();
+    let parsed = iridia_d3d9_ir::read(effect.pixel.as_ref().unwrap()).unwrap();
     let bank = parsed
         .constants
         .unwrap()

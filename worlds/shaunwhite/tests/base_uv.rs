@@ -59,8 +59,8 @@ fn stored_nonidentity_base_uv_matches_full_native_vs_with_material_controls() {
         panic!("effect");
     };
     let raw = effect.vertex.as_ref().unwrap();
-    let source = iridia_d3d9::read(raw).unwrap();
-    let full = iridia_d3d9::lift(raw).unwrap();
+    let source = iridia_d3d9_ir::read(raw).unwrap();
+    let full = iridia_d3d9_ir::lift(raw).unwrap();
     let table = source.constants.as_ref().unwrap();
     let scratch = own_scratch("base_uv");
     std::fs::create_dir_all(&*scratch).unwrap();
@@ -101,7 +101,7 @@ fn stored_nonidentity_base_uv_matches_full_native_vs_with_material_controls() {
         let original = binding.clone();
         let slice = derive(&database, record as u32, &binding, variant).unwrap();
         assert_eq!(binding, original);
-        assert_eq!(slice.derivation.source_hash, iridia::source_hash(raw));
+        assert_eq!(slice.derivation.source_hash, iridia_ir::source_hash(raw));
         assert_eq!(slice.derivation.vertex_key, effect.vertex_key);
         assert_eq!(slice.derivation.words.len(), 6);
         assert!(
@@ -110,8 +110,8 @@ fn stored_nonidentity_base_uv_matches_full_native_vs_with_material_controls() {
                 .iter()
                 .any(|c| matches!(c.role, ConstantRole::Unknown { .. }))
         );
-        iridia::emit::wgsl(&slice.program).unwrap();
-        let executable = ProgramShader::new(slice.program.clone()).unwrap();
+        iridia_naga::wgsl(&slice.program, &iridia_naga::Profile::NAGA).unwrap();
+        let executable = ProgramShader::from_ir(slice.program.clone()).unwrap();
         for uv in uvs {
             let mut bank = [[0f32; 4]; 256];
             // Neutral frame used only to rasterize the full VS. These are not production UV bindings.
@@ -151,7 +151,7 @@ fn stored_nonidentity_base_uv_matches_full_native_vs_with_material_controls() {
                     (3, 0) => [127.5, 127.5, 255., 0.],
                     _ => [1.; 4],
                 };
-                inputs[input.register as usize] = attributes[i].map(f32::to_bits);
+                inputs[support::register_number(input.register)] = attributes[i].map(f32::to_bits);
             }
             let bits = bank.map(|r| r.map(f32::to_bits));
             let got = executable
@@ -226,11 +226,11 @@ fn stored_nonidentity_base_uv_matches_full_native_vs_with_material_controls() {
         record,
         database.records[record].key.permutation,
         effect.vertex_key,
-        iridia::source_hash(raw),
+        iridia_ir::source_hash(raw),
         gate
     );
     gate.assert_passed();
-    assert_eq!(full.stage, iridia::Stage::Vertex);
+    assert_eq!(full.stage, iridia_interface::Stage::Vertex);
 }
 
 fn fixture(
@@ -387,7 +387,7 @@ fn hand_worked_uv_graph_uses_vs_rows_and_keeps_cut_bindings_unknown() {
             }
         }
     }
-    let got = ProgramShader::new(uv.program)
+    let got = ProgramShader::from_ir(uv.program)
         .unwrap()
         .execute(
             &[

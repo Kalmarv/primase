@@ -861,14 +861,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "iridia-d3d9"
+name = "iridia-d3d9-ir"
 version = "0.6.0"
 source = "git+https://github.com/Kalmarv/iridia?rev=da3ebb4e894de346c45cf71f89bddbe904bd453a#da3ebb4e894de346c45cf71f89bddbe904bd453a"
 dependencies = [
  "d3d9-reader",
- "iridia",
- "iridia-interface",
- "primase-naga",
+ "iridia-ir",
 ]
 
 [[package]]
@@ -1695,10 +1693,13 @@ name = "primase-shaunwhite"
 version = "0.2.0"
 dependencies = [
  "anvil-formats",
- "iridia",
- "iridia-d3d9",
+ "iridia-analysis",
+ "iridia-d3d9-ir",
  "iridia-exec",
  "iridia-interface",
+ "iridia-ir",
+ "iridia-naga",
+ "iridia-passes",
  "primase-anvil",
  "primase-core",
  "primase-foundations",

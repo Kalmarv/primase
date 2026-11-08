@@ -21,7 +21,7 @@ fn fixture(count: u32) -> (DerivedAlbedo, MaterialRef) {
         .into_iter()
         .flat_map(u32::to_le_bytes)
         .collect::<Vec<_>>();
-    let mut program = iridia_d3d9::lift(&bytes).unwrap();
+    let mut program = iridia_d3d9_ir::lift(&bytes).unwrap();
     let resource = &mut program.interface.resources[0];
     let ResourceKind::ConstantBuffer { layout } = &mut resource.kind else {
         panic!("bank")
@@ -90,8 +90,8 @@ fn fixture(count: u32) -> (DerivedAlbedo, MaterialRef) {
                 dependencies: [0; 4],
             },
             pixel_key: 0,
-            source_hash: iridia::source_hash(&bytes),
-            projection: iridia_d3d9::Projection {
+            source_hash: iridia_ir::source_hash(&bytes),
+            projection: iridia_d3d9_ir::Projection {
                 after_word: 1,
                 temporary: 0,
                 lanes: [0, 1, 2],

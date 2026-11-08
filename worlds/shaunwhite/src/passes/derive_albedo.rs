@@ -10,9 +10,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use iridia::flow::{Node, Values};
-use iridia::{Program, WordsRead};
+use iridia_analysis::WordsRead;
+use iridia_analysis::flow::{Node, Values};
 use iridia_interface::{ResourceId, ResourceKind, Stage};
+use iridia_ir::Program;
 use primase_core::pass::{OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::shader::{
     Attribute, ConstantRole, DerivedInput, DerivedStage, InputBinding, InputRole, LaneStream,
@@ -98,9 +99,7 @@ fn template(
                 }
                 inputs.insert(*input);
             }
-            Node::Texel {
-                resource: Some(id), ..
-            } => {
+            Node::Texel { resource: id, .. } => {
                 textures.insert(*id);
             }
             _ => {}
@@ -140,7 +139,7 @@ fn template(
             role,
         });
     }
-    let reads = derived.program.constant_reads()?;
+    let reads = WordsRead::of_program(&derived.program)?;
     for r in &derived.program.interface.resources {
         if matches!(r.kind, ResourceKind::ConstantBuffer { .. }) && reads.indexed(r.id) {
             return Err("indexed material constants are not resolved".into());

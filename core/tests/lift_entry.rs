@@ -42,8 +42,8 @@ fn no_source_lifts_a_container_without_preparing_it() {
             .unwrap_or(&file)
             .to_string_lossy()
             .replace(char::from(92), "/");
-        // gta and shaunwhite still lift with the older programs; they move to the IR in their own slices and then to the entry points
-        if relative.starts_with("worlds/gta/") || relative.starts_with("worlds/shaunwhite/") {
+        // gta still lifts with the older programs; it moves to the IR in its own slice and then to the entry points
+        if relative.starts_with("worlds/gta/") {
             continue;
         }
         if RAW_LIFT_CALLERS.iter().any(|(path, _)| *path == relative) {
