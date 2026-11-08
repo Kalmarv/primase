@@ -124,6 +124,15 @@ fn lifting(e: iridia_dxbc::Error) -> fromsoft_formats::Error {
 fn evaluation(e: iridia_exec::Error) -> fromsoft_formats::Error {
     invalid("layer bake", e.at, e.detail)
 }
+/// The program `shader` runs. This crate makes its executors with `ProgramShader::new` alone ([`executor`],
+/// [`program_executor`]), which keeps the program; iridia gives `None` only for a program of the IR
+/// (`ProgramShader::from_ir`), which no pass here runs.
+pub(crate) fn lifted_program(shader: &ProgramShader) -> &iridia::Program {
+    shader
+        .program()
+        .expect("ProgramShader::new keeps the program it runs")
+}
+
 /// A DXBC pixel program's container lifted and ready to run.
 pub(crate) fn executor(bytecode: &[u8]) -> Result<ProgramShader> {
     ProgramShader::new(iridia_dxbc::lift(bytecode).map_err(lifting)?).map_err(evaluation)
@@ -221,7 +230,7 @@ pub(crate) fn program_constants(
             .resource(c.resource)
             .ok_or_else(|| invalid("layer binding", 0, "constant resource absent"))?;
         let slot = resolve::register(resource)?;
-        let Some(mut words) = read_words(shader.program(), interface, c, frame, policies)? else {
+        let Some(mut words) = read_words(lifted_program(shader), interface, c, frame, policies)? else {
             continue;
         };
         let Some(&(_, rows)) = shader.constant_buffers().iter().find(|(s, _)| *s == slot) else {
@@ -965,7 +974,7 @@ impl Prepared {
                 VertexStage::new(
                     core,
                     vertex_binding,
-                    specialised.unwrap_or(shader.program()),
+                    specialised.unwrap_or(lifted_program(shader)),
                     family == "M[MultipleGround]",
                     frame,
                 )
@@ -994,7 +1003,8 @@ impl Prepared {
                 resolve::register(interface.resource(c.resource).ok_or_else(|| {
                     invalid("layer binding", 0, "a constant of a resource the shader lacks")
                 })?)?;
-            let Some(mut values) = read_words(lifted.program(), interface, c, frame, &mut policies)? else {
+            let Some(mut values) = read_words(lifted_program(&lifted), interface, c, frame, &mut policies)?
+            else {
                 continue;
             };
             // the words inside a buffer the program reads (it reads no others)

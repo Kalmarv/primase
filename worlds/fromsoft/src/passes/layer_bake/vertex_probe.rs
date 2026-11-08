@@ -104,7 +104,7 @@ fn identity(ty: &ConstantType) -> Result<Vec<u32>, String> {
 /// with the matrix, the palettes and the camera at the values of the module documentation ([`VertexProbe`]).
 pub fn camera_form(program: &Program) -> Result<CameraForm, String> {
     let probe = VertexProbe::new(program.clone())?;
-    let iface = &probe.program().interface;
+    let iface = &program.interface;
     let inputs: Vec<[u32; 4]> = iface
         .inputs
         .iter()

@@ -126,7 +126,7 @@ impl VertexStage {
             &vertex.bytecode,
             &iridia::BoundSizes::of(&stage.constant_buffers),
         )?;
-        let demand = iridia::flow::VertexDemand::of_programs(lifted.program(), pixel)
+        let demand = iridia::flow::VertexDemand::of_programs(super::lifted_program(&lifted), pixel)
             .map_err(|e| invalid("vertex demand", 0, e))?;
         let pixel_lanes = demand
             .pixel
@@ -149,7 +149,13 @@ impl VertexStage {
             let Some((_, rows)) = constants.iter_mut().find(|(s, _)| *s == slot) else {
                 continue;
             };
-            let Some(words) = read_words(lifted.program(), &vertex.interface, c, frame, &mut policies)?
+            let Some(words) = read_words(
+                super::lifted_program(&lifted),
+                &vertex.interface,
+                c,
+                frame,
+                &mut policies,
+            )?
             else {
                 if let ConstantRole::Unknown { why } = &c.role {
                     return Err(invalid(

@@ -9,7 +9,7 @@ pub use binding::{
     INSTANCE_DATA_POLICY, Inputs, NO_DIRECTIONAL_LIGHT_POLICY, NO_HOUR, Prepared, Programs,
     SECOND_UV_APPROXIMATION, TEXTURE_SCROLL_POLICY, refuses_unstated_hour,
 };
-pub(crate) use binding::{executor, program_executor, sampled_period};
+pub(crate) use binding::{executor, lifted_program, program_executor, sampled_period};
 pub use vertex::COLOUR1_POLICY;
 pub(crate) use vertex::VertexStage;
 pub mod grouping;

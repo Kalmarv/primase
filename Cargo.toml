@@ -66,26 +66,26 @@ primase-animation = { version = "0.2.0", path = "toolkit/animation" }
 primase-lighting = { version = "0.2.0", path = "toolkit/lighting" }
 primase-glb = { version = "0.2.0", path = "toolkit/glb" }
 primase-exactsum = { version = "0.2.0", path = "toolkit/exactsum" }
-dxcontainer = { version = "0.5.0" }
-rsx-reader = { version = "0.5.0" }
+dxcontainer = { version = "0.12.0" }
+rsx-reader = { version = "0.12.0" }
 primase-cache = { version = "0.2.0", path = "toolkit/cache" }
 havok-cloth = { version = "0.3.0" }
 havok-formats = { version = "0.9.0" }
 primase-havok = { version = "0.2.0", path = "toolkit/havok" }
 morpheme-formats = { version = "0.1.1" }
-rme-formats = { version = "0.5.0" }
+rme-formats = { version = "0.6.0", git = "https://github.com/Kalmarv/rme-formats", rev = "5b68baf6d2ca8e157c59bfff6d365f05dcfbf56f" }
 unity-formats = { version = "0.5.0" }
 gbx-formats = { version = "0.1.0" }
 monogame-formats = { version = "0.1.1" }
 lua51-bytecode = { version = "0.2.0" }
-dxbc-reader = { version = "0.5.0" }
-iridia-dxbc = { version = "0.5.0" }
-iridia-d3d9 = { version = "0.5.0" }
-iridia-interface = { version = "0.5.0" }
-iridia = { version = "0.5.0" }
-iridia-exec = { version = "0.5.0" }
-iridia-dxil = { version = "0.5.0" }
-iridia-mojo = { version = "0.5.0" }
+dxbc-reader = { version = "0.12.0" }
+iridia-dxbc = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "fd7fd5a21fc47c9e71f14827d32aa09cb773639f" }
+iridia-d3d9 = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "fd7fd5a21fc47c9e71f14827d32aa09cb773639f" }
+iridia-interface = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "fd7fd5a21fc47c9e71f14827d32aa09cb773639f" }
+iridia = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "fd7fd5a21fc47c9e71f14827d32aa09cb773639f" }
+iridia-exec = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "fd7fd5a21fc47c9e71f14827d32aa09cb773639f" }
+iridia-dxil = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "fd7fd5a21fc47c9e71f14827d32aa09cb773639f" }
+iridia-mojo = { version = "0.6.0", git = "https://github.com/Kalmarv/iridia", rev = "fd7fd5a21fc47c9e71f14827d32aa09cb773639f" }
 primase-frostbite = { version = "0.2.0", path = "worlds/frostbite" }
 primase-gltf = { version = "0.2.0", path = "formats/gltf" }
 primase-reskate = { version = "0.2.0", path = "worlds/reskate" }
@@ -101,8 +101,8 @@ primase-shaunwhite = { version = "0.2.0", path = "worlds/shaunwhite" }
 primase-shred = { version = "0.2.0", path = "worlds/shred" }
 primase-trackmania = { version = "0.2.0", path = "worlds/trackmania" }
 primase-forzatech = { version = "0.2.0", path = "worlds/forzatech" }
-anvil-formats = { version = "0.2.1" }
-dxil-reader = { version = "0.5.0" }
+anvil-formats = { version = "0.5.1", git = "https://github.com/Kalmarv/anvil-formats", rev = "ffdff2260826af7963e6fec57daed51833e07a2b" }
+dxil-reader = { version = "0.12.0" }
 frostbite-formats = { version = "0.3.0" }
 forzatech-formats = { version = "0.1.0" }
 rage-engine-formats = { version = "0.3.0" }

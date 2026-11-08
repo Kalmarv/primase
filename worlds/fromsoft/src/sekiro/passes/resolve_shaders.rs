@@ -477,8 +477,11 @@ fn run(
                 },
             );
             // the exact lift, which a material's specialisation folds
-            world.insert(entity, LiftedShader(Arc::new(parsed.program().clone())));
-            let graph = parsed.program().graph();
+            world.insert(
+                entity,
+                LiftedShader(Arc::new(crate::layer_bake::lifted_program(&parsed).clone())),
+            );
+            let graph = crate::layer_bake::lifted_program(&parsed).graph();
             shaders.insert(name.clone(), (entity, parsed, graph));
         }
         let (shader_entity, parsed, graph) = &shaders[&name];

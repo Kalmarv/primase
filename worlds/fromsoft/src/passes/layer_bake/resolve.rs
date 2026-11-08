@@ -423,7 +423,7 @@ pub fn resolve(
     let mut policies = BTreeMap::new();
     let mut constants = Vec::new();
     // the program's value graph, read once: what states a matrix's lines and an alpha test's reference
-    let graph = shader.program().graph();
+    let graph = super::lifted_program(shader).graph();
     // The producer establishes the dither role; the generic query sees only graph resource ids and words.
     let discard_compares = |name: &str| {
         let field = layout.fields.get(name)?;

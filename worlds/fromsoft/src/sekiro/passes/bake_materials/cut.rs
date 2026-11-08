@@ -77,7 +77,7 @@ impl Compare {
         }) else {
             return Ok(None);
         };
-        let graph = shader.program().graph()?;
+        let graph = crate::layer_bake::lifted_program(shader).graph()?;
         let mut tests = alpha_tests(&graph)
             .into_iter()
             .filter(|t| (t.buffer, t.word) == reference_word)

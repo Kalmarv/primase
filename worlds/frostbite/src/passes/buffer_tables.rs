@@ -276,7 +276,8 @@ pub fn probe_tables_with(
     let program =
         iridia_dxil::lift(&shader.bytecode).map_err(|e| format!("the program does not lift: {e}"))?;
     let probe = VertexProbe::new(program)?;
-    let program = probe.program();
+    // `VertexProbe::new` makes its executor with `ProgramShader::new`, which keeps the program it runs
+    let program = probe.program().ok_or("the probe keeps no program")?;
     let iface = &program.interface;
     let pass = pass_buffer(iface).ok_or("the lifted program has no constant buffer at register 4")?;
     // one run: the instance, what the records say, the instance base word, what the matrix table answers with, and the

@@ -227,8 +227,14 @@ impl WaterProbe {
             return Ok(given.clone());
         }
         let (shader, stage) = &self.vertex;
-        let vertex = layer_bake::VertexStage::new(shader, stage, self.shader.program(), false, frame)
-            .map_err(|e| format!("its vertex program: {e}"))?;
+        let vertex = layer_bake::VertexStage::new(
+            shader,
+            stage,
+            layer_bake::lifted_program(&self.shader),
+            false,
+            frame,
+        )
+        .map_err(|e| format!("its vertex program: {e}"))?;
         let inputs = vertex
             .pixel_inputs(
                 PixelShader::interface(&self.shader),

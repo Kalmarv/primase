@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Breaking:** iridia 0.6.0 by git revision of its main until its next release (was 0.5.0) and the dx readers 0.12.0 (`dxbc-reader`,
+  `dxil-reader`, `dxcontainer`, `rsx-reader`; were 0.5.0), with `anvil-formats` and `rme-formats` on the same dx by git revision of their
+  `dx-0.12` branches, so the build links one version of each dx reader. Public fields and functions that carry iridia's types
+  (`LiftedShader`, the derivation and specialisation programs, `iridia_interface` render states and address modes, `iridia_exec::ProgramShader`
+  in the Sekiro bake) now carry iridia 0.6's. iridia 0.6's `ProgramShader::program` is an `Option` (`None` only for a program of the IR);
+  primase-fromsoft makes every executor from a lifted program and reads it back through one function that says so.
+
 ## 0.2.0 (2026-11-06)
 
 - **Breaking:** primase-unity reads with unity-formats 0.5.0. Textures of every format it names become a world texture

@@ -201,7 +201,7 @@ impl ProgramProbe {
         // the outputs as the resolve pass binds them: a lane left Unknown is Coverage where the program's discard tests it,
         // Opacity where the material's blend weighs by it
         let mut outputs = resolution.stage.outputs.clone();
-        let graph = shader.program().graph().ok();
+        let graph = layer_bake::lifted_program(&shader).graph().ok();
         bind_output_uses(&mut outputs, &output_uses(&interface, graph.as_ref(), state));
         let constants = layer_bake::program_constants(
             &shader,

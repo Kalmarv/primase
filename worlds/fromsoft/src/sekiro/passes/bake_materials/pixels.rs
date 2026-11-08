@@ -228,7 +228,9 @@ pub(super) fn prepare<'a>(
     match surface.base {
         Some(Base::Albedo(place)) if place.width() == 3 => {}
         Some(Base::Albedo(_)) => return Err("albedo role is not RGB".into()),
-        _ => return Err(super::colour::refusal(shader.program(), stage).to_owned()),
+        _ => {
+            return Err(super::colour::refusal(layer_bake::lifted_program(&shader), stage).to_owned());
+        }
     }
     let normal = surface.normal.ok_or("no normal output role")?;
     if !matches!(normal.space, NormalSpace::World | NormalSpace::View) {
@@ -308,7 +310,7 @@ pub(super) fn prepare<'a>(
     let vertex = layer_bake::VertexStage::new(
         vertex_shader,
         vertex,
-        specialised.unwrap_or(shader.program()),
+        specialised.unwrap_or(layer_bake::lifted_program(&shader)),
         false,
         &frame,
     )
