@@ -18,10 +18,15 @@ primase-foundations.workspace = true
 primase-core.workspace = true
 iridia-d3d9.workspace = true
 iridia.workspace = true
+iridia-ir.workspace = true
+iridia-passes.workspace = true
+iridia-analysis.workspace = true
+iridia-d3d9-ir.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 iridia-exec.workspace = true
+iridia-naga.workspace = true
 primase-meshops.workspace = true
 primase-testdata.workspace = true
 primase-texcodec.workspace = true
